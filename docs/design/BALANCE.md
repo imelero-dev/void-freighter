@@ -80,8 +80,10 @@ this file documents the *why*.
 
 ## Contracts & reputation
 
-- Boards refresh every 4 min, 6–8 offers. Reward gates: ≥1,100 cr needs rep
-  ≥10, ≥2,600 cr needs rep ≥25 with the issuing faction.
+- Boards refresh every 4 min, 6–8 offers; the first two are always ungated
+  small local hauls (rookie runs). Reward gates: ≥1,800 cr needs rep ≥10,
+  ≥3,500 cr needs rep ≥25 with the issuing faction (rewards scale with
+  distance, so gates sit above short-haul range).
 - Rewards: transport `120 + 55/Mm + 18% cargo value + danger bonus`; urgent
   ×1.55 with ~⅓ the deadline; supply `50% of goods value + 250`; bounty
   `kills × tier bounty × 1.15 + 150`.
@@ -98,3 +100,7 @@ this file documents the *why*.
   you to a bare shuttle — deaths still sting (cargo + deductible) without
   deleting an hour of module shopping.
 - Power pips, wings/squads and waypoint queues are out of scope (GDD fase 2).
+- Remote market data unlocks by visiting a station (no separate data module);
+  rare-rock detection comes with the Mk III+ sensor suite's composition scan.
+- Cruise arrival: the mass-cap braking curve replaces a fixed drop distance;
+  with a destination set you drop out 2.5 km from the marker.

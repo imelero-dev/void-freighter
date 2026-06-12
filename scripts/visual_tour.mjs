@@ -130,6 +130,34 @@ async function main() {
   await page.keyboard.press('KeyV');
   await sleep(400);
   await shot('08_chase_camera');
+  await page.keyboard.press('KeyV');
+
+  // teleport into a belt field (offline world exposes the sim) for mining vista
+  await page.evaluate(() => {
+    const w = window.VF.world;
+    const field = w.system.belts[0].fields[0];
+    const e = w.sim.entities.get(w.playerId);
+    e.cruise = 'off';
+    e.pos = { x: field.pos.x + 2000, y: field.pos.y + 300, z: field.pos.z };
+    e.prevPos = { ...e.pos };
+    e.vel = { x: 0, y: 0, z: 0 };
+  });
+  await sleep(2500);
+  await shot('12_asteroid_field');
+
+  // dogfight: spawn a pirate dead ahead and exchange fire
+  await page.evaluate(() => {
+    const w = window.VF.world;
+    const V = window.VF.vec;
+    const e = w.sim.entities.get(w.playerId);
+    const fwd = V.qForward(e.orient);
+    const pirate = w.sim.spawnPirate('fighter', V.vadd(e.pos, V.vscale(fwd, 450)));
+    w.setTarget(pirate.id);
+    w.setFiring(true);
+  });
+  await sleep(1800);
+  await shot('13_dogfight');
+  await page.evaluate(() => window.VF.world.setFiring(false));
 
   await browser.close();
   server.close();

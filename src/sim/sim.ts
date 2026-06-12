@@ -1239,11 +1239,14 @@ export class Sim {
         const ang = angleBetween(qForward(e.orient), vsub(target!.pos, e.pos));
         e.targetId = target!.id;
         e.firing = d < def.weaponRange && ang < 0.12;
-        // missiles for heavies
+        // missiles for heavies — warlords launch a volley
         if (def.missiles > 0 && e.missileAmmo > 0 && e.aiTimer <= 0 && d < 2500 && ang < 0.3) {
           e.aiTimer = this.rng.range(16, 26);
-          e.missileAmmo--;
-          this.spawnMissile(e, target!.id, def.missileDamage);
+          const volley = e.pirate === 'elite' ? Math.min(2, e.missileAmmo) : 1;
+          for (let v = 0; v < volley; v++) {
+            e.missileAmmo--;
+            this.spawnMissile(e, target!.id, def.missileDamage);
+          }
           if (target!.isPlayer) this.events.push({ type: 'lockWarning', pid: target!.id });
         }
         if (e.hull < e.maxHull * 0.22) {
