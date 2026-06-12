@@ -211,6 +211,11 @@ export const RESCUE_COST_MIN = 400;
 // Pirates
 // ---------------------------------------------------------------------------
 
+// Weapon bolts are simulated projectiles: travel time + spread means shots
+// can miss — strafing genuinely dodges fire.
+export const BOLT_SPEED = 1100;        // m/s, relative to the shooter
+export const PLAYER_AIM_SPREAD = 0.007; // rad of muzzle wander
+
 export interface PirateDef {
   tier: PirateTier;
   name: string;
@@ -222,6 +227,7 @@ export interface PirateDef {
   shotDamage: number;
   shotInterval: number;
   weaponRange: number;
+  aimError: number;     // rad — lower tiers spray, elites snipe
   missiles: number;       // ammo (raider/elite)
   missileDamage: number;
   detectRange: number;
@@ -235,25 +241,25 @@ export interface PirateDef {
 export const PIRATES: Record<PirateTier, PirateDef> = {
   scout: {
     tier: 'scout', name: 'Scrapper Scout', hull: 40, shield: 25, maxSpeed: 175, accel: 30,
-    turnRate: 1.9, shotDamage: 8, shotInterval: 0.42, weaponRange: 1000, missiles: 0,
+    turnRate: 1.9, shotDamage: 8, shotInterval: 0.42, weaponRange: 1000, aimError: 0.05, missiles: 0,
     missileDamage: 0, detectRange: 5200, creditsMin: 60, creditsMax: 180,
     moduleChance: 0.02, moduleTierMax: 1, bounty: 150,
   },
   fighter: {
     tier: 'fighter', name: 'Scrapper Fighter', hull: 75, shield: 55, maxSpeed: 185, accel: 32,
-    turnRate: 2.0, shotDamage: 11, shotInterval: 0.38, weaponRange: 1100, missiles: 0,
+    turnRate: 2.0, shotDamage: 11, shotInterval: 0.38, weaponRange: 1100, aimError: 0.038, missiles: 0,
     missileDamage: 0, detectRange: 5800, creditsMin: 150, creditsMax: 420,
     moduleChance: 0.05, moduleTierMax: 2, bounty: 260,
   },
   raider: {
     tier: 'raider', name: 'Scrapper Raider', hull: 135, shield: 100, maxSpeed: 175, accel: 28,
-    turnRate: 1.7, shotDamage: 15, shotInterval: 0.36, weaponRange: 1200, missiles: 2,
+    turnRate: 1.7, shotDamage: 15, shotInterval: 0.36, weaponRange: 1200, aimError: 0.03, missiles: 2,
     missileDamage: 90, detectRange: 6400, creditsMin: 380, creditsMax: 900,
     moduleChance: 0.12, moduleTierMax: 3, bounty: 480,
   },
   elite: {
     tier: 'elite', name: 'Scrapper Warlord', hull: 280, shield: 220, maxSpeed: 195, accel: 34,
-    turnRate: 2.1, shotDamage: 22, shotInterval: 0.32, weaponRange: 1350, missiles: 6,
+    turnRate: 2.1, shotDamage: 22, shotInterval: 0.32, weaponRange: 1350, aimError: 0.02, missiles: 6,
     missileDamage: 110, detectRange: 7500, creditsMin: 1000, creditsMax: 2400,
     moduleChance: 0.35, moduleTierMax: 5, bounty: 1100,
   },

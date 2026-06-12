@@ -115,6 +115,18 @@ export function qnlerp(a: Quat, b: Quat, t: number): Quat {
 export function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v;
 }
+
+// Where to aim so a projectile of speed `projSpeed` (relative to the shooter)
+// intercepts a moving target. Two fixed-point iterations are plenty at game
+// speeds. Shared by pirate AI, the HUD lead pip and test bots.
+export function leadPoint(shooterPos: Vec3, shooterVel: Vec3, targetPos: Vec3, targetVel: Vec3, projSpeed: number): Vec3 {
+  const relVel = vsub(targetVel, shooterVel);
+  let t = vdist(shooterPos, targetPos) / projSpeed;
+  let aim = vadd(targetPos, vscale(relVel, t));
+  t = vdist(shooterPos, aim) / projSpeed;
+  aim = vadd(targetPos, vscale(relVel, t));
+  return aim;
+}
 export function lerp(a: number, b: number, t: number): number { return a + (b - a) * t; }
 // Angle in radians between two direction vectors.
 export function angleBetween(a: Vec3, b: Vec3): number {

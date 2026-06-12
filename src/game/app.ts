@@ -169,6 +169,10 @@ export class GameApp {
 
   menuHelp: (() => void) | null = null;
 
+  applySettings(): void {
+    this.audio.applyVolume();
+  }
+
   private toggleWindow(id: string): void {
     this.audio.click();
     this.wm.toggle(id);
@@ -319,19 +323,30 @@ export class GameApp {
         this.hud.pushLog(ev.text, ev.color ?? '#d9a441');
         break;
       case 'laser':
-        if (ev.mining) {
-          if (ev.fromId === w.playerId) {
-            this.miningActive = true;
-            this.audio.miningTick();
-          }
-        } else if (ev.fromId === w.playerId) {
-          this.audio.laser();
+        if (ev.mining && ev.fromId === w.playerId) {
+          this.miningActive = true;
+          this.audio.miningTick();
         }
         break;
+      case 'shot': {
+        if (ev.entityId === w.playerId) {
+          this.audio.laser(true);
+        } else {
+          const ship = w.player;
+          if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 2800) {
+            this.audio.laser(false);
+          }
+        }
+        break;
+      }
       case 'hit': {
         if (ev.entityId === w.playerId) {
           if (ev.shield) this.audio.hitShield();
           else this.audio.hitHull();
+          // incoming-fire direction warning
+          if (ev.fx !== undefined && w.player) {
+            this.hud.addDamageDir({ x: ev.fx, y: ev.fy!, z: ev.fz! }, w.player.pos);
+          }
         } else if (ev.amount > 0) {
           // floating combat text over whatever we (or someone) hit
           this.hud.pushFloater({ x: ev.x, y: ev.y, z: ev.z }, `-${ev.amount}`, ev.shield ? '#7fb1c9' : '#d9a441');

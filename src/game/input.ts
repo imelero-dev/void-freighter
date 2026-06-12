@@ -2,6 +2,7 @@
 // (Freelancer style), keys per the design doc layout.
 
 import type { ShipInput } from '../sim/types';
+import { settings } from '../ui/settings';
 
 export type GameAction =
   | 'toggleCruise' | 'zeroThrottle' | 'toggleAssist' | 'toggleDrill'
@@ -48,9 +49,10 @@ export class InputManager {
     });
     window.addEventListener('mousemove', (ev) => {
       if (!this.pointerLocked || this.uiMode) return;
-      const s = Math.min(window.innerWidth, window.innerHeight) * 0.34;
+      const s = Math.min(window.innerWidth, window.innerHeight) * 0.34 / settings.sensitivity;
+      const my = settings.invertY ? -ev.movementY : ev.movementY;
       this.cursorX = clamp(this.cursorX + ev.movementX / s, -1, 1);
-      this.cursorY = clamp(this.cursorY + ev.movementY / s, -1, 1);
+      this.cursorY = clamp(this.cursorY + my / s, -1, 1);
     });
     window.addEventListener('mousedown', (ev) => {
       if (!this.pointerLocked || this.uiMode) return;

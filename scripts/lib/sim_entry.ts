@@ -3,4 +3,5 @@ export { Sim, defaultProfile, blankEntity } from '../../src/sim/sim';
 export { GOODS, HULLS, REFINE_RECIPES } from '../../src/sim/data';
 export { generateSystem, rockSpawn, dangerAt } from '../../src/sim/system';
 export { Economy } from '../../src/sim/economy';
-export { qLookAt, vadd, vdist, vnorm, vscale, vsub, v3 } from '../../src/sim/vec';
+export { leadPoint, qLookAt, vadd, vdist, vnorm, vscale, vsub, v3 } from '../../src/sim/vec';
+export { BOLT_SPEED } from '../../src/sim/data';

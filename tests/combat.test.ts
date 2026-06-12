@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { BOLT_SPEED } from '../src/sim/data';
 import { Sim } from '../src/sim/sim';
-import { qLookAt, vadd, vnorm, vsub, v3 } from '../src/sim/vec';
+import { leadPoint, qLookAt, vadd, vnorm, vsub, v3 } from '../src/sim/vec';
 
 function runTicks(sim: Sim, n: number) {
   const events = [];
@@ -67,15 +68,17 @@ describe('pirates & loot', () => {
     e.hull = 500;
     e.maxHull = 500;
     let dead = false;
-    for (let i = 0; i < 20 * 30 && !dead; i++) {
-      // keep tracking the pirate
+    for (let i = 0; i < 20 * 60 && !dead; i++) {
+      // keep tracking the pirate, aiming at the bolt intercept point
       const p = sim.entities.get(pirate.id);
       if (!p) {
         dead = true;
         break;
       }
-      e.orient = qLookAt(vnorm(vsub(p.pos, e.pos)));
       e.pos = vadd(p.pos, vscaleTest(vnorm(vsub(e.pos, p.pos)), 350));
+      e.vel = v3();
+      const aim = leadPoint(e.pos, e.vel, p.pos, p.vel, BOLT_SPEED);
+      e.orient = qLookAt(vnorm(vsub(aim, e.pos)));
       sim.tick();
     }
     expect(dead).toBe(true);

@@ -2,9 +2,9 @@
 // instrument look, deliberately analog and a little dirty.
 
 import * as THREE from 'three';
-import { GOODS } from '../sim/data';
+import { BOLT_SPEED, GOODS } from '../sim/data';
 import type { Entity } from '../sim/types';
-import { qForward, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
+import { leadPoint, qForward, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
 import type { IWorld } from '../world_api';
 import { fmtDistance, fmtTime } from './dom';
 
@@ -32,6 +32,9 @@ export class Hud {
 
   private proj = new THREE.Vector3();
   private floaters: Array<{ pos: { x: number; y: number; z: number }; text: string; color: string; at: number }> = [];
+  private dmgDirs: Array<{ dir: { x: number; y: number; z: number }; at: number }> = [];
+  private invQuat = new THREE.Quaternion();
+  private dirV = new THREE.Vector3();
 
   constructor(private camera: THREE.PerspectiveCamera) {
     this.canvas = document.createElement('canvas');
@@ -57,6 +60,13 @@ export class Hud {
   pushFloater(pos: { x: number; y: number; z: number }, text: string, color: string): void {
     this.floaters.push({ pos, text, color, at: performance.now() });
     if (this.floaters.length > 24) this.floaters.shift();
+  }
+
+  // incoming-fire warning: world direction from the player toward the attacker
+  addDamageDir(fromPos: { x: number; y: number; z: number }, shipPos: { x: number; y: number; z: number }): void {
+    const dir = vnorm(vsub(fromPos, shipPos));
+    this.dmgDirs.push({ dir, at: performance.now() });
+    if (this.dmgDirs.length > 6) this.dmgDirs.shift();
   }
 
   resize(): void {
@@ -218,6 +228,54 @@ export class Hud {
         const r = 14;
         ctx.strokeRect(s.x - r, s.y - r, r * 2, r * 2);
       }
+      // lead pip: where to aim so your bolts intercept the target
+      if (target.kind === 'ship' && stats.weaponDamage > 0 && d < stats.weaponRange * 1.4) {
+        const aim = leadPoint(ship.pos, ship.vel, target.pos, target.vel, BOLT_SPEED);
+        const al = new THREE.Vector3(aim.x - origin.x, aim.y - origin.y, aim.z - origin.z);
+        const ap = this.toScreen(al);
+        if (!ap.behind) {
+          ctx.strokeStyle = target.pirate ? RED : CYAN;
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.arc(ap.x, ap.y, 5, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillStyle = ctx.strokeStyle;
+          ctx.fillRect(ap.x - 0.5, ap.y - 0.5, 1.5, 1.5);
+        }
+      }
+    }
+
+    // ---- incoming-fire direction arrows ----
+    for (let i = this.dmgDirs.length - 1; i >= 0; i--) {
+      const dd = this.dmgDirs[i];
+      const age = (now - dd.at) / 1000;
+      if (age > 1.6) {
+        this.dmgDirs.splice(i, 1);
+        continue;
+      }
+      // world direction -> camera space -> ring angle (same math as the GPS arrow)
+      this.invQuat.copy(this.camera.quaternion).invert();
+      this.dirV.set(dd.dir.x, dd.dir.y, dd.dir.z).applyQuaternion(this.invQuat);
+      const ang = Math.atan2(this.dirV.x, this.dirV.y);
+      const ringR = 92;
+      const ax = cx + Math.sin(ang) * ringR;
+      const ay = cy - Math.cos(ang) * ringR;
+      ctx.save();
+      ctx.translate(ax, ay);
+      ctx.rotate(ang);
+      ctx.globalAlpha = Math.max(0, 1 - age / 1.6);
+      ctx.strokeStyle = RED;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); // double chevron pointing at the attacker
+      ctx.moveTo(-8, 2);
+      ctx.lineTo(0, -7);
+      ctx.lineTo(8, 2);
+      ctx.moveTo(-8, 8);
+      ctx.lineTo(0, -1);
+      ctx.lineTo(8, 8);
+      ctx.stroke();
+      ctx.restore();
+      ctx.globalAlpha = 1;
     }
 
     // ---- destination GPS marker ----

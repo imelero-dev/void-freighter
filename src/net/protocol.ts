@@ -71,7 +71,13 @@ export interface WireMissile {
   tg: number | null;
 }
 
-export type WireEntity = WireShip | WireFloat | WireMissile;
+export interface WireBolt {
+  i: number; k: 'b';
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+}
+
+export type WireEntity = WireShip | WireFloat | WireMissile | WireBolt;
 
 export interface SnapMsg {
   t: 'snap';
@@ -163,6 +169,11 @@ export function wireEntity(e: Entity): WireEntity {
         i: e.id, k: 'm', x: r2(e.pos.x), y: r2(e.pos.y), z: r2(e.pos.z),
         qo: [r3(e.orient.x), r3(e.orient.y), r3(e.orient.z), r3(e.orient.w)],
         tg: e.targetId,
+      };
+    case 'bolt':
+      return {
+        i: e.id, k: 'b', x: r2(e.pos.x), y: r2(e.pos.y), z: r2(e.pos.z),
+        vx: r2(e.vel.x), vy: r2(e.vel.y), vz: r2(e.vel.z),
       };
   }
 }

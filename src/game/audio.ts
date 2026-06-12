@@ -3,6 +3,10 @@
 // are persistent nodes whose gains track game state; one-shots build small
 // node graphs on demand.
 
+import { settings } from '../ui/settings';
+
+const MASTER_BASE = 0.55;
+
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master!: GainNode;
@@ -28,7 +32,7 @@ export class AudioEngine {
     const ctx = new AudioContext();
     this.ctx = ctx;
     this.master = ctx.createGain();
-    this.master.gain.value = 0.55;
+    this.master.gain.value = MASTER_BASE * settings.volume;
     const comp = ctx.createDynamicsCompressor();
     this.master.connect(comp);
     comp.connect(ctx.destination);
@@ -157,8 +161,13 @@ export class AudioEngine {
 
   toggleMute(): boolean {
     this.muted = !this.muted;
-    if (this.master) this.master.gain.value = this.muted ? 0 : 0.55;
+    this.applyVolume();
     return this.muted;
+  }
+
+  // re-read the volume setting (called live from the settings sliders)
+  applyVolume(): void {
+    if (this.master) this.master.gain.value = this.muted ? 0 : MASTER_BASE * settings.volume;
   }
 
   // Per-frame state tracking. All values already smoothed by setTargetAtTime.
@@ -221,8 +230,8 @@ export class AudioEngine {
     src.stop(t + dur + 0.05);
   }
 
-  laser(): void {
-    this.blip(900, 240, 0.09, 'square', 0.08);
+  laser(own = true): void {
+    this.blip(900, 240, 0.09, 'square', own ? 0.08 : 0.03);
   }
 
   miningTick(): void {

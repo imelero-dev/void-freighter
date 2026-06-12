@@ -2,9 +2,9 @@
 // authoritatively inside the Node server. No DOM, no Math.random.
 
 import {
-  ASTEROID_RESPAWN_S, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
+  ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
   CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_MAX_SPEED, FUEL_PRICE,
-  GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES,
+  GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
   PIRATE_GOOD_DROPS, REFINE_RECIPES, REPAIR_PRICE, REP_DISCOUNT_MAX, REP_SMUGGLING_PENALTY,
   RESCUE_COST_FRACTION, RESCUE_COST_MIN, ROCK_TYPES, SHIELD_REGEN_DELAY,
   SMUGGLING_INSPECTION_CHANCE, STATION_TURRET_DPS, STARTER_MODULES, modulePrice, shipStats,
@@ -22,8 +22,8 @@ import {
   type PlayerProfile, type ShipInput, type SimEvent, type StationDef,
 } from './types';
 import {
-  angleBetween, clamp, qclone, qForward, qident, qIntegrate, qLookAt, qnorm, qrot, v3,
-  vadd, vclone, vdist, vlen, vnorm, vscale, vsub, type Vec3,
+  angleBetween, clamp, leadPoint, qclone, qForward, qident, qIntegrate, qLookAt, qnorm, qrot,
+  v3, vadd, vclone, vdist, vdot, vlen, vlen2, vnorm, vscale, vsub, type Vec3,
 } from './vec';
 
 export const SHIP_RADIUS: Record<string, number> = {
@@ -351,6 +351,7 @@ export class Sim {
           if (!e.isPlayer) this.tickPirate(e, dt);
           break;
         case 'missile': this.tickMissile(e, dt); break;
+        case 'bolt': this.tickBolt(e, dt); break;
         case 'fragment':
         case 'loot': this.tickFloating(e, dt); break;
         case 'asteroid': {
@@ -786,6 +787,8 @@ export class Sim {
     if (best) this.setTarget(pid, best.id);
   }
 
+  // Weapons fire simulated projectiles: bolts travel, lead matters, strafing
+  // dodges. Pirates aim at the intercept point with per-tier error.
   private tickShipCombat(e: Entity, dt: number): void {
     e.weaponCooldown = Math.max(0, e.weaponCooldown - dt);
     if (!e.firing || e.weaponCooldown > 0 || e.dockedAt || e.cruise !== 'off') return;
@@ -795,36 +798,60 @@ export class Sim {
     const range = stats ? stats.weaponRange : pdef?.weaponRange ?? 0;
     const interval = stats ? stats.weaponInterval : pdef?.shotInterval ?? 1;
     if (damage <= 0) return;
-    e.weaponCooldown = interval;
 
-    const fwd = qForward(e.orient);
-    // find what we hit: the target if aimed at it, else any ship in the cone
-    let hit: Entity | null = null;
-    const candidates: Entity[] = [];
-    if (e.targetId !== null) {
-      const t = this.entities.get(e.targetId);
-      if (t && !t.dead && t.kind === 'ship') candidates.push(t);
-    }
-    for (const t of this.entities.values()) {
-      if (t.kind !== 'ship' || t.dead || t.id === e.id) continue;
-      if (!candidates.includes(t)) candidates.push(t);
-    }
-    for (const t of candidates) {
-      const d = vdist(t.pos, e.pos);
-      if (d > range) continue;
-      const cone = Math.max(AIM_CONE_MIN, Math.atan((t.radius * 1.6) / Math.max(d, 1)));
-      if (angleBetween(fwd, vsub(t.pos, e.pos)) < cone) {
-        hit = t;
-        break;
-      }
-    }
-    if (hit) {
-      const dmg = damage * this.rng.range(0.85, 1.15);
-      this.applyDamage(hit, dmg, e.id, false);
-      this.events.push({ type: 'laser', fromId: e.id, toX: hit.pos.x, toY: hit.pos.y, toZ: hit.pos.z, hit: true });
+    let dir: Vec3;
+    if (pdef) {
+      // AI: lead the target, with tier-defined sloppiness
+      const target = e.aggroId !== null ? this.entities.get(e.aggroId) : null;
+      if (!target || target.dead) return;
+      const aim = leadPoint(e.pos, e.vel, target.pos, target.vel, BOLT_SPEED);
+      dir = vnorm(vsub(aim, e.pos));
+      if (angleBetween(qForward(e.orient), dir) > 0.25) return; // nose not on it yet
+      dir = jitterDir(dir, pdef.aimError, this.rng);
     } else {
-      const end = vadd(e.pos, vscale(fwd, range * 0.7));
-      this.events.push({ type: 'laser', fromId: e.id, toX: end.x, toY: end.y, toZ: end.z, hit: false });
+      dir = jitterDir(qForward(e.orient), PLAYER_AIM_SPREAD, this.rng);
+    }
+    e.weaponCooldown = interval;
+    this.spawnBolt(e, dir, damage, range);
+    this.events.push({ type: 'shot', entityId: e.id, x: e.pos.x, y: e.pos.y, z: e.pos.z });
+  }
+
+  private spawnBolt(from: Entity, dir: Vec3, damage: number, range: number): void {
+    const b = blankEntity(this.nextId++, 'bolt');
+    b.pos = vadd(from.pos, vscale(dir, from.radius + 6));
+    b.vel = vadd(from.vel, vscale(dir, BOLT_SPEED));
+    b.orient = qLookAt(dir);
+    b.ownerId = from.id;
+    b.damage = damage;
+    b.ttl = range / BOLT_SPEED;
+    b.radius = 1;
+    b.name = 'bolt';
+    this.entities.set(b.id, b);
+  }
+
+  private tickBolt(b: Entity, dt: number): void {
+    b.ttl -= dt;
+    if (b.ttl <= 0) {
+      this.entities.delete(b.id);
+      return;
+    }
+    const prev = vclone(b.pos);
+    vaddTo(b.pos, vscale(b.vel, dt));
+    // swept collision against ships and rocks along this tick's segment
+    for (const t of this.entities.values()) {
+      if (t.id === b.ownerId || t.dead) continue;
+      if (t.kind !== 'ship' && t.kind !== 'asteroid') continue;
+      if (t.kind === 'ship' && t.dockedAt) continue;
+      const r = (t.kind === 'asteroid' ? t.radius : t.radius * 1.4) + 1.5;
+      if (!segmentHitsSphere(prev, b.pos, t.pos, r)) continue;
+      if (t.kind === 'ship') {
+        this.applyDamage(t, b.damage * this.rng.range(0.85, 1.15), b.ownerId, false);
+      } else {
+        // rock soak: a dull spark, no damage
+        this.events.push({ type: 'hit', entityId: t.id, shield: false, amount: 0, x: b.pos.x, y: b.pos.y, z: b.pos.z });
+      }
+      this.entities.delete(b.id);
+      return;
     }
   }
 
@@ -944,16 +971,19 @@ export class Sim {
     }
 
     target.shieldRegenTimer = 0;
+    // attacker position rides along for the HUD damage-direction arrows
+    const src = !environmental && sourceId >= 0 ? this.entities.get(sourceId) : undefined;
+    const from = src ? { fx: src.pos.x, fy: src.pos.y, fz: src.pos.z } : {};
     let remaining = amount;
     if (target.shield > 0) {
       const absorbed = Math.min(target.shield, remaining);
       target.shield -= absorbed;
       remaining -= absorbed;
-      this.events.push({ type: 'hit', entityId: target.id, shield: true, amount: Math.round(absorbed), x: target.pos.x, y: target.pos.y, z: target.pos.z });
+      this.events.push({ type: 'hit', entityId: target.id, shield: true, amount: Math.round(absorbed), x: target.pos.x, y: target.pos.y, z: target.pos.z, ...from });
     }
     if (remaining > 0) {
       target.hull -= remaining;
-      this.events.push({ type: 'hit', entityId: target.id, shield: false, amount: Math.round(remaining), x: target.pos.x, y: target.pos.y, z: target.pos.z });
+      this.events.push({ type: 'hit', entityId: target.id, shield: false, amount: Math.round(remaining), x: target.pos.x, y: target.pos.y, z: target.pos.z, ...from });
       if (target.hull <= 0) this.handleDeath(target, sourceId);
     }
   }
@@ -2070,4 +2100,24 @@ function rotateTowards(a: import('./vec').Quat, b: import('./vec').Quat, maxAngl
 
 function MODULE_NAME(slot: ModuleSlot): string {
   return MODULE_NAMES[slot];
+}
+
+// Random small deflection of a direction vector (muzzle spread / aim error).
+function jitterDir(dir: Vec3, error: number, rng: Rng): Vec3 {
+  if (error <= 0) return dir;
+  return vnorm(v3(
+    dir.x + rng.range(-error, error),
+    dir.y + rng.range(-error, error),
+    dir.z + rng.range(-error, error),
+  ));
+}
+
+// Does the segment a->b pass within `radius` of `center`?
+function segmentHitsSphere(a: Vec3, b: Vec3, center: Vec3, radius: number): boolean {
+  const ab = vsub(b, a);
+  const ac = vsub(center, a);
+  const len2 = vlen2(ab);
+  const t = len2 > 1e-9 ? clamp(vdot(ac, ab) / len2, 0, 1) : 0;
+  const closest = vadd(a, vscale(ab, t));
+  return vdist(closest, center) <= radius;
 }

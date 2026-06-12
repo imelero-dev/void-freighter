@@ -69,6 +69,14 @@ function fragMat(goodId: string | null): THREE.MeshStandardMaterial {
 }
 const lootGeo = new THREE.BoxGeometry(2.6, 2.6, 2.6);
 const lootMat = new THREE.MeshStandardMaterial({ color: 0x8a6a2a, roughness: 0.5, metalness: 0.7, emissive: 0x332200 });
+// weapon bolts: shared elongated tracer (cylinder axis +Y), oriented per frame
+const boltGeo = new THREE.CylinderGeometry(0.45, 0.45, 9, 5, 1, true);
+const boltMat = new THREE.MeshBasicMaterial({
+  color: 0xff6a3a, transparent: true, opacity: 0.95,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const tmpDir = new THREE.Vector3();
 
 interface View {
   obj: THREE.Object3D;
@@ -118,6 +126,9 @@ export class EntitiesLayer {
         if (view.ship) updateThrusters(view.ship, e);
         if (e.id === world.playerId && !this.showPlayer) view.obj.visible = false;
         if (e.dockedAt) view.obj.visible = false;
+      } else if (e.kind === 'bolt') {
+        tmpDir.set(e.vel.x, e.vel.y, e.vel.z).normalize();
+        view.obj.quaternion.setFromUnitVectors(Y_AXIS, tmpDir);
       } else if (e.kind === 'asteroid') {
         const spin = time * 0.04 + e.rockIndex * 1.3;
         view.obj.rotation.set(spin * 0.4, spin, spin * 0.23);
@@ -161,6 +172,11 @@ export class EntitiesLayer {
       }
       case 'loot': {
         const mesh = new THREE.Mesh(lootGeo, lootMat);
+        view = { obj: mesh, kindKey };
+        break;
+      }
+      case 'bolt': {
+        const mesh = new THREE.Mesh(boltGeo, boltMat); // shared pool — never disposed
         view = { obj: mesh, kindKey };
         break;
       }

@@ -419,6 +419,18 @@ export class ClientWorld implements IWorld {
           e.targetId = w.tg;
           break;
         }
+        case 'b': {
+          if (!e) {
+            e = blankEntity(w.i, 'bolt');
+            e.pos = v3(w.x, w.y, w.z);
+            e.radius = 1;
+            this.entities.set(w.i, e);
+          }
+          e.prevPos = vclone(e.pos);
+          e.pos = v3(w.x, w.y, w.z);
+          e.vel = v3(w.vx, w.vy, w.vz);
+          break;
+        }
       }
     }
 

@@ -2,11 +2,13 @@
 
 import { OfflineWorld } from '../offline_world';
 import { button, el } from './dom';
+import { saveSettings, settings } from './settings';
 
 export interface MenuCallbacks {
   startOffline(pilotName: string, fresh: boolean): void;
   startOnline(username: string, password: string, register: boolean): Promise<void>;
   resume(): void;
+  settingsChanged(): void;
 }
 
 const CONTROLS: Array<[string, string]> = [
@@ -110,6 +112,48 @@ export class Menu {
     onlineBox.appendChild(orow);
     box.appendChild(onlineBox);
     box.appendChild(this.statusLine);
+
+    // settings
+    const setBox = el('div', 'vf-menu-section');
+    setBox.appendChild(el('div', 'vf-menu-h', 'SETTINGS'));
+    const slider = (label: string, min: number, max: number, step: number, get: () => number, set: (v: number) => void, fmt: (v: number) => string) => {
+      const row = el('div', 'vf-set-row');
+      row.appendChild(el('span', 'vf-set-label', label));
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = String(min);
+      input.max = String(max);
+      input.step = String(step);
+      input.value = String(get());
+      input.className = 'vf-slider';
+      const value = el('span', 'vf-set-value', fmt(get()));
+      input.addEventListener('input', () => {
+        set(Number(input.value));
+        value.textContent = fmt(get());
+        saveSettings();
+        this.cb.settingsChanged();
+      });
+      row.appendChild(input);
+      row.appendChild(value);
+      setBox.appendChild(row);
+    };
+    slider('Mouse sensitivity', 0.4, 2.5, 0.1,
+      () => settings.sensitivity, (v) => { settings.sensitivity = v; }, (v) => `${v.toFixed(1)}×`);
+    slider('Volume', 0, 1, 0.05,
+      () => settings.volume, (v) => { settings.volume = v; }, (v) => `${Math.round(v * 100)}%`);
+    const invRow = el('div', 'vf-set-row');
+    invRow.appendChild(el('span', 'vf-set-label', 'Invert mouse Y'));
+    const inv = document.createElement('input');
+    inv.type = 'checkbox';
+    inv.checked = settings.invertY;
+    inv.addEventListener('change', () => {
+      settings.invertY = inv.checked;
+      saveSettings();
+      this.cb.settingsChanged();
+    });
+    invRow.appendChild(inv);
+    setBox.appendChild(invRow);
+    box.appendChild(setBox);
 
     box.appendChild(button('CONTROLS [F1]', 'vf-btn', () => this.toggleHelp()));
     box.appendChild(el('div', 'vf-menu-foot', 'all visuals & audio procedural · no assets were harmed'));

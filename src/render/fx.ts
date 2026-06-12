@@ -51,7 +51,14 @@ export class FxLayer {
         }
         case 'hit': {
           const p = new THREE.Vector3(ev.x - this.sm.origin.x, ev.y - this.sm.origin.y, ev.z - this.sm.origin.z);
-          this.spawnFlash(p, ev.shield ? 0x66aaff : 0xffaa55, ev.shield ? 14 : 9, 0.25);
+          if (ev.amount > 0) this.spawnFlash(p, ev.shield ? 0x66aaff : 0xffaa55, ev.shield ? 14 : 9, 0.25);
+          else this.spawnFlash(p, 0x997755, 4, 0.12); // bolt soaked by a rock
+          break;
+        }
+        case 'shot': {
+          // muzzle flash
+          const p = new THREE.Vector3(ev.x - this.sm.origin.x, ev.y - this.sm.origin.y, ev.z - this.sm.origin.z);
+          this.spawnFlash(p, 0xffaa55, 3, 0.07);
           break;
         }
         case 'explosion': {

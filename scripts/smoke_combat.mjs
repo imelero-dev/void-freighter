@@ -3,7 +3,7 @@
 
 import { loadSim } from './lib/sim_loader.mjs';
 
-const { Sim, qLookAt, vadd, vdist, vnorm, vscale, vsub, v3 } = await loadSim();
+const { Sim, BOLT_SPEED, leadPoint, qLookAt, vadd, vdist, vnorm, vscale, vsub, v3 } = await loadSim();
 
 const sim = new Sim();
 const pid = sim.addPlayer('GunBot');
@@ -27,11 +27,12 @@ const MAX_TICKS = 20 * 60;
 while (sim.entities.has(pirate.id) && ticks++ < MAX_TICKS) {
   const p = sim.entities.get(pirate.id);
   if (!p) break;
-  // keep on its tail at ~350 m
-  e.orient = qLookAt(vnorm(vsub(p.pos, e.pos)));
+  // keep on its tail at ~350 m, aiming at the bolt intercept point
   const d = vdist(p.pos, e.pos);
   if (d > 500) e.pos = vadd(p.pos, vscale(vnorm(vsub(e.pos, p.pos)), 350));
   e.vel = v3();
+  const aim = leadPoint(e.pos, e.vel, p.pos, p.vel, BOLT_SPEED);
+  e.orient = qLookAt(vnorm(vsub(aim, e.pos)));
   sim.tick();
   if (e.hull <= 0) {
     console.error('❌ bot was destroyed');

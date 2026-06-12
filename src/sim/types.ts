@@ -143,7 +143,7 @@ export interface FactionDef {
 // Entities (dynamic)
 // ---------------------------------------------------------------------------
 
-export type EntityKind = 'ship' | 'asteroid' | 'fragment' | 'loot' | 'missile';
+export type EntityKind = 'ship' | 'asteroid' | 'fragment' | 'loot' | 'missile' | 'bolt';
 
 export type PirateTier = 'scout' | 'fighter' | 'raider' | 'elite';
 export type AiState = 'patrol' | 'approach' | 'attack' | 'flee';
@@ -325,7 +325,9 @@ export interface Destination {
 
 export type SimEvent =
   | { type: 'log'; text: string; color?: string; pid?: number }
-  | { type: 'hit'; entityId: number; shield: boolean; amount: number; x: number; y: number; z: number }
+  // fx/fy/fz: attacker position when known — drives the HUD damage-direction arrows
+  | { type: 'hit'; entityId: number; shield: boolean; amount: number; x: number; y: number; z: number; fx?: number; fy?: number; fz?: number }
+  | { type: 'shot'; entityId: number; x: number; y: number; z: number }
   | { type: 'explosion'; entityId: number; big: boolean; x: number; y: number; z: number }
   | { type: 'laser'; fromId: number; toX: number; toY: number; toZ: number; hit: boolean; mining?: boolean }
   | { type: 'fragment'; entityId: number; x: number; y: number; z: number }

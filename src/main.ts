@@ -41,6 +41,9 @@ const menu = new Menu({
   resume() {
     menu.hide();
   },
+  settingsChanged() {
+    app?.applySettings();
+  },
 });
 
 function startGame(w: IWorld): void {
