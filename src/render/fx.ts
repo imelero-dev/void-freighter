@@ -136,6 +136,11 @@ export class FxLayer {
       }
       if (fx.ttl <= 0) {
         this.sm.near.remove(fx.obj);
+        // beams share beamGeo; sparks own their geometry — materials are
+        // always per-effect
+        const obj = fx.obj as THREE.Mesh | THREE.Sprite | THREE.Points;
+        if (fx.kind === 'sparks') (obj as THREE.Points).geometry.dispose();
+        (obj.material as THREE.Material)?.dispose();
         this.effects.splice(i, 1);
       }
     }

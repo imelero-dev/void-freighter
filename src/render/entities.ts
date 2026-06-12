@@ -69,8 +69,6 @@ function fragMat(goodId: string | null): THREE.MeshStandardMaterial {
 }
 const lootGeo = new THREE.BoxGeometry(2.6, 2.6, 2.6);
 const lootMat = new THREE.MeshStandardMaterial({ color: 0x8a6a2a, roughness: 0.5, metalness: 0.7, emissive: 0x332200 });
-const missileGeo = new THREE.ConeGeometry(0.5, 3, 6);
-const missileMat = new THREE.MeshBasicMaterial({ color: 0xffcc66 });
 
 interface View {
   obj: THREE.Object3D;
@@ -167,7 +165,11 @@ export class EntitiesLayer {
         break;
       }
       case 'missile': {
-        const mesh = new THREE.Mesh(missileGeo, missileMat);
+        // per-instance resources: missile views are disposed on impact
+        const mesh = new THREE.Mesh(
+          new THREE.ConeGeometry(0.5, 3, 6),
+          new THREE.MeshBasicMaterial({ color: 0xffcc66 }),
+        );
         mesh.rotation.x = -Math.PI / 2;
         const wrapper = new THREE.Group();
         wrapper.add(mesh);
@@ -190,6 +192,19 @@ export class EntitiesLayer {
     const view = this.views.get(id);
     if (!view) return;
     this.sm.near.remove(view.obj);
+    // ship/missile meshes own their geometries+materials; pooled assets
+    // (rocks, fragments, loot) are shared and must survive
+    if (view.kindKey.startsWith('ship_') || view.kindKey === 'missile') {
+      view.obj.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (mesh.isMesh) {
+          mesh.geometry?.dispose();
+          const mat = mesh.material as THREE.Material | THREE.Material[];
+          if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+          else mat?.dispose();
+        }
+      });
+    }
     this.views.delete(id);
   }
 }
