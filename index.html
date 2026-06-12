@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>VOID FREIGHTER</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23000'/><path d='M3 11 8 3l5 8-5-2z' fill='%23d9a441'/></svg>" />
   <style>
@@ -20,6 +22,7 @@
       margin: 0; padding: 0; overflow: hidden; background: #000;
       font-family: 'Lucida Console', Monaco, monospace;
       user-select: none;
+      touch-action: none; overscroll-behavior: none;
     }
     canvas#game { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
     canvas#hud { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 5; }
@@ -293,6 +296,83 @@
     .vf-act-label { color: var(--amber-dim); font-size: 9px; letter-spacing: 1px; margin: 0 2px 0 6px; }
     .vf-act-label.sell { color: rgba(127,201,127,0.6); }
     .vf-mini:disabled { opacity: 0.3; cursor: default; }
+
+    /* ---------- touch controls overlay (mobile only, built by touch.ts) ---------- */
+    #vf-touch {
+      position: fixed; inset: 0; z-index: 10; pointer-events: none;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      -webkit-user-select: none; user-select: none;
+    }
+    #vf-touch .vf-touch-btn {
+      pointer-events: auto; touch-action: none;
+      min-width: 44px; min-height: 44px; padding: 4px 8px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(10, 12, 15, 0.75); border: 1px solid rgba(217, 164, 65, 0.35);
+      color: var(--amber); font-family: inherit; font-size: 10px; letter-spacing: 1px;
+    }
+    #vf-touch .vf-touch-btn.held { background: rgba(217, 164, 65, 0.45); color: #0a0c0f; }
+    .vf-touch-top {
+      position: absolute; top: calc(6px + env(safe-area-inset-top)); left: 0; right: 0;
+      display: flex; gap: 8px; justify-content: center; pointer-events: none;
+    }
+    .vf-touch-bottom {
+      position: absolute; bottom: calc(8px + env(safe-area-inset-bottom)); left: 0; right: 0;
+      display: flex; gap: 6px; flex-wrap: wrap; justify-content: center;
+      pointer-events: none;
+    }
+    .vf-touch-look {
+      position: absolute; left: 0; top: 64px; bottom: 72px; width: 40vw;
+      pointer-events: auto; touch-action: none;
+    }
+    .vf-touch-stickbase {
+      position: absolute; width: 130px; height: 130px; border-radius: 50%;
+      border: 1px solid rgba(217, 164, 65, 0.35); background: rgba(217, 164, 65, 0.04);
+      transform: translate(-50%, -50%); pointer-events: none; display: none;
+    }
+    .vf-touch-nub {
+      position: absolute; width: 46px; height: 46px; border-radius: 50%;
+      border: 1px solid var(--amber); background: rgba(217, 164, 65, 0.3);
+      box-shadow: 0 0 12px rgba(217, 164, 65, 0.35);
+      transform: translate(-50%, -50%); pointer-events: none; display: none;
+    }
+    .vf-touch-throttle {
+      position: absolute; right: calc(118px + env(safe-area-inset-right));
+      top: 28%; height: 42%; width: 54px;
+      border: 1px solid rgba(217, 164, 65, 0.35); background: rgba(10, 12, 15, 0.6);
+      pointer-events: auto; touch-action: none;
+    }
+    .vf-touch-throttle-fill {
+      position: absolute; left: 2px; right: 2px; bottom: 2px; height: 0%;
+      background: linear-gradient(rgba(217, 164, 65, 0.55), rgba(217, 164, 65, 0.3));
+      pointer-events: none;
+    }
+    .vf-touch-throttle-label {
+      position: absolute; top: -16px; left: 0; right: 0; text-align: center;
+      color: var(--amber-dim); font-size: 9px; letter-spacing: 2px;
+    }
+    #vf-touch .vf-touch-fire {
+      position: absolute; right: calc(14px + env(safe-area-inset-right)); top: 26%;
+      width: 90px; height: 90px; border-radius: 50%; font-size: 12px;
+    }
+    #vf-touch .vf-touch-secondary {
+      position: absolute; right: calc(20px + env(safe-area-inset-right)); top: calc(26% + 104px);
+      width: 76px; height: 76px; border-radius: 50%; font-size: 9px;
+    }
+
+    /* ---------- small screens (phones) ---------- */
+    @media (max-width: 480px) {
+      .vf-window { min-width: 0; width: 96vw; max-height: 75vh; }
+      .vf-window.wide { min-width: 0; width: 96vw; }
+      .vf-body { font-size: 11px; }
+      .vf-table.market-grid .vf-row {
+        grid-template-columns: 20px minmax(76px, 1fr) 42px 42px 42px 34px minmax(64px, 90px) auto;
+        gap: 4px; font-size: 10px;
+      }
+      .vf-menu-title { font-size: 28px; letter-spacing: 6px; }
+      .vf-chat { top: 8px; left: 8px; max-width: 280px; }
+      .vf-credits-hud { top: 6px; right: 8px; font-size: 11px; }
+      .vf-dockbar { padding: 5px 8px; gap: 6px; }
+    }
   </style>
 </head>
 <body>

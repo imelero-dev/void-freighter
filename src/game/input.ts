@@ -4,6 +4,7 @@
 import type { ShipInput } from '../sim/types';
 import { binds } from '../ui/keybinds';
 import { settings } from '../ui/settings';
+import { isMobile } from './touch';
 
 export type GameAction =
   | 'toggleCruise' | 'zeroThrottle' | 'toggleAssist' | 'toggleDrill'
@@ -28,6 +29,9 @@ export class InputManager {
   firing = false;
   pointerLocked = false;
   uiMode = false; // true while a window has focus: flight input suspended
+  // roll-hold state written by TouchControls (no key code to bind to)
+  touchRollLeft = false;
+  touchRollRight = false;
 
   private keys = new Set<string>();
   private listeners = new Map<GameAction, Array<() => void>>();
@@ -39,9 +43,12 @@ export class InputManager {
     window.addEventListener('keydown', (ev) => this.onKeyDown(ev));
     window.addEventListener('keyup', (ev) => this.keys.delete(ev.code));
     window.addEventListener('blur', () => this.keys.clear());
-    canvas.addEventListener('click', () => {
-      if (!this.uiMode && !this.pointerLocked) void canvas.requestPointerLock();
-    });
+    // mobile: no pointer lock — TouchControls writes cursorX/Y directly
+    if (!isMobile()) {
+      canvas.addEventListener('click', () => {
+        if (!this.uiMode && !this.pointerLocked) void canvas.requestPointerLock();
+      });
+    }
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === canvas;
       if (!this.pointerLocked) {
@@ -131,6 +138,17 @@ export class InputManager {
     this.rmbListeners.push(fn);
   }
 
+  // programmatic hold inputs (TouchControls): same paths as the mouse buttons
+  fireOn(on: boolean): void {
+    if (this.firing === on) return;
+    this.firing = on;
+    for (const fn of this.fireListeners) fn(on);
+  }
+
+  rmbOn(on: boolean): void {
+    for (const fn of this.rmbListeners) fn(on);
+  }
+
   triggerMissile(): void {
     for (const fn of this.missileListeners) fn();
   }
@@ -173,7 +191,7 @@ export class InputManager {
     out.turbo = up && this.throttle >= 1;
     out.thrustRight = (b('strafeRight') ? 1 : 0) - (b('strafeLeft') ? 1 : 0);
     out.thrustUp = (b('strafeUp') ? 1 : 0) - (b('strafeDown') ? 1 : 0);
-    out.roll = (b('rollRight') ? 1 : 0) - (b('rollLeft') ? 1 : 0);
+    out.roll = (b('rollRight') || this.touchRollRight ? 1 : 0) - (b('rollLeft') || this.touchRollLeft ? 1 : 0);
     out.brake = down && this.throttle <= 0.02;
     // virtual cursor with a small deadzone and smooth curve
     const dead = 0.04;

@@ -24,6 +24,7 @@ import { AudioEngine } from './audio';
 import { CameraRig } from './camera';
 import { bindAxis, bindButton, clearHotasBind, describeAxis, describeButton, GamepadManager } from './gamepad';
 import { InputManager } from './input';
+import { isMobile, TouchControls } from './touch';
 import { BINDABLE, binds, HOTAS_AXES, HOTAS_BUTTONS, keyLabel, resetBinds, setBind } from '../ui/keybinds';
 
 export class GameApp {
@@ -41,6 +42,7 @@ export class GameApp {
   private post: PostPipeline;
   private hud: Hud;
   private input: InputManager;
+  private touchControls: TouchControls | null = null;
   private camera = new CameraRig();
   private audio = new AudioEngine();
   private wm = new WindowManager();
@@ -81,6 +83,7 @@ export class GameApp {
     this.post = new PostPipeline(this.sm);
     this.hud = new Hud(this.sm.camera);
     this.input = new InputManager(canvas);
+    if (isMobile()) this.touchControls = new TouchControls(this.input);
     this.chat = new ChatUi(() => this.world);
     this.stationUi = new StationUi(world, this.wm, this.audio);
     this.map = new SystemMap(world, this.wm, this.audio);
@@ -109,6 +112,7 @@ export class GameApp {
   destroy(): void {
     this.running = false;
     window.removeEventListener('resize', this.onResize);
+    this.touchControls?.destroy();
   }
 
   // -------------------------------------------------------------------------
@@ -224,6 +228,7 @@ export class GameApp {
     this.audio.applyVolume();
     this.sm.setShadows(settings.shadows);
     this.hud.showFps = settings.showFps;
+    this.touchControls?.setVisible(settings.mobileControls);
   }
 
   private assistLevel = 0; // smoothed aim-assist strength (no jerky grabs)

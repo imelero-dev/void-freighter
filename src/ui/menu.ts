@@ -1,5 +1,6 @@
 // Main menu + help overlay. Shown before play and on Escape.
 
+import { isMobile } from '../game/touch';
 import { OfflineWorld } from '../offline_world';
 import { button, el } from './dom';
 import { saveSettings, settings } from './settings';
@@ -161,6 +162,9 @@ export class Menu {
     checkbox('Aim assist (pull to target)', () => settings.aimAssist, (v) => { settings.aimAssist = v; });
     checkbox('Shadows', () => settings.shadows, (v) => { settings.shadows = v; });
     checkbox('Show FPS', () => settings.showFps, (v) => { settings.showFps = v; });
+    if (isMobile()) {
+      checkbox('Touch controls', () => settings.mobileControls, (v) => { settings.mobileControls = v; });
+    }
     box.appendChild(setBox);
 
     const fsRow = el('div', 'vf-menu-row');
