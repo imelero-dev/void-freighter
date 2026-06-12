@@ -29,11 +29,22 @@ export class SceneManager {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.92;
+    // real shadows in the near field: rocks shade you from the sun, your hull
+    // shades the cockpit. Tight 1k map around the camera keeps it cheap.
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.camera = new THREE.PerspectiveCamera(68, 1, 0.5, 80_000);
     this.farCamera = new THREE.PerspectiveCamera(68, 1, 0.5, 400_000);
 
     this.sunLightNear = new THREE.DirectionalLight(0xffd9b0, 2.6);
+    this.sunLightNear.castShadow = true;
+    this.sunLightNear.shadow.mapSize.set(1024, 1024);
+    this.sunLightNear.shadow.camera.near = 10;
+    this.sunLightNear.shadow.camera.far = 22_000;
+    const sc = this.sunLightNear.shadow.camera;
+    sc.left = -2200; sc.right = 2200; sc.top = 2200; sc.bottom = -2200;
+    this.sunLightNear.shadow.bias = -0.0005;
     this.ambientNear = new THREE.AmbientLight(0x223344, 0.55);
     this.near.add(this.sunLightNear, this.ambientNear);
 

@@ -238,6 +238,13 @@ function buildStationMesh(def: StationDef): { group: THREE.Group; ring: THREE.Me
   }
 
   group.rotation.y = rng.range(0, Math.PI * 2);
+  group.traverse((node) => {
+    const m = node as THREE.Mesh;
+    if (m.isMesh) {
+      m.castShadow = true;
+      m.receiveShadow = true;
+    }
+  });
   return { group, ring, blinkers };
 }
 

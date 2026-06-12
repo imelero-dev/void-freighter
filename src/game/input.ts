@@ -9,7 +9,7 @@ export type GameAction =
   | 'toggleCruise' | 'zeroThrottle' | 'toggleAssist' | 'toggleDrill'
   | 'dock' | 'tab' | 'targetReticle' | 'fireMissile' | 'rescue' | 'hail'
   | 'map' | 'cargo' | 'ship' | 'journal' | 'market' | 'contacts' | 'chat'
-  | 'setDestination' | 'escape' | 'toggleCamera' | 'help' | 'controls';
+  | 'setDestination' | 'escape' | 'toggleCamera' | 'help' | 'controls' | 'lights';
 
 // bind id -> discrete action (axis-style binds are read in frame())
 const BIND_ACTIONS: Record<string, GameAction> = {
@@ -17,7 +17,7 @@ const BIND_ACTIONS: Record<string, GameAction> = {
   drill: 'toggleDrill', dock: 'dock', tab: 'tab', reticle: 'targetReticle',
   map: 'map', cargo: 'cargo', ship: 'ship', journal: 'journal',
   market: 'market', contacts: 'contacts', chat: 'chat', dest: 'setDestination',
-  camera: 'toggleCamera', rescue: 'rescue', help: 'help', hail: 'hail',
+  camera: 'toggleCamera', rescue: 'rescue', help: 'help', hail: 'hail', lights: 'lights',
 };
 
 export class InputManager {
@@ -33,6 +33,7 @@ export class InputManager {
   private listeners = new Map<GameAction, Array<() => void>>();
   private fireListeners: Array<(on: boolean) => void> = [];
   private missileListeners: Array<() => void> = [];
+  private rmbListeners: Array<(on: boolean) => void> = [];
 
   constructor(private canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (ev) => this.onKeyDown(ev));
@@ -46,6 +47,7 @@ export class InputManager {
       if (!this.pointerLocked) {
         this.firing = false;
         for (const fn of this.fireListeners) fn(false);
+        for (const fn of this.rmbListeners) fn(false);
       }
     });
     window.addEventListener('mousemove', (ev) => {
@@ -61,13 +63,16 @@ export class InputManager {
         this.firing = true;
         for (const fn of this.fireListeners) fn(true);
       } else if (ev.button === 2) {
-        for (const fn of this.missileListeners) fn();
+        for (const fn of this.rmbListeners) fn(true);
       }
     });
     window.addEventListener('mouseup', (ev) => {
       if (ev.button === 0 && this.firing) {
         this.firing = false;
         for (const fn of this.fireListeners) fn(false);
+      }
+      if (ev.button === 2) {
+        for (const fn of this.rmbListeners) fn(false);
       }
     });
     window.addEventListener('contextmenu', (ev) => ev.preventDefault());
@@ -119,6 +124,15 @@ export class InputManager {
 
   onMissile(fn: () => void): void {
     this.missileListeners.push(fn);
+  }
+
+  // raw right-mouse-button hold state (app routes: mining beam vs missile)
+  onRmb(fn: (on: boolean) => void): void {
+    this.rmbListeners.push(fn);
+  }
+
+  triggerMissile(): void {
+    for (const fn of this.missileListeners) fn();
   }
 
   private emit(action: GameAction): void {

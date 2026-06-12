@@ -122,6 +122,17 @@ this file documents the *why*.
 
 ## Mining
 
+- **Beam mining**: deploy the drill (G), hold **RMB** to fire the beam at the
+  rock under your reticle. Heat builds over ~6 s of continuous fire; overheat
+  locks the drill until it cools below 35% (full cool ~5 s). No AFK farming.
+- **Gangue vs ore**: each fragment is 28% real composition / 72% worthless
+  Regolith (2 cr) — unless you carve a **glowing seam** (1-3 per rock, ~75%
+  ore odds there). Cracking a rock open always sheds real ore.
+- Extraction rate is 0.4× the drill's nominal rating (Mk V ≈ 2.1 u/s before
+  heat cycles). Rock yield only depletes on real ore pulls.
+
+### (legacy)
+
 - Rock hp = radius × 2.6–5.0 by type; yield = radius × 0.9–1.7 units.
 - Drill: 1.2 + 0.8×tier u/s, range 500 + 150×tier. Collector radius 80+60×tier.
 - Refining ratios: iron 2:1→steel, copper 2:1→alloy, ice 1:1→water,

@@ -202,6 +202,7 @@ export interface Entity {
   rockHp: number;
   rockMaxHp: number;
   rockYield: Record<string, number> | null; // remaining units per goodId
+  hotspots: Vec3[] | null;   // mineral seams (asteroids)
   fieldId: string | null;
   rockIndex: number;
   radius: number;            // collision/visual radius
@@ -358,7 +359,7 @@ export type SimEvent =
   | { type: 'interdiction'; pid: number }
   | { type: 'death'; pid: number; lostCargo: number; deductible: number }
   | { type: 'chat'; from: string; text: string; channel: 'local' | 'station' | 'system'; pid?: number }
-  | { type: 'comms'; pid: number; text: string }  // ambient radio chatter
+  | { type: 'comms'; pid: number; text: string; from?: string }  // radio chatter (callsign optional)
   | { type: 'econ'; headline: string }
   | { type: 'rescue'; pid: number; cost: number }
   | { type: 'fine'; pid: number; amount: number; desc: string }

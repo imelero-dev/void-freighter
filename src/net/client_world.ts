@@ -78,6 +78,8 @@ export class ClientWorld implements IWorld {
   drillOn = false;
   turboCharge = 1;
   turboActive = false;
+  drillHeat = 0;
+  drillOverheated = false;
   connected = false;
   time = 0;
   ready: Promise<void>;
@@ -290,6 +292,7 @@ export class ClientWorld implements IWorld {
         for (const y of def.yields) wsum += y.weight;
         rock.rockYield = {};
         for (const y of def.yields) rock.rockYield[y.good] = Math.round(total * (y.weight / wsum));
+        rock.hotspots = spawn.hotspots;
         this.entities.set(rock.id, rock);
         this.rockEntityIds.set(key, rock.id);
       }
@@ -462,6 +465,8 @@ export class ClientWorld implements IWorld {
       e.throttle = s.th;
       this.turboCharge = (s.tb ?? 100) / 100;
       this.turboActive = !!s.ta;
+      this.drillHeat = (s.dh ?? 0) / 100;
+      this.drillOverheated = !!s.do;
       if (performance.now() > this.targetLockUntil) {
         e.targetId = s.tg ?? null;
       }
@@ -513,6 +518,7 @@ export class ClientWorld implements IWorld {
     if (this.shipStats.drillRate > 0) this.drillOn = on;
     this.cmd({ cmd: 'drill', on });
   }
+  setMiningBeam(on: boolean): void { this.cmd({ cmd: 'beam', on }); }
   toggleCruise(): void { this.cmd({ cmd: 'cruise' }); }
   toggleFlightAssist(): void {
     this.flightAssist = !this.flightAssist;

@@ -27,6 +27,7 @@ export const BINDABLE: BindDef[] = [
   { id: 'camera', label: 'Camera view', def: 'KeyV' },
   { id: 'rescue', label: 'Hail rescue tow', def: 'KeyH' },
   { id: 'hail', label: 'Hail trader', def: 'KeyU' },
+  { id: 'lights', label: 'Headlights', def: 'KeyI' },
   { id: 'map', label: 'System chart', def: 'KeyM' },
   { id: 'cargo', label: 'Cargo hold', def: 'KeyB' },
   { id: 'ship', label: 'Ship & modules', def: 'KeyC' },

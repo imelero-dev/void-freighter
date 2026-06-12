@@ -13,6 +13,7 @@ function good(id: string, name: string, category: GoodDef['category'], basePrice
 }
 
 // raw (minable)
+good('stone', 'Regolith', 'raw', 2, 0.15, 1.0); // mining gangue — mostly worthless
 good('iron_ore', 'Iron Ore', 'raw', 14, 0.30, 1.0);
 good('copper_ore', 'Copper Ore', 'raw', 22, 0.35, 1.0);
 good('ice', 'Water Ice', 'raw', 8, 0.25, 1.2);
@@ -415,6 +416,15 @@ export const ROCK_TYPES: Record<string, RockDef> = {
 };
 
 export const ASTEROID_RESPAWN_S = 600; // mined-out rock regrows after 10 min
+// Mining beam: hold-to-fire with heat. Grindy by design — most pulls are
+// worthless regolith unless you work the glowing seams (hotspots).
+export const DRILL_HEAT_PER_S = 1 / 6;     // ~6 s of continuous beam to overheat
+export const DRILL_COOL_PER_S = 1 / 5;
+export const DRILL_OVERHEAT_RESUME = 0.35; // must cool below this to re-fire
+export const MINING_RATE_FACTOR = 0.4;     // global slowdown vs old auto-miner
+export const ORE_CHANCE_BASE = 0.28;       // real material odds per fragment
+export const ORE_CHANCE_HOTSPOT = 0.75;    // when carving a hotspot seam
+export const HOTSPOT_CONE = 0.5;           // rad from hotspot axis that counts
 
 // ---------------------------------------------------------------------------
 // Reputation

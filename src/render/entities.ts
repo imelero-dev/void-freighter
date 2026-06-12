@@ -131,9 +131,6 @@ export class EntitiesLayer {
       } else if (e.kind === 'bolt') {
         tmpDir.set(e.vel.x, e.vel.y, e.vel.z).normalize();
         view.obj.quaternion.setFromUnitVectors(Y_AXIS, tmpDir);
-      } else if (e.kind === 'asteroid') {
-        const spin = time * 0.04 + e.rockIndex * 1.3;
-        view.obj.rotation.set(spin * 0.4, spin, spin * 0.23);
       } else if (e.kind === 'fragment' || e.kind === 'loot') {
         const spin = time * 1.2 + e.id;
         view.obj.rotation.set(spin * 0.7, spin, 0);
@@ -203,6 +200,13 @@ export class EntitiesLayer {
             });
           }
         }
+        ship.group.traverse((node) => {
+          const m = node as THREE.Mesh;
+          if (m.isMesh) {
+            m.castShadow = true;
+            m.receiveShadow = true;
+          }
+        });
         if (e.derelict) {
           // cold hull: darken everything, kill thruster glow
           ship.group.traverse((node) => {
@@ -223,7 +227,23 @@ export class EntitiesLayer {
       case 'asteroid': {
         const mesh = new THREE.Mesh(rockGeo(e.rockIndex), rockMat(e.rockType ?? 'rocky'));
         mesh.scale.setScalar(e.radius);
-        view = { obj: mesh, kindKey };
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        const wrapper = new THREE.Group();
+        wrapper.add(mesh);
+        // glowing mineral seams: mine these spots for the good ore
+        if (e.hotspots) {
+          const seamColor = e.rockType === 'rare' ? 0xc9a0ff : e.rockType === 'icy' ? 0x9fdcff : 0xffd27a;
+          for (const h of e.hotspots) {
+            const seam = new THREE.Mesh(
+              new THREE.SphereGeometry(Math.max(2, e.radius * 0.07), 6, 6),
+              new THREE.MeshBasicMaterial({ color: seamColor }),
+            );
+            seam.position.set(h.x * e.radius * 0.98, h.y * e.radius * 0.98, h.z * e.radius * 0.98);
+            wrapper.add(seam);
+          }
+        }
+        view = { obj: wrapper, kindKey };
         break;
       }
       case 'fragment': {

@@ -40,6 +40,7 @@ const menu = new Menu({
   },
   resume() {
     menu.hide();
+    if (app) app.paused = false;
   },
   settingsChanged() {
     app?.applySettings();
@@ -56,8 +57,10 @@ function startGame(w: IWorld): void {
   app.onExit = () => {
     if (menu.visible) {
       menu.hide();
+      app!.paused = false;
     } else {
       if (world instanceof OfflineWorld) world.save();
+      app!.paused = true; // offline: the universe truly stops
       menu.show();
     }
   };

@@ -24,8 +24,8 @@ e.vel = v3();
 meta.undockInvuln = 1e9; // bot is here to mine, not to dogfight
 for (let i = 0; i < 30; i++) sim.tick();
 
-const minedTarget = 30;
-let safety = 20 * 240; // 4 min sim budget
+const minedTarget = 20;
+let safety = 20 * 360; // 6 min sim budget (heat cycles + gangue)
 while (meta.profile.stats.unitsMined < minedTarget && safety-- > 0) {
   // nearest live rock
   let rock = null;
@@ -45,6 +45,7 @@ while (meta.profile.stats.unitsMined < minedTarget && safety-- > 0) {
   e.orient = qLookAt(vnorm(vsub(rock.pos, e.pos)));
   sim.setTarget(pid, rock.id);
   sim.setDrill(pid, true);
+  sim.setMiningBeam(pid, !sim.meta(pid).drillOverheated);
   sim.tick();
 }
 const mined = meta.profile.stats.unitsMined;

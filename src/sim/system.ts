@@ -229,6 +229,8 @@ export interface RockSpawn {
   radius: number;
   type: RockType;
   spinSeed: number;
+  // glowing mineral seams: surface directions where the good ore lives
+  hotspots: Vec3[];
 }
 
 export function rockSpawn(field: FieldDef, belt: BeltDef, index: number): RockSpawn {
@@ -247,7 +249,15 @@ export function rockSpawn(field: FieldDef, belt: BeltDef, index: number): RockSp
   // rare rocks are smaller; big rocks are rarer (power distribution)
   const sizeRoll = Math.pow(rng.next(), 2.2);
   const radius = type === 'rare' ? 18 + sizeRoll * 60 : 25 + sizeRoll * 175;
-  return { pos, radius, type, spinSeed: rng.int(1, 1e9) };
+  const hotspots: Vec3[] = [];
+  const nSpots = rng.int(1, 3);
+  for (let h = 0; h < nSpots; h++) {
+    const az = rng.range(0, Math.PI * 2);
+    const el = rng.range(-1, 1);
+    const c = Math.sqrt(1 - el * el);
+    hotspots.push(v3(Math.cos(az) * c, el, Math.sin(az) * c));
+  }
+  return { pos, radius, type, spinSeed: rng.int(1, 1e9), hotspots };
 }
 
 // Buying nav intel on an unvisited station: base fee + range surcharge.

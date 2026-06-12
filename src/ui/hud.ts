@@ -528,8 +528,17 @@ export class Hud {
     this.vbar(gx, gy - 30, 7, 56, Math.abs(ship.throttle), ship.throttle < 0 ? RED : AMBER);
     this.vbar(gx + 26, gy - 30, 7, 56, fuelFrac, fuelFrac < 0.2 ? RED : CYAN);
     this.vbar(gx + 52, gy - 30, 7, 56, world.turboCharge, world.turboActive ? '#ff8830' : 'rgba(255, 136, 48, 0.55)');
+    if (stats.drillRate > 0) {
+      const heatColor = world.drillOverheated ? RED : world.drillHeat > 0.7 ? '#ff8830' : AMBER;
+      this.vbar(gx - 26, gy - 30, 7, 56, world.drillHeat, heatColor);
+    }
     ctx.fillStyle = AMBER_DIM;
     ctx.font = '9px "Lucida Console", monospace';
+    if (stats.drillRate > 0) {
+      ctx.fillStyle = world.drillOverheated ? RED : AMBER_DIM;
+      ctx.fillText(world.drillOverheated ? 'HOT!' : 'DRL', gx - 23, gy + 36);
+      ctx.fillStyle = AMBER_DIM;
+    }
     ctx.fillText('THR', gx + 3, gy + 36);
     ctx.fillText('FUE', gx + 29, gy + 36);
     ctx.fillText('TRB', gx + 55, gy + 36);
@@ -540,6 +549,10 @@ export class Hud {
     if (!world.flightAssist) {
       ctx.fillStyle = CYAN;
       ctx.fillText('FA OFF', gx + 30, gy - 74);
+    }
+    if (world.drillOn) {
+      ctx.fillStyle = world.drillOverheated ? RED : '#9ab3a0';
+      ctx.fillText(world.drillOverheated ? 'DRILL VENTING' : 'DRILL — hold RMB to mine', gx + 30, gy - 88);
     }
 
     // ---- shield arcs + hull (right of scanner) ----

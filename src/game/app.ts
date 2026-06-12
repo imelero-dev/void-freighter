@@ -35,6 +35,9 @@ export class GameApp {
   private cockpit: THREE.Group;
   private gamepad = new GamepadManager();
   private gpFireWas: boolean | null = null;
+  private headlight!: THREE.SpotLight;
+  private headlightOn = true;
+  paused = false;
   private post: PostPipeline;
   private hud: Hud;
   private input: InputManager;
@@ -70,6 +73,12 @@ export class GameApp {
     this.cockpit.scale.setScalar(2.2); // keeps geometry past the near plane
     this.cockpit.position.y = 0.28;    // dashboard peeks into the lower view
     this.sm.camera.add(this.cockpit);
+    // headlights: a warm spot punching into the dark ([I] to toggle)
+    this.headlight = new THREE.SpotLight(0xfff0d6, 4, 1500, 0.38, 0.55, 1.1);
+    this.headlight.position.set(0, -0.2, 0);
+    this.headlight.target.position.set(0, 0, -100);
+    this.sm.camera.add(this.headlight);
+    this.sm.camera.add(this.headlight.target);
     this.post = new PostPipeline(this.sm);
     this.hud = new Hud(this.sm.camera);
     this.input = new InputManager(canvas);
@@ -123,6 +132,13 @@ export class GameApp {
     input.on('targetReticle', () => w.targetReticle());
     input.onFire((on) => w.setFiring(on));
     input.onMissile(() => w.fireMissile());
+    input.onRmb((on) => {
+      if (w.drillOn) {
+        w.setMiningBeam(on);
+      } else if (on) {
+        w.fireMissile();
+      }
+    });
     input.on('map', () => this.toggleWindow('map'));
     input.on('cargo', () => this.toggleWindow('cargo'));
     input.on('ship', () => this.toggleWindow('shipyard'));
@@ -169,6 +185,11 @@ export class GameApp {
       this.hud.cameraMode = this.camera.mode;
     });
     input.on('rescue', () => w.hailRescue());
+    input.on('lights', () => {
+      this.headlightOn = !this.headlightOn;
+      this.audio.click();
+      this.hud.pushLog(`Headlights ${this.headlightOn ? 'ON' : 'OFF'}.`, '#8ad');
+    });
     input.on('controls', () => this.toggleWindow('controls'));
     input.on('hail', () => {
       const ship = w.player;
@@ -525,6 +546,13 @@ export class GameApp {
     if (dt > 0.25) dt = 0.25;
 
     const w = this.world;
+    // single-player pause: the sim freezes entirely (online keeps running —
+    // you can't pause other people's universe)
+    if (this.paused && !w.online) {
+      this.post.render(w.time, 0);
+      this.hud.draw(w, this.sm.origin, this.input.cursorX, this.input.cursorY, true);
+      return;
+    }
     this.input.frame(dt, w.input);
     // E2E bot override: scripts write window.VF.botInput instead of fighting
     // the InputManager for w.input
@@ -552,6 +580,7 @@ export class GameApp {
       this.camera.apply(this.sm, ship, alpha, dt);
       this.entities.showPlayer = this.camera.mode === 'chase';
       this.cockpit.visible = this.camera.mode === 'cockpit' && !ship.dockedAt;
+      this.headlight.visible = this.headlightOn && !ship.dockedAt;
       // speed-based FOV: subtle at maneuver, pronounced under cruise
       const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
       const maneuverKick = Math.min(1.1, speed / Math.max(1, w.shipStats.maxSpeed)) * 6;
@@ -731,10 +760,9 @@ export class GameApp {
         this.chat.addMessage(ev.from, ev.text, ev.channel);
         break;
       case 'comms':
-        this.hud.setComms(ev.text);
         this.audio.commsStatic();
-        // radio traffic lands in the chat history too (Enter to review)
-        this.chat.addMessage('', ev.text, 'radio');
+        // radio lives in the chat (Enter shows the full history)
+        this.chat.addMessage(ev.from ?? '', ev.text, 'radio');
         break;
       case 'econ':
         this.hud.pushLog(`NEWS: ${ev.headline}`, '#7fb1c9');

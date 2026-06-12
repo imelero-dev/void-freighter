@@ -26,6 +26,8 @@ export interface IWorld {
   readonly drillOn: boolean;
   readonly turboCharge: number;  // 0..1 burst gauge
   readonly turboActive: boolean;
+  readonly drillHeat: number;    // 0..1 mining beam heat
+  readonly drillOverheated: boolean;
   // 0..1 fraction between the previous and current sim tick, for render interpolation
   readonly renderAlpha: number;
 
@@ -44,6 +46,7 @@ export interface IWorld {
   setFiring(on: boolean): void;
   fireMissile(): void;
   setDrill(on: boolean): void;
+  setMiningBeam(on: boolean): void;
   toggleCruise(): void;
   toggleFlightAssist(): void;
   setTarget(id: number | null): void;

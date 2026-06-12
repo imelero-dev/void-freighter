@@ -62,6 +62,8 @@ export class OfflineWorld implements IWorld {
   get drillOn(): boolean { return this.meta.drillOn; }
   get turboCharge(): number { return this.meta.turboCharge; }
   get turboActive(): boolean { return this.meta.turboActive; }
+  get drillHeat(): number { return this.meta.drillHeat; }
+  get drillOverheated(): boolean { return this.meta.drillOverheated; }
   get input(): ShipInput { return this.meta.input; }
   set input(v: ShipInput) { Object.assign(this.meta.input, v); }
   get renderAlpha(): number { return this.acc / DT; }
@@ -131,6 +133,7 @@ export class OfflineWorld implements IWorld {
   setFiring(on: boolean): void { this.sim.setFiring(this.playerId, on); }
   fireMissile(): void { this.sim.fireMissile(this.playerId); }
   setDrill(on: boolean): void { this.sim.setDrill(this.playerId, on); }
+  setMiningBeam(on: boolean): void { this.sim.setMiningBeam(this.playerId, on); }
   toggleCruise(): void { this.sim.toggleCruise(this.playerId); }
   toggleFlightAssist(): void { this.sim.toggleFlightAssist(this.playerId); }
   setTarget(id: number | null): void { this.sim.setTarget(this.playerId, id); }

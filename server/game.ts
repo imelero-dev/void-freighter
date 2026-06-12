@@ -160,6 +160,7 @@ export class GameServer {
       case 'fire': sim.setFiring(pid, !!msg.on); break;
       case 'missile': sim.fireMissile(pid); break;
       case 'drill': sim.setDrill(pid, !!msg.on); break;
+      case 'beam': sim.setMiningBeam(pid, !!msg.on); break;
       case 'cruise': sim.toggleCruise(pid); break;
       case 'fa': sim.toggleFlightAssist(pid); break;
       case 'target': sim.setTarget(pid, msg.id === null ? null : int(msg.id)); break;
@@ -282,6 +283,8 @@ export class GameServer {
       const selfWire = wireShip(p);
       selfWire.tb = Math.round(meta.turboCharge * 100);
       if (meta.turboActive) selfWire.ta = 1;
+      selfWire.dh = Math.round(meta.drillHeat * 100);
+      if (meta.drillOverheated) selfWire.do = 1;
       const snap: Record<string, unknown> = {
         t: 'snap', tick: this.sim.tickCount, time: Math.round(this.sim.time * 100) / 100,
         self: selfWire, ents,

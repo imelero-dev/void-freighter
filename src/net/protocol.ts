@@ -55,6 +55,8 @@ export interface WireShip {
   np?: import('../sim/types').NpcKind; // ambient traffic kind
   tb?: number; // turbo charge ×100 (self only)
   ta?: 1;  // turbo active
+  dh?: number; // drill heat ×100 (self only)
+  do?: 1;  // drill overheated
 }
 
 export interface WireRock {

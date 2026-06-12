@@ -246,7 +246,7 @@ export class TrafficSystem {
         if (!p || p.dead || p.dockedAt) continue;
         if (vdist(p.pos, e.pos) < MERCHANT_HAIL_RANGE * 2.2) {
           e.aiTimer = 600; // do not spam
-          sim.emit({ type: 'comms', pid: meta.pid, text: `${e.name}: ${sim.rng.pick(MERCHANT_LINES)}` });
+          sim.emit({ type: 'comms', pid: meta.pid, from: e.name, text: sim.rng.pick(MERCHANT_LINES) });
           sim.emit({ type: 'log', text: `Trader in range — target it and press [U] to hail.`, color: '#d8c46a', pid: meta.pid });
           break;
         }
@@ -314,10 +314,10 @@ export class TrafficSystem {
               const p = sim.entities.get(meta.pid);
               if (p && !p.dockedAt && vdist(p.pos, h.pos) < 15_000) {
                 sim.emit({
-                  type: 'comms', pid: meta.pid,
+                  type: 'comms', pid: meta.pid, from: h.name,
                   text: outbound
-                    ? `${h.name}: ${nearStation.name} control, requesting departure corridor. Hold is full, mood is better.`
-                    : `${h.name}: ${nearStation.name} control, inbound on final. Try not to scratch the paint this time.`,
+                    ? `${nearStation.name} control, requesting departure corridor. Hold is full, mood is better.`
+                    : `${nearStation.name} control, inbound on final. Try not to scratch the paint this time.`,
                 });
                 break;
               }
@@ -373,7 +373,7 @@ export class TrafficSystem {
       civ.aggroId = pirate.id;
     }
     this.distress.set(civ.id, { pirates, pid });
-    sim.emit({ type: 'comms', pid, text: sim.rng.pick(DISTRESS_LINES) });
+    sim.emit({ type: 'comms', pid, from: civ.name, text: sim.rng.pick(DISTRESS_LINES) });
     sim.emit({ type: 'distress', pid, entityId: civ.id, text: 'Civilian distress call — signature marked on scanner.' });
     sim.emit({ type: 'log', text: 'MAYDAY received — a civilian is under attack nearby.', color: '#e8402a', pid });
   }
@@ -454,7 +454,7 @@ export class TrafficSystem {
       for (const meta of sim.players.values()) {
         const p = sim.entities.get(meta.pid);
         if (p && !p.dockedAt && vdist(p.pos, e.pos) < 20_000) {
-          sim.emit({ type: 'comms', pid: meta.pid, text: `${e.name}: ${sim.rng.pick(DISTRESS_LINES)}` });
+          sim.emit({ type: 'comms', pid: meta.pid, from: e.name, text: sim.rng.pick(DISTRESS_LINES) });
         }
       }
     }
@@ -508,7 +508,7 @@ export class TrafficSystem {
             meta.profile.credits += reward;
             meta.profile.stats.creditsEarned += reward;
             sim.addRep(meta.profile, civ.factionId === 'scrappers' ? 'drift' : civ.factionId, 2);
-            sim.emit({ type: 'comms', pid: killerId, text: `${civ.name}: I owe you my hide, pilot. Transferring what I can spare.` });
+            sim.emit({ type: 'comms', pid: killerId, from: civ.name, text: 'I owe you my hide, pilot. Transferring what I can spare.' });
             sim.emit({ type: 'log', text: `Rescue reward: +${reward} cr.`, color: '#7fc97f', pid: killerId });
             civ.aiState = 'approach'; // resume its run
             civ.aggroId = null;

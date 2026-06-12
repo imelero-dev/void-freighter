@@ -5,7 +5,8 @@ import {
   AMMO_PRICE, ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
   CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_MAX_SPEED, FUEL_PRICE,
   COMBAT_LOCKOUT_S, CRAFT_RECIPES, craftMaterials, GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
-  NPC_DEFS, REPAIR_KIT_FRACTION, REPAIR_KIT_RECIPE, WAREHOUSE_PLOT_M3, WORKSHOP_RENT_PRICE, WORKSHOP_RENT_S, warehousePlotPrice,
+  DRILL_COOL_PER_S, DRILL_HEAT_PER_S, DRILL_OVERHEAT_RESUME, HOTSPOT_CONE, MINING_RATE_FACTOR,
+  NPC_DEFS, ORE_CHANCE_BASE, ORE_CHANCE_HOTSPOT, REPAIR_KIT_FRACTION, REPAIR_KIT_RECIPE, WAREHOUSE_PLOT_M3, WORKSHOP_RENT_PRICE, WORKSHOP_RENT_S, warehousePlotPrice,
   TURBO_ACCEL_MULT, TURBO_BURST_S, TURBO_ENEMY_RADIUS, TURBO_RECHARGE_S, TURBO_SPEED,
   PIRATE_GOOD_DROPS, REFINE_RECIPES, REPAIR_PRICE, REP_DISCOUNT_MAX, REP_SMUGGLING_PENALTY,
   RESCUE_COST_FRACTION, RESCUE_COST_MIN, ROCK_TYPES, SHIELD_REGEN_DELAY,
@@ -94,7 +95,7 @@ export function blankEntity(id: number, kind: EntityKind): Entity {
     aiPhase: 0, missileCooldown: 0,
     missileAmmo: 0, cannonAmmo: 0, lockTimer: 0, lockedOn: false,
     parentId: 0, derelict: false, derelictOpened: false,
-    rockType: null, rockHp: 0, rockMaxHp: 0, rockYield: null, fieldId: null, rockIndex: -1,
+    rockType: null, rockHp: 0, rockMaxHp: 0, rockYield: null, hotspots: null, fieldId: null, rockIndex: -1,
     radius: 10, goodId: null, qty: 0, lootCredits: 0, lootModule: null, ttl: 0,
     ownerId: 0, damage: 0,
   };
@@ -150,6 +151,9 @@ export interface PlayerMeta {
   turboCharge: number;   // 0..1 burst gauge
   turboActive: boolean;
   lastCombatAt: number;  // sim time of the last hit taken (field-repair lockout)
+  miningBeam: boolean;   // RMB held with the drill deployed
+  drillHeat: number;     // 0..1 — overheats, cools when idle
+  drillOverheated: boolean;
 }
 
 interface RockState {
@@ -219,6 +223,7 @@ export class Sim {
       cruiseRequested: false, flightAssist: true,
       forcefieldCooldown: 0, promptedDerelicts: new Set(),
       turboCharge: 1, turboActive: false, lastCombatAt: -999,
+      miningBeam: false, drillHeat: 0, drillOverheated: false,
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
@@ -722,7 +727,8 @@ export class Sim {
       // the mass cap has already braked us; final drop right at the doorstep
       if (d < 2500) {
         this.dropCruise(e, 'arrival');
-        this.events.push({ type: 'log', text: `Arriving: ${meta.destination.name}.`, color: '#8fb', pid: meta.pid });
+        this.events.push({ type: 'log', text: `Arriving: ${meta.destination.name}. Destination cleared.`, color: '#8fb', pid: meta.pid });
+        meta.destination = null; // GPS resets once you are there
         return;
       }
     }
@@ -1754,6 +1760,7 @@ export class Sim {
       e.rockHp = st.hp;
       e.rockMaxHp = spawn.radius * ROCK_TYPES[spawn.type].hpPerRadius;
       e.rockYield = st.yieldLeft;
+      e.hotspots = spawn.hotspots;
       e.fieldId = fieldId;
       e.rockIndex = i;
       e.name = `${spawn.type} asteroid`;
@@ -1770,62 +1777,113 @@ export class Sim {
       return;
     }
     meta.drillOn = on;
+    if (!on) meta.miningBeam = false;
+  }
+
+  // The mining beam: hold RMB with the drill deployed. Heat builds while
+  // firing and the drill locks out when it redlines — no AFK strip-mining.
+  // Most pulls are worthless regolith; carving the glowing seams (hotspots)
+  // is where the real ore comes from.
+  setMiningBeam(pid: number, on: boolean): void {
+    const meta = this.players.get(pid);
+    if (!meta) return;
+    meta.miningBeam = on && meta.drillOn;
   }
 
   private tickMining(meta: PlayerMeta, e: Entity, dt: number): void {
-    if (!meta.drillOn || meta.stats.drillRate === 0 || e.cruise !== 'off') return;
-    const target = e.targetId !== null ? this.entities.get(e.targetId) : null;
-    let rock: Entity | null = (target && target.kind === 'asteroid' && !target.dead) ? target : null;
-    if (!rock) {
-      // nearest rock in the aim cone
-      const fwd = qForward(e.orient);
-      let best = 0.3;
-      for (const t of this.entities.values()) {
-        if (t.kind !== 'asteroid') continue;
-        const d = vdist(t.pos, e.pos);
-        if (d > meta.stats.drillRange) continue;
-        const ang = angleBetween(fwd, vsub(t.pos, e.pos));
-        if (ang < best) {
-          best = ang;
-          rock = t;
-        }
+    if (meta.stats.drillRate === 0) return;
+    const firing = meta.drillOn && meta.miningBeam && !meta.drillOverheated && e.cruise === 'off' && !e.dockedAt;
+
+    // heat model: builds while the beam is on, cools whenever it is not
+    if (firing) {
+      meta.drillHeat = Math.min(1, meta.drillHeat + DRILL_HEAT_PER_S * dt);
+      if (meta.drillHeat >= 1) {
+        meta.drillOverheated = true;
+        this.events.push({ type: 'log', text: 'DRILL OVERHEAT — venting. Ease off the trigger, pilot.', color: '#f66', pid: meta.pid });
+        return;
+      }
+    } else {
+      meta.drillHeat = Math.max(0, meta.drillHeat - DRILL_COOL_PER_S * dt);
+      if (meta.drillOverheated && meta.drillHeat <= DRILL_OVERHEAT_RESUME) {
+        meta.drillOverheated = false;
+        this.events.push({ type: 'log', text: 'Drill back within thermal limits.', color: '#8fb', pid: meta.pid });
+      }
+      return;
+    }
+
+    // tight aimed beam: whatever rock sits under the reticle
+    const fwd = qForward(e.orient);
+    let rock: Entity | null = null;
+    let best = 0.15;
+    for (const t of this.entities.values()) {
+      if (t.kind !== 'asteroid') continue;
+      const d = vdist(t.pos, e.pos);
+      if (d > meta.stats.drillRange) continue;
+      const ang = angleBetween(fwd, vsub(t.pos, e.pos));
+      const cone = Math.max(0.06, Math.atan(t.radius / Math.max(d, 1)) * 0.9);
+      if (ang < Math.min(best, cone)) {
+        best = ang;
+        rock = t;
       }
     }
-    if (!rock || vdist(rock.pos, e.pos) > meta.stats.drillRange) return;
-    const ang = angleBetween(qForward(e.orient), vsub(rock.pos, e.pos));
-    if (ang > 0.35) return;
+    if (!rock) {
+      // beam into the void: visual only
+      const end = vadd(e.pos, vscale(fwd, meta.stats.drillRange * 0.8));
+      this.events.push({ type: 'laser', fromId: e.id, toX: end.x, toY: end.y, toZ: end.z, hit: false, mining: true });
+      return;
+    }
 
     const key = `${rock.fieldId}:${rock.rockIndex}`;
     const st = this.rocks.get(key);
     if (!st || st.hp <= 0) return;
-    const rate = meta.stats.drillRate;
+    const rate = meta.stats.drillRate * MINING_RATE_FACTOR;
     st.hp -= rate * dt * (ROCK_TYPES[rock.rockType!].hpPerRadius / 1.5);
     rock.rockHp = Math.max(0, st.hp);
     meta.extractAcc += rate * dt;
     this.events.push({ type: 'laser', fromId: e.id, toX: rock.pos.x, toY: rock.pos.y, toZ: rock.pos.z, hit: true, mining: true });
 
+    // are we carving a hotspot seam? (beam impact point vs seam axes)
+    let onSeam = false;
+    if (rock.hotspots) {
+      const impactDir = vnorm(vsub(e.pos, rock.pos)); // facing side of the rock
+      for (const h of rock.hotspots) {
+        if (angleBetween(impactDir, h) < HOTSPOT_CONE) {
+          onSeam = true;
+          break;
+        }
+      }
+    }
+
     while (meta.extractAcc >= FRAGMENT_CHUNK) {
       meta.extractAcc -= FRAGMENT_CHUNK;
-      this.spawnFragment(rock, st, e.pos);
+      this.spawnFragment(rock, st, e.pos, onSeam);
     }
     if (st.hp <= 0) {
       st.respawnAt = this.time + ASTEROID_RESPAWN_S;
       st.entityId = null;
       this.events.push({ type: 'explosion', entityId: rock.id, big: false, x: rock.pos.x, y: rock.pos.y, z: rock.pos.z });
-      // final burst of fragments
-      for (let i = 0; i < 2; i++) this.spawnFragment(rock, st, e.pos);
+      // cracking the rock open always sheds something real
+      for (let i = 0; i < 2; i++) this.spawnFragment(rock, st, e.pos, true);
       this.entities.delete(rock.id);
     }
   }
 
-  private spawnFragment(rock: Entity, st: RockState, towards: Vec3): void {
-    // pick a good from remaining yield
+  private spawnFragment(rock: Entity, st: RockState, towards: Vec3, onSeam: boolean): void {
+    // grindy by design: most pulls are regolith; the real composition only
+    // comes out at base odds — or much better odds while carving a seam
+    const oreChance = onSeam ? ORE_CHANCE_HOTSPOT : ORE_CHANCE_BASE;
+    let good: string;
+    let qty: number;
     const goods = Object.keys(st.yieldLeft).filter((g) => st.yieldLeft[g] > 0);
-    if (goods.length === 0) return;
-    const weights = goods.map((g) => st.yieldLeft[g]);
-    const good = this.rng.pickWeighted(goods, weights);
-    const qty = Math.min(st.yieldLeft[good], FRAGMENT_CHUNK);
-    st.yieldLeft[good] -= qty;
+    if (goods.length > 0 && this.rng.chance(oreChance)) {
+      const weights = goods.map((g) => st.yieldLeft[g]);
+      good = this.rng.pickWeighted(goods, weights);
+      qty = Math.min(st.yieldLeft[good], FRAGMENT_CHUNK);
+      st.yieldLeft[good] -= qty;
+    } else {
+      good = 'stone';
+      qty = this.rng.int(1, FRAGMENT_CHUNK);
+    }
     const f = blankEntity(this.nextId++, 'fragment');
     // bias the debris toward the mining ship so the collector has work to do
     const rand = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-1, 1), this.rng.range(-1, 1)));
