@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { BOLT_SPEED, GOODS } from '../sim/data';
 import type { Entity } from '../sim/types';
-import { leadPoint, qForward, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
+import { leadPoint, qForward, qRight, qUp, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
 import type { IWorld } from '../world_api';
 import { fmtDistance, fmtTime } from './dom';
 
@@ -104,18 +104,6 @@ export class Hud {
     const cx = W / 2, cy = H / 2;
     const stats = world.shipStats;
 
-    // ---- cockpit frame ----
-    if (this.cameraMode === 'cockpit') {
-      ctx.strokeStyle = 'rgba(20, 22, 25, 0.9)';
-      ctx.lineWidth = Math.max(26, W * 0.02);
-      ctx.beginPath();
-      ctx.moveTo(-10, H * 0.72);
-      ctx.lineTo(W * 0.3, H + 30);
-      ctx.moveTo(W + 10, H * 0.72);
-      ctx.lineTo(W * 0.7, H + 30);
-      ctx.stroke();
-    }
-
     // ---- reticle ----
     ctx.strokeStyle = AMBER_DIM;
     ctx.lineWidth = 1;
@@ -146,97 +134,16 @@ export class Hud {
       ctx.stroke();
     }
 
-    // ---- left cluster: speed / throttle / fuel ----
-    const speed = vlen(ship.vel);
-    const lx = Math.max(60, W * 0.09);
-    const ly = cy + 30;
-    ctx.fillStyle = AMBER;
-    ctx.textAlign = 'left';
-    ctx.font = '20px "Lucida Console", monospace';
-    ctx.fillText(speed > 10_000 ? `${(speed / 1000).toFixed(1)} km/s` : `${Math.round(speed)} m/s`, lx, ly - 56);
-    ctx.font = '11px "Lucida Console", monospace';
-    ctx.fillStyle = world.turboActive ? '#ff8830' : AMBER_DIM;
-    ctx.fillText(
-      world.turboActive ? 'TURBO OVERBURN'
-        : ship.cruise === 'cruise' ? 'CRUISE'
-          : ship.cruise === 'charging' ? 'CRUISE CHARGE…'
-            : `THR ${Math.round(ship.throttle * 100)}%`,
-      lx, ly - 38);
-    // vertical gauges, well separated: throttle / fuel / turbo
-    ctx.textAlign = 'center';
-    this.vbar(lx, ly - 24, 7, 70, Math.abs(ship.throttle), ship.throttle < 0 ? RED : AMBER);
-    ctx.fillStyle = AMBER_DIM;
-    ctx.fillText('THR', lx + 3, ly + 56);
-    const fuelFrac = world.profile.fuel / stats.fuelMax;
-    this.vbar(lx + 30, ly - 24, 7, 70, fuelFrac, fuelFrac < 0.2 ? RED : CYAN);
-    ctx.fillStyle = AMBER_DIM;
-    ctx.fillText('FUE', lx + 33, ly + 56);
-    this.vbar(lx + 60, ly - 24, 7, 70, world.turboCharge, world.turboActive ? '#ff8830' : 'rgba(255, 136, 48, 0.55)');
-    ctx.fillStyle = AMBER_DIM;
-    ctx.fillText('TRB', lx + 63, ly + 56);
-    ctx.textAlign = 'left';
-    if (fuelFrac < 0.2) {
-      ctx.fillStyle = RED;
-      ctx.fillText(fuelFrac <= 0.02 ? 'FUEL EMPTY — F1 help' : 'FUEL LOW', lx - 4, ly + 76);
-    }
-    if (!world.flightAssist) {
-      ctx.fillStyle = CYAN;
-      ctx.fillText('FA OFF', lx - 4, ly + 92);
-    }
-
-    // ---- bottom-center: hull/shield ----
-    const bw = 170;
-    const bx = cx - bw / 2;
-    const by = H - Math.max(72, H * 0.1);
-    this.hbar(bx, by, bw, 7, ship.shield / Math.max(1, ship.maxShield), CYAN);
-    this.hbar(bx, by + 11, bw, 7, ship.hull / ship.maxHull, ship.hull / ship.maxHull < 0.25 ? RED : AMBER);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = AMBER_DIM;
-    ctx.fillText(`SHD ${Math.round(ship.shield)}/${ship.maxShield}   HUL ${Math.round(ship.hull)}/${ship.maxHull}`, cx, by + 30);
-    const ammoBits: string[] = [];
-    if (stats.cannonAmmoMax > 0) ammoBits.push(`AMM ${ship.cannonAmmo}/${stats.cannonAmmoMax}`);
-    if (stats.missileAmmoMax > 0) ammoBits.push(`MSL ${ship.missileAmmo}/${stats.missileAmmoMax}`);
-    if (ammoBits.length > 0) {
-      ctx.fillStyle = stats.cannonAmmoMax > 0 && ship.cannonAmmo <= 0 ? RED : AMBER_DIM;
-      ctx.fillText(ammoBits.join('   '), cx, by + 44);
-    }
-
     // ---- compass tape (top) ----
     this.drawCompass(world, ship, cx, W);
 
-    // ---- target panel (right) ----
+    // ---- bottom instrument cluster (ED style) ----
+    this.drawBottomCluster(world, ship, W, H);
+
+    // ---- world-anchored target bracket + lead pip ----
     const target = ship.targetId !== null ? world.entities.get(ship.targetId) : null;
-    const rx = W - Math.max(60, W * 0.09);
-    ctx.textAlign = 'right';
     if (target && !target.dead) {
       const d = vdist(ship.pos, target.pos);
-      ctx.fillStyle = target.pirate ? RED : target.kind === 'asteroid' ? GRAY : CYAN;
-      ctx.font = '13px "Lucida Console", monospace';
-      ctx.fillText(target.name.toUpperCase(), rx, cy - 60);
-      ctx.font = '11px "Lucida Console", monospace';
-      ctx.fillStyle = AMBER_DIM;
-      ctx.fillText(fmtDistance(d), rx, cy - 44);
-      if (target.kind === 'ship') {
-        this.hbar(rx - 110, cy - 34, 110, 5, target.shield / Math.max(1, target.maxShield), CYAN);
-        this.hbar(rx - 110, cy - 26, 110, 5, target.hull / target.maxHull, AMBER);
-        if (stats.missileAmmoMax > 0 && ship.missileAmmo > 0) {
-          const lockFrac = ship.lockedOn ? 1 : ship.lockTimer / stats.missileLockTime;
-          ctx.fillStyle = ship.lockedOn ? RED : AMBER_DIM;
-          ctx.fillText(ship.lockedOn ? 'LOCK ◆' : lockFrac > 0 ? `LOCK ${Math.round(lockFrac * 100)}%` : '', rx, cy - 10);
-        }
-      } else if (target.kind === 'asteroid' && target.rockYield) {
-        this.hbar(rx - 110, cy - 34, 110, 5, target.rockHp / Math.max(1, target.rockMaxHp), GRAY);
-        if (stats.compositionScan) {
-          let yLine = cy - 16;
-          for (const [g, q] of Object.entries(target.rockYield)) {
-            if (q <= 0) continue;
-            ctx.fillStyle = AMBER_DIM;
-            ctx.fillText(`${GOODS[g]?.name ?? g}: ~${Math.round(q)}`, rx, yLine);
-            yLine += 14;
-          }
-        }
-      }
-      // target bracket in world
       const tl = new THREE.Vector3(target.pos.x - origin.x, target.pos.y - origin.y, target.pos.z - origin.z);
       const s = this.toScreen(tl);
       if (!s.behind) {
@@ -319,9 +226,6 @@ export class Hud {
 
     // ---- contact blips in 3D view ----
     this.drawContacts(world, ship, origin);
-
-    // ---- radar ----
-    this.drawRadar(world, ship, W, H);
 
     // ---- docking prompt ----
     const nearStation = world.system.stations.find((s) => vdist(s.pos, ship.pos) < s.dockRadius);
@@ -552,77 +456,312 @@ export class Hud {
     }
   }
 
-  private drawRadar(world: IWorld, ship: Entity, W: number, H: number): void {
+  // ---------------------------------------------------------------------
+  // ED-style bottom instrument cluster: holo target panel | gauges |
+  // elliptical 3D scanner | shield arcs | holo status panel
+  // ---------------------------------------------------------------------
+
+  private holoPanel(x: number, y: number, w: number, h: number, title: string): void {
     const ctx = this.ctx;
-    const R = Math.max(58, Math.min(W, H) * 0.085);
-    const rx = W - R - 24, ry = H - R - 24;
-    ctx.save();
-    ctx.globalAlpha = 0.92;
-    ctx.fillStyle = 'rgba(8, 10, 12, 0.65)';
-    ctx.beginPath();
-    ctx.arc(rx, ry, R, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = AMBER_DIM;
+    ctx.fillStyle = 'rgba(30, 22, 8, 0.55)';
+    ctx.strokeStyle = 'rgba(217, 164, 65, 0.5)';
     ctx.lineWidth = 1;
-    ctx.stroke();
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+    // title tab
+    ctx.fillStyle = 'rgba(217, 164, 65, 0.16)';
+    ctx.fillRect(x, y, w, 16);
+    ctx.fillStyle = AMBER;
+    ctx.font = '10px "Lucida Console", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(title, x + 8, y + 8);
+    // corner notches
+    ctx.strokeStyle = AMBER;
     ctx.beginPath();
-    ctx.arc(rx, ry, R * 0.5, 0, Math.PI * 2);
+    ctx.moveTo(x, y + 8); ctx.lineTo(x, y); ctx.lineTo(x + 8, y);
+    ctx.moveTo(x + w - 8, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - 8);
     ctx.stroke();
+  }
+
+  private drawBottomCluster(world: IWorld, ship: Entity, W: number, H: number): void {
+    const ctx = this.ctx;
+    const cx = W / 2;
+    const stats = world.shipStats;
+    const rx = Math.max(95, Math.min(130, W * 0.085));
+    const ry = rx * 0.42;
+    const scY = H - Math.max(78, ry + 36);
+
+    this.drawScanner(world, ship, cx, scY, rx, ry);
+
+    // ---- gauges (left of scanner): speed readout + THR/FUE/TRB ----
+    const gx = cx - rx - 92;
+    const gy = scY + 8;
+    const speed = vlen(ship.vel);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = world.turboActive ? '#ff8830' : AMBER;
+    ctx.font = '19px "Lucida Console", monospace';
+    ctx.fillText(speed > 10_000 ? `${(speed / 1000).toFixed(1)} km/s` : `${Math.round(speed)} m/s`, gx + 72, gy - 58);
+    ctx.font = '10px "Lucida Console", monospace';
+    ctx.fillStyle = world.turboActive ? '#ff8830' : AMBER_DIM;
+    ctx.fillText(
+      world.turboActive ? 'TURBO OVERBURN'
+        : ship.cruise === 'cruise' ? 'CRUISE'
+          : ship.cruise === 'charging' ? 'CRUISE CHARGE…'
+            : `THR ${Math.round(ship.throttle * 100)}%`,
+      gx + 72, gy - 42);
+    ctx.textAlign = 'center';
+    const fuelFrac = world.profile.fuel / stats.fuelMax;
+    this.vbar(gx, gy - 30, 7, 56, Math.abs(ship.throttle), ship.throttle < 0 ? RED : AMBER);
+    this.vbar(gx + 26, gy - 30, 7, 56, fuelFrac, fuelFrac < 0.2 ? RED : CYAN);
+    this.vbar(gx + 52, gy - 30, 7, 56, world.turboCharge, world.turboActive ? '#ff8830' : 'rgba(255, 136, 48, 0.55)');
+    ctx.fillStyle = AMBER_DIM;
+    ctx.font = '9px "Lucida Console", monospace';
+    ctx.fillText('THR', gx + 3, gy + 36);
+    ctx.fillText('FUE', gx + 29, gy + 36);
+    ctx.fillText('TRB', gx + 55, gy + 36);
+    if (fuelFrac < 0.2) {
+      ctx.fillStyle = RED;
+      ctx.fillText(fuelFrac <= 0.02 ? 'FUEL EMPTY' : 'FUEL LOW', gx + 30, gy + 50);
+    }
+    if (!world.flightAssist) {
+      ctx.fillStyle = CYAN;
+      ctx.fillText('FA OFF', gx + 30, gy - 74);
+    }
+
+    // ---- shield arcs + hull (right of scanner) ----
+    const sx = cx + rx + 92;
+    const sy = scY + 4;
+    const shieldFrac = ship.maxShield > 0 ? ship.shield / ship.maxShield : 0;
+    // ship silhouette
+    ctx.strokeStyle = AMBER;
+    ctx.lineWidth = 1.4;
     ctx.beginPath();
-    ctx.moveTo(rx, ry - R);
-    ctx.lineTo(rx, ry + R);
-    ctx.moveTo(rx - R, ry);
-    ctx.lineTo(rx + R, ry);
+    ctx.moveTo(sx, sy - 9);
+    ctx.lineTo(sx + 7, sy + 7);
+    ctx.lineTo(sx, sy + 3);
+    ctx.lineTo(sx - 7, sy + 7);
+    ctx.closePath();
     ctx.stroke();
+    // three concentric shield arcs, lit by charge level (front + rear)
+    for (let i = 0; i < 3; i++) {
+      const lit = shieldFrac > (i + 0.34) / 3;
+      ctx.strokeStyle = lit ? CYAN : 'rgba(127, 177, 201, 0.18)';
+      ctx.lineWidth = 2;
+      const r = 15 + i * 5.5;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, -Math.PI * 0.82, -Math.PI * 0.18);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, Math.PI * 0.18, Math.PI * 0.82);
+      ctx.stroke();
+    }
+    // hull bar + readouts
+    const hullFrac = ship.hull / ship.maxHull;
+    this.hbar(sx - 34, sy + 36, 68, 6, hullFrac, hullFrac < 0.25 ? RED : AMBER);
+    ctx.textAlign = 'center';
+    ctx.font = '9px "Lucida Console", monospace';
+    ctx.fillStyle = AMBER_DIM;
+    ctx.fillText(`HUL ${Math.round(ship.hull)}`, sx, sy + 50);
+    ctx.fillText(`SHD ${Math.round(ship.shield)}`, sx, sy - 38);
+    const ammoBits: string[] = [];
+    if (stats.cannonAmmoMax > 0) ammoBits.push(`AMM ${ship.cannonAmmo}`);
+    if (stats.missileAmmoMax > 0) ammoBits.push(`MSL ${ship.missileAmmo}`);
+    if (ammoBits.length > 0) {
+      ctx.fillStyle = stats.cannonAmmoMax > 0 && ship.cannonAmmo <= 0 ? RED : AMBER_DIM;
+      ctx.fillText(ammoBits.join(' '), sx, sy + 62);
+    }
+
+    // ---- corner holo panels ----
+    const pw = Math.min(252, Math.max(200, W * 0.19));
+    const ph = 128;
+    this.drawTargetPanel(world, ship, 14, H - ph - 12, pw, ph);
+    this.drawStatusPanel(world, ship, W - pw - 14, H - ph - 12, pw, ph);
+  }
+
+  // ED-style scanner: perspective ellipse, contacts as stalked blips showing
+  // height above/below your ship's plane. Rolls with the ship.
+  private drawScanner(world: IWorld, ship: Entity, cx: number, cy: number, rx: number, ry: number): void {
+    const ctx = this.ctx;
+    ctx.save();
+    // disc
+    ctx.fillStyle = 'rgba(20, 14, 5, 0.6)';
+    ctx.strokeStyle = 'rgba(217, 164, 65, 0.55)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    for (const f of [0.66, 0.33]) {
+      ctx.strokeStyle = 'rgba(217, 164, 65, 0.22)';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx * f, ry * f, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(217, 164, 65, 0.22)';
+    ctx.beginPath();
+    ctx.moveTo(cx - rx, cy);
+    ctx.lineTo(cx + rx, cy);
+    ctx.moveTo(cx, cy - ry);
+    ctx.lineTo(cx, cy + ry);
+    ctx.stroke();
+    // sweep
+    const sweep = (performance.now() / 1400) % (Math.PI * 2);
+    ctx.strokeStyle = 'rgba(217, 164, 65, 0.30)';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(sweep) * rx, cy + Math.sin(sweep) * ry);
+    ctx.stroke();
+    // own ship notch
+    ctx.fillStyle = AMBER;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 4);
+    ctx.lineTo(cx + 3, cy + 3);
+    ctx.lineTo(cx - 3, cy + 3);
+    ctx.closePath();
+    ctx.fill();
 
     const range = world.shipStats.sensorRange;
     const fwd = qForward(ship.orient);
-    const right = { x: 0, y: 0, z: 0 };
-    // build ship-local basis: right = fwd × worldUp (stable enough for a radar)
-    const up = { x: 0, y: 1, z: 0 };
-    right.x = fwd.y * up.z - fwd.z * up.y;
-    right.y = fwd.z * up.x - fwd.x * up.z;
-    right.z = fwd.x * up.y - fwd.y * up.x;
-    const rl = Math.hypot(right.x, right.y, right.z) || 1;
-    right.x /= rl; right.y /= rl; right.z /= rl;
+    const rightAxis = qRight(ship.orient);
+    const upAxis = qUp(ship.orient);
+
+    const blip = (pos: { x: number; y: number; z: number }, color: string, isStation: boolean, isTarget: boolean) => {
+      const rel = vsub(pos, ship.pos);
+      const d = vlen(rel);
+      if (d > range || d < 1) return;
+      const nd = Math.sqrt(d / range); // sqrt scale spreads nearby contacts
+      const fr = vdot(rel, fwd) / d;
+      const ri = vdot(rel, rightAxis) / d;
+      const up = vdot(rel, upAxis) / d;
+      const px = cx + ri * nd * rx;
+      const py = cy - fr * nd * ry;
+      const stalk = -up * nd * (ry * 0.9); // canvas y grows downward
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 1;
+      if (Math.abs(stalk) > 2) {
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px, py + stalk);
+        ctx.stroke();
+      }
+      if (isStation) {
+        ctx.strokeRect(px - 3, py + stalk - 3, 6, 6);
+      } else {
+        ctx.fillRect(px - 2, py + stalk - 2, 4, 4);
+      }
+      if (isTarget) {
+        ctx.beginPath();
+        ctx.arc(px, py + stalk, 6, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    };
 
     for (const e of world.entities.values()) {
       if (e.id === world.playerId || e.dead) continue;
-      const rel = vsub(e.pos, ship.pos);
-      const d = vlen(rel);
-      if (d > range) continue;
-      const fr = vdot(rel, fwd) / d;   // forward component
-      const ri = vdot(rel, right) / d; // right component
-      const rr = Math.sqrt(d / range) * R; // sqrt scale: nearby contacts spread out
-      const px = rx + ri * rr;
-      const py = ry - fr * rr;
-      const resolved = d < world.shipStats.resolveRange;
+      const resolved = vdist(e.pos, ship.pos) < world.shipStats.resolveRange;
       let color = GRAY;
-      if (e.kind === 'ship') color = !resolved ? GRAY : e.pirate ? RED : e.isPlayer ? GREEN : CYAN;
-      else if (e.kind === 'asteroid') color = 'rgba(140,140,150,0.5)';
+      if (e.kind === 'ship') color = e.derelict ? '#7a8a82' : !resolved ? GRAY : e.pirate ? RED : e.isPlayer ? GREEN : CYAN;
+      else if (e.kind === 'asteroid') color = 'rgba(140,140,150,0.45)';
       else if (e.kind === 'loot') color = '#d8c46a';
       else if (e.kind === 'fragment') color = '#9ab3a0';
       else if (e.kind === 'missile') color = RED;
-      ctx.fillStyle = color;
-      const sz = e.kind === 'ship' ? 3 : 2;
-      ctx.fillRect(px - sz / 2, py - sz / 2, sz, sz);
+      else if (e.kind === 'bolt') continue;
+      blip(e.pos, color, false, e.id === ship.targetId);
     }
-    // station blips (always shown — they're on every chart)
     for (const st of world.system.stations) {
-      const rel = vsub(st.pos, ship.pos);
-      const d = vlen(rel);
-      if (d > range) continue;
-      const fr = vdot(rel, fwd) / d;
-      const ri = vdot(rel, right) / d;
-      const rr = Math.sqrt(d / range) * R;
-      ctx.strokeStyle = CYAN;
-      ctx.strokeRect(rx + ri * rr - 3, ry - fr * rr - 3, 6, 6);
+      blip(st.pos, CYAN, true, false);
     }
     ctx.restore();
     ctx.fillStyle = AMBER_DIM;
     ctx.textAlign = 'center';
-    ctx.font = '10px "Lucida Console", monospace';
-    ctx.fillText(`SCAN ${fmtDistance(range)}`, rx, ry + R + 12);
+    ctx.font = '9px "Lucida Console", monospace';
+    ctx.fillText(`SCAN ${fmtDistance(world.shipStats.sensorRange)}`, cx, cy + ry + 11);
+  }
+
+  private drawTargetPanel(world: IWorld, ship: Entity, x: number, y: number, w: number, h: number): void {
+    const ctx = this.ctx;
+    this.holoPanel(x, y, w, h, 'TARGET');
+    const target = ship.targetId !== null ? world.entities.get(ship.targetId) : null;
+    ctx.textAlign = 'left';
+    if (!target || target.dead) {
+      ctx.fillStyle = GRAY;
+      ctx.font = '11px "Lucida Console", monospace';
+      ctx.fillText('no target — [T] reticle · [Tab] hostiles', x + 10, y + 40);
+      return;
+    }
+    const d = vdist(ship.pos, target.pos);
+    const resolved = d < world.shipStats.resolveRange;
+    ctx.font = '12px "Lucida Console", monospace';
+    ctx.fillStyle = target.kind !== 'ship' ? GRAY
+      : target.derelict ? '#7a8a82'
+        : !resolved ? GRAY : target.pirate ? RED : target.isPlayer ? GREEN : CYAN;
+    const name = target.kind === 'ship' && !resolved && !target.isPlayer ? 'UNRESOLVED SIGNATURE' : target.name.toUpperCase();
+    ctx.fillText(name.slice(0, 26), x + 10, y + 30);
+    ctx.font = '11px "Lucida Console", monospace';
+    ctx.fillStyle = AMBER_DIM;
+    ctx.fillText(fmtDistance(d), x + 10, y + 46);
+    if (target.kind === 'ship' && !target.derelict) {
+      ctx.fillText('SHD', x + 10, y + 64);
+      this.hbar(x + 42, y + 60, w - 56, 6, target.shield / Math.max(1, target.maxShield), CYAN);
+      ctx.fillText('HUL', x + 10, y + 80);
+      this.hbar(x + 42, y + 76, w - 56, 6, target.hull / target.maxHull, AMBER);
+      const stats = world.shipStats;
+      if (stats.missileAmmoMax > 0 && ship.missileAmmo > 0) {
+        const lockFrac = ship.lockedOn ? 1 : ship.lockTimer / stats.missileLockTime;
+        ctx.fillStyle = ship.lockedOn ? RED : AMBER_DIM;
+        ctx.fillText(ship.lockedOn ? 'MISSILE LOCK ◆' : lockFrac > 0 ? `LOCK ${Math.round(lockFrac * 100)}%` : '', x + 10, y + 100);
+      }
+    } else if (target.kind === 'asteroid' && target.rockYield) {
+      this.hbar(x + 10, y + 60, w - 24, 6, target.rockHp / Math.max(1, target.rockMaxHp), GRAY);
+      if (world.shipStats.compositionScan) {
+        let line = y + 80;
+        for (const [g, q] of Object.entries(target.rockYield)) {
+          if (q <= 0 || line > y + h - 10) continue;
+          ctx.fillStyle = AMBER_DIM;
+          ctx.fillText(`${GOODS[g]?.name ?? g}: ~${Math.round(q)}`, x + 10, line);
+          line += 14;
+        }
+      } else {
+        ctx.fillStyle = GRAY;
+        ctx.fillText('composition: Mk III sensor needed', x + 10, y + 82);
+      }
+    } else if (target.derelict) {
+      ctx.fillStyle = '#7a8a82';
+      ctx.fillText('cold hull — approach to board', x + 10, y + 66);
+    }
+  }
+
+  private drawStatusPanel(world: IWorld, ship: Entity, x: number, y: number, w: number, h: number): void {
+    const ctx = this.ctx;
+    this.holoPanel(x, y, w, h, 'SHIP STATUS');
+    ctx.textAlign = 'left';
+    ctx.font = '11px "Lucida Console", monospace';
+    const prof = world.profile;
+    const stats = world.shipStats;
+    let used = 0;
+    for (const c of prof.cargo) used += (GOODS[c.good]?.volume ?? 1) * c.qty;
+    const lines: Array<[string, string, string]> = [
+      ['CR', `${Math.round(prof.credits).toLocaleString('en-US')}`, AMBER],
+      ['CARGO', `${used.toFixed(0)}/${stats.cargoCapacity} m³`, AMBER_DIM],
+      ['FUEL', `${prof.fuel.toFixed(0)}/${stats.fuelMax}`, prof.fuel / stats.fuelMax < 0.2 ? RED : AMBER_DIM],
+    ];
+    if (world.destination) {
+      const d = vdist(ship.pos, world.destination.pos);
+      lines.push(['DEST', `${world.destination.name.slice(0, 16)} ${fmtDistance(d)}`, AMBER_DIM]);
+      const closing = vdot(ship.vel, vnorm(vsub(world.destination.pos, ship.pos)));
+      if (stats.navQuality > 0 && closing > 5) lines.push(['ETA', fmtTime(d / closing), AMBER_DIM]);
+    } else {
+      lines.push(['DEST', '— set on chart [M]', GRAY]);
+    }
+    let ly = y + 32;
+    for (const [k, v, color] of lines) {
+      ctx.fillStyle = AMBER_DIM;
+      ctx.fillText(k, x + 10, ly);
+      ctx.fillStyle = color;
+      ctx.fillText(v, x + 60, ly);
+      ly += 17;
+    }
   }
 
   private drawLog(now: number, W: number, H: number): void {

@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 import { BodiesLayer } from '../render/bodies';
+import { buildCockpit } from '../render/cockpit';
 import { DustLayer } from '../render/dust';
 import { EntitiesLayer } from '../render/entities';
 import { FxLayer } from '../render/fx';
@@ -29,6 +30,7 @@ export class GameApp {
   private entities: EntitiesLayer;
   private fx: FxLayer;
   private dust: DustLayer;
+  private cockpit: THREE.Group;
   private post: PostPipeline;
   private hud: Hud;
   private input: InputManager;
@@ -57,6 +59,12 @@ export class GameApp {
     this.entities = new EntitiesLayer(this.sm, world);
     this.fx = new FxLayer(this.sm, world, this.entities);
     this.dust = new DustLayer(this.sm, world);
+    // first-person cockpit interior rides on the camera
+    this.sm.near.add(this.sm.camera);
+    this.cockpit = buildCockpit();
+    this.cockpit.scale.setScalar(2.2); // keeps geometry past the near plane
+    this.cockpit.position.y = 0.28;    // dashboard peeks into the lower view
+    this.sm.camera.add(this.cockpit);
     this.post = new PostPipeline(this.sm);
     this.hud = new Hud(this.sm.camera);
     this.input = new InputManager(canvas);
@@ -294,6 +302,7 @@ export class GameApp {
       const alpha = Math.min(1, w.renderAlpha);
       this.camera.apply(this.sm, ship, alpha, dt);
       this.entities.showPlayer = this.camera.mode === 'chase';
+      this.cockpit.visible = this.camera.mode === 'cockpit' && !ship.dockedAt;
       // speed-based FOV: subtle at maneuver, pronounced under cruise
       const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
       const maneuverKick = Math.min(1.1, speed / Math.max(1, w.shipStats.maxSpeed)) * 6;
