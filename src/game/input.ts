@@ -10,7 +10,7 @@ export type GameAction =
   | 'setDestination' | 'escape' | 'toggleCamera' | 'help';
 
 const KEY_ACTIONS: Record<string, GameAction> = {
-  ShiftLeft: 'toggleCruise', ShiftRight: 'toggleCruise',
+  CapsLock: 'toggleCruise', // "hypervelocity"
   KeyX: 'zeroThrottle', KeyZ: 'toggleAssist', KeyG: 'toggleDrill',
   Space: 'dock', Tab: 'tab', KeyT: 'targetReticle',
   KeyM: 'map', KeyB: 'cargo', KeyC: 'ship', KeyJ: 'journal',
@@ -48,7 +48,7 @@ export class InputManager {
     });
     window.addEventListener('mousemove', (ev) => {
       if (!this.pointerLocked || this.uiMode) return;
-      const s = Math.min(window.innerWidth, window.innerHeight) * 0.42;
+      const s = Math.min(window.innerWidth, window.innerHeight) * 0.34;
       this.cursorX = clamp(this.cursorX + ev.movementX / s, -1, 1);
       this.cursorY = clamp(this.cursorY + ev.movementY / s, -1, 1);
     });
@@ -125,15 +125,18 @@ export class InputManager {
       return;
     }
     const k = (code: string) => this.keys.has(code);
-    if (k('KeyW')) this.throttle = clamp(this.throttle + dt * 0.7, -0.3, 1);
-    if (k('KeyS')) this.throttle = clamp(this.throttle - dt * 0.7, -0.3, 1);
+    // gradual throttle: W/Shift up, S/Ctrl down; holding Ctrl past zero brakes
+    const up = k('KeyW') || k('ShiftLeft') || k('ShiftRight');
+    const down = k('KeyS') || k('ControlLeft') || k('ControlRight');
+    if (up) this.throttle = clamp(this.throttle + dt * 0.8, -0.3, 1);
+    if (down) this.throttle = clamp(this.throttle - dt * 0.8, -0.3, 1);
     out.thrustForward = this.throttle;
     out.thrustRight = (k('KeyD') ? 1 : 0) - (k('KeyA') ? 1 : 0);
     out.thrustUp = (k('KeyR') ? 1 : 0) - (k('KeyF') ? 1 : 0);
     out.roll = (k('KeyE') ? 1 : 0) - (k('KeyQ') ? 1 : 0);
-    out.brake = k('ControlLeft') || k('ControlRight');
+    out.brake = (k('ControlLeft') || k('ControlRight')) && this.throttle <= 0.02;
     // virtual cursor with a small deadzone and smooth curve
-    const dead = 0.06;
+    const dead = 0.04;
     const curve = (v: number) => {
       const a = Math.abs(v);
       if (a < dead) return 0;

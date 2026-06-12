@@ -52,6 +52,15 @@ export class SceneManager {
     this.farCamera.updateProjectionMatrix();
   }
 
+  // dynamic FOV: widens with speed for a stronger sense of velocity
+  setFov(fov: number): void {
+    if (Math.abs(this.camera.fov - fov) < 0.05) return;
+    this.camera.fov = fov;
+    this.camera.updateProjectionMatrix();
+    this.farCamera.fov = fov;
+    this.farCamera.updateProjectionMatrix();
+  }
+
   // Set the floating origin (camera world position) and orientation.
   setCamera(pos: Vec3, quat: THREE.Quaternion): void {
     this.origin = pos;
@@ -59,11 +68,12 @@ export class SceneManager {
     this.camera.quaternion.copy(quat);
     this.farCamera.position.set(0, 0, 0);
     this.farCamera.quaternion.copy(quat);
-    // light from the star (at world origin) toward the camera area
-    const dir = new THREE.Vector3(-pos.x, -pos.y, -pos.z).normalize();
-    // DirectionalLight shines from light.position toward target (0,0,0)
-    this.sunLightNear.position.set(-dir.x * 10_000, -dir.y * 10_000, -dir.z * 10_000);
-    this.sunLightFar.position.set(-dir.x * 10_000, -dir.y * 10_000, -dir.z * 10_000);
+    // light from the star (at world origin) toward the camera area.
+    // DirectionalLight shines from light.position toward its target (0,0,0),
+    // so the light sits on the STAR side of the camera: at +dirToStar.
+    const dirToStar = new THREE.Vector3(-pos.x, -pos.y, -pos.z).normalize();
+    this.sunLightNear.position.set(dirToStar.x * 10_000, dirToStar.y * 10_000, dirToStar.z * 10_000);
+    this.sunLightFar.position.set(dirToStar.x * 10_000, dirToStar.y * 10_000, dirToStar.z * 10_000);
   }
 
   // Convert a world position to near-scene local coordinates.

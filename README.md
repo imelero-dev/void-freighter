@@ -73,9 +73,10 @@ Notes:
 
 | Key | Action |
 |---|---|
-| W / S / X | throttle up / down / cut |
-| A D R F | strafe · Q E roll · mouse pitch/yaw |
-| Shift | cruise drive · Ctrl brake · Z flight assist |
+| Shift / W | throttle up (gradual) |
+| Ctrl / S | throttle down — hold past zero to brake |
+| Caps Lock | cruise drive ("hypervelocity") · X cut throttle |
+| A D R F | strafe · Q E roll · mouse pitch/yaw · Z flight assist |
 | LMB / RMB | cannon / missile (when locked) |
 | Tab / T | cycle hostiles / target reticle |
 | G | mining drill · Space dock/undock · H rescue tow |

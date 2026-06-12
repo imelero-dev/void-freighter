@@ -103,14 +103,25 @@ async function main() {
   await sleep(2500);
   await shot('03_space_undocked');
 
+  // turn around to face the station (checks sun-side lighting)
+  await page.evaluate(() => {
+    window.VF.botInput = { thrustForward: 0, thrustRight: 0, thrustUp: 0, pitch: 0, yaw: 1, roll: 0, brake: false };
+  });
+  await sleep(1900);
+  await page.evaluate(() => {
+    delete window.VF.botInput;
+  });
+  await sleep(600);
+  await shot('03b_station_exterior');
+
   // throttle up and fly a bit
   await page.keyboard.down('KeyW');
   await sleep(2500);
   await page.keyboard.up('KeyW');
   await shot('04_flying');
 
-  // cruise toward somewhere
-  await page.keyboard.press('ShiftLeft');
+  // cruise toward somewhere ("hypervelocity" is CapsLock now)
+  await page.keyboard.press('CapsLock');
   await sleep(4500);
   await shot('05_cruise');
 

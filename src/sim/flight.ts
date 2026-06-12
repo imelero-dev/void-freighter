@@ -25,7 +25,7 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
     clamp(input.yaw, -1, 1) * perf.turnRate,
     clamp(input.roll, -1, 1) * perf.turnRate,
   );
-  const angAccel = perf.turnRate * 5;
+  const angAccel = perf.turnRate * 10; // snappy rotation onset
   b.angVel.x += clamp(targetAng.x - b.angVel.x, -angAccel * dt, angAccel * dt);
   b.angVel.y += clamp(targetAng.y - b.angVel.y, -angAccel * dt, angAccel * dt);
   b.angVel.z += clamp(targetAng.z - b.angVel.z, -angAccel * dt, angAccel * dt);
@@ -41,7 +41,9 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
     const desired = vscale(qrot(b.orient, desiredLocal), perf.maxSpeed);
     const delta = vsub(desired, b.vel);
     const dl = vlen(delta);
-    const maxDelta = perf.accel * dt;
+    // assist corrects the velocity vector faster than raw thrust accelerates —
+    // turns feel planted instead of floaty
+    const maxDelta = perf.accel * 1.35 * dt;
     if (dl > 1e-6) {
       const f = Math.min(1, maxDelta / dl);
       b.vel.x += delta.x * f;

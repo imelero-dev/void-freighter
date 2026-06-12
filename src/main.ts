@@ -14,14 +14,32 @@ let world: IWorld | null = null;
 
 const menu = new Menu({
   startOffline(pilotName: string, fresh: boolean) {
+    if (app && world instanceof OfflineWorld && !fresh) {
+      // session already running: CONTINUE means resume, not recreate
+      menu.hide();
+      return;
+    }
+    if (app) {
+      // switching sessions mid-game: a clean reload avoids duplicated apps
+      if (fresh) OfflineWorld.clearSave();
+      location.reload();
+      return;
+    }
     if (fresh) OfflineWorld.clearSave();
     const w = new OfflineWorld(pilotName);
     startGame(w);
   },
   async startOnline(username: string, password: string, register: boolean) {
+    if (app) {
+      menu.setStatus('Ya hay una partida en curso — recarga la página (F5) para cambiar de modo.');
+      throw new Error('refresh the page (F5) to switch modes');
+    }
     const { connectOnline } = await import('./net/client_world');
     const w = await connectOnline(username, password, register);
     startGame(w);
+  },
+  resume() {
+    menu.hide();
   },
 });
 
@@ -30,18 +48,17 @@ function startGame(w: IWorld): void {
   (window as any).VF = { world: w, vec }; // exposed for E2E scripts/bots
   app = new GameApp(w, canvas);
   app.menuHelp = () => menu.toggleHelp();
+  // Esc with no windows open toggles the pause menu; the world keeps running
+  // underneath and the save is flushed on every pause
   app.onExit = () => {
-    // Esc with no windows open: back to the menu (world keeps running offline)
-    menu.show();
+    if (menu.visible) {
+      menu.hide();
+    } else {
+      if (world instanceof OfflineWorld) world.save();
+      menu.show();
+    }
   };
 }
-
-// resume from the menu with Escape if a session exists
-window.addEventListener('keydown', (ev) => {
-  if (ev.code === 'Escape' && menu.visible && menu.inGame) {
-    menu.hide();
-  }
-});
 
 // save on tab close (offline)
 window.addEventListener('beforeunload', () => {

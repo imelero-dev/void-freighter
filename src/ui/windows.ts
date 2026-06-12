@@ -53,6 +53,9 @@ export class WindowManager {
   show(id: string): void {
     const win = this.windows.get(id);
     if (!win) return;
+    // cascade additional windows so they don't stack dead-center on each other
+    const idx = this.open.has(id) ? 0 : this.open.size;
+    win.root.style.transform = idx > 0 ? `translate(${idx * 30}px, ${idx * 30}px)` : '';
     win.root.style.display = 'flex';
     this.open.add(id);
     win.refresh();
@@ -63,6 +66,7 @@ export class WindowManager {
     const win = this.windows.get(id);
     if (!win) return;
     win.root.style.display = 'none';
+    win.root.style.transform = '';
     this.open.delete(id);
     win.onClose?.();
     this.onChange?.();

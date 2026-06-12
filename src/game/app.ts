@@ -45,6 +45,7 @@ export class GameApp {
   private miningActive = false;
   private lowFuelWarned = false;
   private wasAligned = false;
+  private fovCurrent = 68;
 
   onExit: (() => void) | null = null;
 
@@ -235,6 +236,12 @@ export class GameApp {
       const alpha = Math.min(1, w.renderAlpha);
       this.camera.apply(this.sm, ship, alpha, dt);
       this.entities.showPlayer = this.camera.mode === 'chase';
+      // speed-based FOV: subtle at maneuver, pronounced under cruise
+      const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
+      const maneuverKick = Math.min(1.1, speed / Math.max(1, w.shipStats.maxSpeed)) * 6;
+      const cruiseKick = ship.cruise === 'cruise' ? Math.min(1, ship.cruiseSpeed / w.shipStats.cruiseMax) * 10 + 3 : 0;
+      this.fovCurrent += (68 + Math.max(maneuverKick, cruiseKick) - this.fovCurrent) * Math.min(1, dt * 4);
+      this.sm.setFov(this.fovCurrent);
     }
     this.bodies.update(w.time);
     this.entities.update(w.time);

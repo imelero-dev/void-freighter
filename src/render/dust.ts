@@ -6,8 +6,8 @@ import type { IWorld } from '../world_api';
 import { vdist } from '../sim/vec';
 import type { SceneManager } from './scene';
 
-const COUNT = 420;
-const RADIUS = 520; // m around the camera
+const COUNT = 750;
+const RADIUS = 640; // m around the camera
 
 export class DustLayer {
   private points: THREE.Points;
@@ -63,7 +63,7 @@ export class DustLayer {
       }
       if (inField) break;
     }
-    const speedFade = speed > 3000 ? Math.max(0, 1 - (speed - 3000) / 5000) : Math.min(1, speed / 60 + 0.25);
-    this.mat.opacity = (inField ? 0.5 : 0.22) * speedFade;
+    const speedFade = speed > 3000 ? Math.max(0, 1 - (speed - 3000) / 5000) : Math.min(1, speed / 50 + 0.2);
+    this.mat.opacity = (inField ? 0.55 : 0.32) * speedFade;
   }
 }

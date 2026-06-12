@@ -6,18 +6,21 @@ import { button, el } from './dom';
 export interface MenuCallbacks {
   startOffline(pilotName: string, fresh: boolean): void;
   startOnline(username: string, password: string, register: boolean): Promise<void>;
+  resume(): void;
 }
 
 const CONTROLS: Array<[string, string]> = [
-  ['W / S', 'throttle up / down'], ['X', 'cut throttle'], ['A / D', 'strafe left / right'],
-  ['R / F', 'strafe up / down'], ['Q / E', 'roll'], ['mouse', 'pitch / yaw'],
-  ['Shift', 'cruise drive on/off'], ['Ctrl', 'brake'], ['Z', 'flight assist on/off'],
+  ['Shift / W', 'throttle up (gradual)'], ['Ctrl / S', 'throttle down — hold past zero to brake'],
+  ['Caps Lock', 'cruise drive — "hypervelocity"'], ['X', 'cut throttle'],
+  ['A / D', 'strafe left / right'], ['R / F', 'strafe up / down'], ['Q / E', 'roll'],
+  ['mouse', 'pitch / yaw'], ['Z', 'flight assist on/off'],
   ['click L', 'fire cannon'], ['click R', 'fire missile (when locked)'],
   ['Tab', 'cycle hostile targets'], ['T', 'target under reticle'], ['G', 'mining drill on/off'],
   ['Space', 'dock / undock'], ['N', 'set destination to target / clear'],
+  ['H', 'hail rescue tow (fuel emergency)'],
   ['M', 'system map'], ['B', 'cargo hold'], ['C', 'ship & modules'], ['J', 'contract journal'],
   ['K', 'market (docked)'], ['L', 'contacts'], ['V', 'cockpit / chase camera'],
-  ['Enter', 'chat'], ['F1', 'this help'], ['Esc', 'close windows / menu'],
+  ['Enter', 'chat'], ['F1', 'this help'], ['Esc', 'close windows / pause menu'],
 ];
 
 export class Menu {
@@ -38,10 +41,17 @@ export class Menu {
     this.build();
   }
 
+  private resumeBtn: HTMLButtonElement | null = null;
+
   private build(): void {
     const box = el('div', 'vf-menu-box');
     box.appendChild(el('div', 'vf-menu-title', 'VOID FREIGHTER'));
     box.appendChild(el('div', 'vf-menu-sub', 'the long haul · vesper system'));
+
+    // resume button: only visible while a session is paused underneath
+    this.resumeBtn = button('▶ RESUME FLIGHT  [Esc]', 'vf-btn big accept vf-resume', () => this.cb.resume());
+    this.resumeBtn.style.display = 'none';
+    box.appendChild(this.resumeBtn);
 
     const nameInput = document.createElement('input');
     nameInput.className = 'vf-input';
@@ -136,6 +146,7 @@ export class Menu {
   show(): void {
     this.visible = true;
     this.root.style.display = 'flex';
+    if (this.resumeBtn) this.resumeBtn.style.display = this.inGame ? 'block' : 'none';
   }
 
   hide(): void {

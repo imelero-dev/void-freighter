@@ -7,6 +7,8 @@ import type { Contract, HullId, ModuleSlot } from '../sim/types';
 import type { IWorld } from '../world_api';
 import { button, clearChildren, el, fmtCredits, fmtDistance, fmtTime } from './dom';
 import { goodIcon, moduleIcon } from './icons';
+import { keeperFor, type KeeperRole } from './portraits';
+import type { StationDef } from '../sim/types';
 import type { WindowManager } from './windows';
 
 const ALL_SLOTS: ModuleSlot[] = [
@@ -47,7 +49,9 @@ export class StationUi {
         const b = button(label, 'vf-btn', () => {
           this.audio.click();
           this.wm.toggle(id);
+          b.classList.toggle('active', this.wm.isOpen(id));
         });
+        b.dataset.win = id;
         if (!enabled) b.disabled = true;
         this.dockBar.appendChild(b);
       };
@@ -62,11 +66,31 @@ export class StationUi {
         this.world.undock();
       }));
     }
+    // keep active highlights in sync (windows also close via Esc)
+    for (const b of this.dockBar.querySelectorAll<HTMLButtonElement>('button[data-win]')) {
+      b.classList.toggle('active', this.wm.isOpen(b.dataset.win!));
+    }
   }
 
   hideDockBar(): void {
     this.dockBar.style.display = 'none';
     clearChildren(this.dockBar);
+  }
+
+  // Shopkeeper header card: portrait + name + greeting, per station + role.
+  private keeperCard(st: StationDef, role: KeeperRole): HTMLElement {
+    const k = keeperFor(st, role);
+    const card = el('div', 'vf-keeper');
+    const img = document.createElement('img');
+    img.src = k.img;
+    img.className = 'vf-keeper-img';
+    card.appendChild(img);
+    const info = el('div', 'vf-keeper-info');
+    info.appendChild(el('div', 'vf-keeper-name', k.name));
+    info.appendChild(el('div', 'vf-keeper-role', `${k.role} — ${st.name}`));
+    info.appendChild(el('div', 'vf-keeper-line', `“${k.line}”`));
+    card.appendChild(info);
+    return card;
   }
 
   // -------------------------------------------------------------------------
@@ -86,12 +110,13 @@ export class StationUi {
         win.body.appendChild(el('div', 'vf-empty', 'No market data.'));
         return;
       }
+      win.body.appendChild(this.keeperCard(st, 'quartermaster'));
       const credits = el('div', 'vf-credits', fmtCredits(this.world.profile.credits));
       win.body.appendChild(credits);
       const cargoFree = this.cargoFree();
       win.body.appendChild(el('div', 'vf-subline', `Hold: ${(this.world.shipStats.cargoCapacity - cargoFree).toFixed(0)}/${this.world.shipStats.cargoCapacity} m³`));
 
-      const table = el('div', 'vf-table');
+      const table = el('div', 'vf-table market-grid');
       const header = el('div', 'vf-row vf-header');
       for (const h of ['', 'COMMODITY', 'BUY', 'SELL', 'STOCK', 'HELD', 'BEST KNOWN', '']) {
         header.appendChild(el('span', 'vf-cell', h));
@@ -127,17 +152,27 @@ export class StationUi {
           this.world.sellGood(entry.good, n);
           setTimeout(() => win.refresh(), 60);
         };
-        actions.appendChild(button('+1', 'vf-mini', () => buyN(1)));
-        actions.appendChild(button('+10', 'vf-mini', () => buyN(10)));
         const maxBuy = Math.max(0, Math.min(
           entry.stock,
           Math.floor(cargoFree / def.volume),
           Math.floor(this.world.profile.credits / Math.max(1, entry.buyPrice)),
         ));
-        actions.appendChild(button(`+max`, 'vf-mini', () => maxBuy > 0 && buyN(maxBuy)));
-        actions.appendChild(button('-1', 'vf-mini sell', () => sellN(1)));
-        actions.appendChild(button('-10', 'vf-mini sell', () => sellN(10)));
-        actions.appendChild(button('-all', 'vf-mini sell', () => held > 0 && sellN(held)));
+        actions.appendChild(el('span', 'vf-act-label', 'BUY'));
+        actions.appendChild(button('1', 'vf-mini', () => buyN(1)));
+        actions.appendChild(button('10', 'vf-mini', () => buyN(10)));
+        actions.appendChild(button('max', 'vf-mini', () => maxBuy > 0 && buyN(maxBuy)));
+        actions.appendChild(el('span', 'vf-act-label sell', 'SELL'));
+        const s1 = button('1', 'vf-mini sell', () => sellN(1));
+        const s10 = button('10', 'vf-mini sell', () => sellN(10));
+        const sAll = button('all', 'vf-mini sell', () => held > 0 && sellN(held));
+        if (held <= 0) {
+          s1.disabled = true;
+          s10.disabled = true;
+          sAll.disabled = true;
+        }
+        actions.appendChild(s1);
+        actions.appendChild(s10);
+        actions.appendChild(sAll);
         row.appendChild(actions);
         table.appendChild(row);
       }
@@ -190,6 +225,7 @@ export class StationUi {
         return;
       }
       this.wm.setTitle('contracts', `CONTRACT BOARD — ${st.name.toUpperCase()}`);
+      win.body.appendChild(this.keeperCard(st, 'broker'));
       const board = this.world.board(st.id);
       if (board.length === 0) {
         win.body.appendChild(el('div', 'vf-empty', 'No contracts available. The board refreshes every few minutes.'));
@@ -297,6 +333,7 @@ export class StationUi {
         return;
       }
       this.wm.setTitle('shipyard', `SHIPYARD — ${st.name.toUpperCase()}`);
+      win.body.appendChild(this.keeperCard(st, 'dockmaster'));
       win.body.appendChild(el('div', 'vf-credits', fmtCredits(prof.credits)));
 
       // services row
@@ -441,6 +478,7 @@ export class StationUi {
         return;
       }
       this.wm.setTitle('refinery', `REFINERY — ${st.name.toUpperCase()} (eff ${Math.round(st.refineryEff * 100)}%)`);
+      win.body.appendChild(this.keeperCard(st, 'foreman'));
       let any = false;
       for (const r of REFINE_RECIPES) {
         const have = this.heldQty(r.input);

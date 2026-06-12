@@ -40,7 +40,14 @@ export class CameraRig {
     let camPos: Vec3;
     let camQuat: Quat;
     if (this.mode === 'cockpit') {
-      camPos = vadd(pos, qrot(orient, COCKPIT_OFFSETS[ship.hullId] ?? COCKPIT_OFFSETS.shuttle));
+      const off = { ...(COCKPIT_OFFSETS[ship.hullId] ?? COCKPIT_OFFSETS.shuttle) };
+      // engine rumble: subtle cockpit shake scaling with throttle/cruise
+      if (!ship.dockedAt) {
+        const shake = ship.cruise === 'cruise' ? 0.1 : Math.abs(ship.throttle) * 0.07;
+        off.x += (Math.random() - 0.5) * shake;
+        off.y += (Math.random() - 0.5) * shake;
+      }
+      camPos = vadd(pos, qrot(orient, off));
       camQuat = orient;
       this.smoothing = null;
     } else {

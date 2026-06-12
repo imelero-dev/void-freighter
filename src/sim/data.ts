@@ -69,31 +69,31 @@ export const HULLS: Record<HullId, HullDef> = {
   shuttle: {
     id: 'shuttle', name: 'CL-7 Vagrant', description: 'Surplus courier shuttle. It leaks, but it flies.',
     price: 0, baseCargo: 30, baseHull: 80, baseShield: 50,
-    accel: 28, maxSpeed: 150, turnRate: 1.7, cruiseMax: 220_000, massFactor: 1,
+    accel: 36, maxSpeed: 190, turnRate: 1.7, cruiseMax: 220_000, massFactor: 1,
     slots: slots({}),
   },
   hauler: {
     id: 'hauler', name: 'KM-300 Mule', description: 'Boxy mid-range hauler. The freight line workhorse.',
     price: 16_000, baseCargo: 140, baseHull: 150, baseShield: 80,
-    accel: 20, maxSpeed: 130, turnRate: 1.1, cruiseMax: 260_000, massFactor: 1.5,
+    accel: 26, maxSpeed: 165, turnRate: 1.1, cruiseMax: 260_000, massFactor: 1.5,
     slots: slots({ cargo: 5, weapon: 2, missile: 2, drill: 2, fueltank: 4, armor: 3 }),
   },
   prospector: {
     id: 'prospector', name: 'DV-9 Magpie', description: 'Mining frame with oversized drill mounts and ore scoops.',
     price: 34_000, baseCargo: 90, baseHull: 140, baseShield: 100,
-    accel: 24, maxSpeed: 140, turnRate: 1.3, cruiseMax: 250_000, massFactor: 1.3,
+    accel: 31, maxSpeed: 180, turnRate: 1.3, cruiseMax: 250_000, massFactor: 1.3,
     slots: slots({ drill: 5, collector: 5, scanner: 5, weapon: 2, missile: 1, cargo: 4 }),
   },
   interceptor: {
     id: 'interceptor', name: 'SX-4 Harrier', description: 'Ex-militia gunship. Fast, angry, and cramped.',
     price: 62_000, baseCargo: 45, baseHull: 190, baseShield: 170,
-    accel: 38, maxSpeed: 210, turnRate: 2.3, cruiseMax: 300_000, massFactor: 0.8,
+    accel: 48, maxSpeed: 265, turnRate: 2.3, cruiseMax: 300_000, massFactor: 0.8,
     slots: slots({ weapon: 5, missile: 5, shield: 5, armor: 4, engine: 5, gyro: 5, cargo: 2, drill: 1 }),
   },
   freighter: {
     id: 'freighter', name: 'TT-90 Leviathan', description: 'Heavy freight platform. A warehouse with engines.',
     price: 150_000, baseCargo: 420, baseHull: 340, baseShield: 200,
-    accel: 14, maxSpeed: 110, turnRate: 0.7, cruiseMax: 280_000, massFactor: 2.5,
+    accel: 18, maxSpeed: 140, turnRate: 0.7, cruiseMax: 280_000, massFactor: 2.5,
     slots: slots({ cargo: 5, armor: 5, shield: 4, weapon: 3, missile: 3, fueltank: 5, drill: 2 }),
   },
 };
