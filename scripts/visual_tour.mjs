@@ -156,6 +156,67 @@ async function main() {
   await sleep(2500);
   await shot('12_asteroid_field');
 
+  // mining: fit a drill, park next to the nearest rock, fire the beam.
+  // 12b must show the beam in COCKPIT view (it used to be invisible there).
+  await page.evaluate(() => {
+    const w = window.VF.world;
+    const V = window.VF.vec;
+    const sim = w.sim;
+    const e = sim.entities.get(w.playerId);
+    const meta = sim.meta(w.playerId);
+    meta.profile.modules.drill = 2;
+    sim.recomputeStats(w.playerId);
+    let rock = null;
+    let bestD = Infinity;
+    for (const t of sim.entities.values()) {
+      if (t.kind !== 'asteroid') continue;
+      const d = V.vdist(t.pos, e.pos);
+      if (d < bestD) {
+        bestD = d;
+        rock = t;
+      }
+    }
+    e.pos = V.vadd(rock.pos, V.vscale(V.vnorm(V.vsub(e.pos, rock.pos)), rock.radius + 170));
+    e.prevPos = { ...e.pos };
+    e.vel = { x: 0, y: 0, z: 0 };
+    e.orient = V.qLookAt(V.vnorm(V.vsub(rock.pos, e.pos)));
+    e.prevOrient = { ...e.orient };
+    w.setDrill(true);
+    w.setMiningBeam(true);
+  });
+  await sleep(1500);
+  await shot('12b_mining_beam_cockpit');
+  await page.keyboard.press('KeyV');
+  await sleep(800);
+  await shot('12c_mining_beam_chase');
+  await page.keyboard.press('KeyV');
+  await sleep(300);
+
+  // graphics settings applied hot: fps overlay + shadows off/on
+  const setCheckbox = (label, on) => page.evaluate(({ label, on }) => {
+    for (const row of document.querySelectorAll('.vf-set-row')) {
+      const span = row.querySelector('.vf-set-label');
+      const input = row.querySelector('input[type="checkbox"]');
+      if (span && input && span.textContent === label && input.checked !== on) {
+        input.checked = on;
+        input.dispatchEvent(new Event('change'));
+      }
+    }
+  }, { label, on });
+  await setCheckbox('Show FPS', true);
+  await sleep(900);
+  await shot('15_fps_shadows_on');
+  await setCheckbox('Shadows', false);
+  await sleep(700);
+  await shot('15b_shadows_off');
+  await setCheckbox('Shadows', true);
+  await setCheckbox('Show FPS', false);
+  await page.evaluate(() => {
+    window.VF.world.setMiningBeam(false);
+    window.VF.world.setDrill(false);
+  });
+  await sleep(300);
+
   // ambient traffic showcase: a bulk carrier sliding past + patrol + trader
   await page.evaluate(() => {
     const w = window.VF.world;

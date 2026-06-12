@@ -41,11 +41,19 @@ export class FxLayer {
       switch (ev.type) {
         case 'laser': {
           const from = this.entities.objectFor(ev.fromId);
-          const fromPos = from && from.visible ? from.position.clone()
-            : ev.fromId === this.world.playerId ? new THREE.Vector3(0, 0, 0) : null;
+          let fromPos: THREE.Vector3 | null = null;
+          if (from && from.visible) {
+            fromPos = from.position.clone();
+          } else if (ev.fromId === this.world.playerId) {
+            // first person: the own hull is hidden and the camera sits at the
+            // scene origin — a beam starting exactly at the eye is collinear
+            // with the view axis and projects to an invisible dot. Originate
+            // it at the hull emitter below the cockpit instead.
+            fromPos = new THREE.Vector3(0, -1.8, -1).applyQuaternion(this.sm.camera.quaternion);
+          }
           if (!fromPos) break;
           const to = new THREE.Vector3(ev.toX - this.sm.origin.x, ev.toY - this.sm.origin.y, ev.toZ - this.sm.origin.z);
-          this.spawnBeam(fromPos, to, ev.mining ? 0xffa030 : 0xff4040, ev.mining ? 0.1 : 0.085, ev.mining ? 0.7 : 0.55);
+          this.spawnBeam(fromPos, to, ev.mining ? 0xffa030 : 0xff4040, ev.mining ? 0.1 : 0.085, ev.mining ? 0.45 : 0.55);
           if (ev.hit) this.spawnFlash(to, ev.mining ? 0xffaa44 : 0xff6666, ev.mining ? 4 : 6, 0.18);
           break;
         }

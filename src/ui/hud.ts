@@ -43,12 +43,18 @@ export class Hud {
   alert: { text: string; color: string; until: number } | null = null;
   cameraMode: 'cockpit' | 'chase' = 'cockpit';
   destAligned = false; // exposed so the app can play the snap tone on change
+  showFps = false;
 
   private proj = new THREE.Vector3();
   private floaters: Array<{ pos: { x: number; y: number; z: number }; text: string; color: string; at: number }> = [];
   private dmgDirs: Array<{ dir: { x: number; y: number; z: number }; at: number }> = [];
   private invQuat = new THREE.Quaternion();
   private dirV = new THREE.Vector3();
+  private tmpLocal = new THREE.Vector3(); // scratch for world->screen projections
+  private lastFrameAt = 0;
+  private fpsTimeAcc = 0;
+  private fpsFrames = 0;
+  private fpsText = '';
 
   constructor(private camera: THREE.PerspectiveCamera) {
     this.canvas = document.createElement('canvas');
@@ -110,6 +116,27 @@ export class Hud {
     ctx.font = '12px "Lucida Console", monospace';
     ctx.textBaseline = 'middle';
 
+    // ---- fps readout (moving average, refreshed ~2×/s) ----
+    if (this.lastFrameAt > 0 && this.showFps) {
+      this.fpsTimeAcc += now - this.lastFrameAt;
+      this.fpsFrames++;
+      if (this.fpsTimeAcc >= 500) {
+        const avg = this.fpsTimeAcc / this.fpsFrames;
+        this.fpsText = `${Math.round(1000 / avg)} FPS · ${avg.toFixed(1)} ms`;
+        this.fpsTimeAcc = 0;
+        this.fpsFrames = 0;
+      }
+      ctx.textAlign = 'right';
+      ctx.font = '11px "Lucida Console", monospace';
+      ctx.fillStyle = AMBER_DIM;
+      ctx.fillText(this.fpsText, W - 16, 36); // tucked under the credits chip
+      ctx.font = '12px "Lucida Console", monospace';
+    }
+    this.lastFrameAt = now;
+
+    // camera-space transform reused by every screen-edge arrow this frame
+    this.invQuat.copy(this.camera.quaternion).invert();
+
     if (ship.dockedAt) {
       this.drawLog(now, W, H);
       return; // station UI takes over
@@ -158,8 +185,7 @@ export class Hud {
     const target = ship.targetId !== null ? world.entities.get(ship.targetId) : null;
     if (target && !target.dead) {
       const d = vdist(ship.pos, target.pos);
-      const tl = new THREE.Vector3(target.pos.x - origin.x, target.pos.y - origin.y, target.pos.z - origin.z);
-      const s = this.toScreen(tl);
+      const s = this.toScreen(this.tmpLocal.set(target.pos.x - origin.x, target.pos.y - origin.y, target.pos.z - origin.z));
       if (!s.behind) {
         ctx.strokeStyle = target.kind === 'ship' ? shipColor(target, true) : CYAN;
         ctx.lineWidth = 1.2;
@@ -169,8 +195,7 @@ export class Hud {
       // lead pip: where to aim so your bolts intercept the target
       if (target.kind === 'ship' && stats.weaponDamage > 0 && d < stats.weaponRange * 1.4) {
         const aim = leadPoint(ship.pos, ship.vel, target.pos, target.vel, BOLT_SPEED);
-        const al = new THREE.Vector3(aim.x - origin.x, aim.y - origin.y, aim.z - origin.z);
-        const ap = this.toScreen(al);
+        const ap = this.toScreen(this.tmpLocal.set(aim.x - origin.x, aim.y - origin.y, aim.z - origin.z));
         if (!ap.behind) {
           ctx.strokeStyle = target.pirate ? RED : CYAN;
           ctx.lineWidth = 1.2;
@@ -192,7 +217,6 @@ export class Hud {
         continue;
       }
       // world direction -> camera space -> ring angle (same math as the GPS arrow)
-      this.invQuat.copy(this.camera.quaternion).invert();
       this.dirV.set(dd.dir.x, dd.dir.y, dd.dir.z).applyQuaternion(this.invQuat);
       const ang = Math.atan2(this.dirV.x, this.dirV.y);
       const ringR = 92;
@@ -227,8 +251,7 @@ export class Hud {
         this.floaters.splice(i, 1);
         continue;
       }
-      const local = new THREE.Vector3(f.pos.x - origin.x, f.pos.y - origin.y, f.pos.z - origin.z);
-      const s = this.toScreen(local);
+      const s = this.toScreen(this.tmpLocal.set(f.pos.x - origin.x, f.pos.y - origin.y, f.pos.z - origin.z));
       if (s.behind) continue;
       ctx.globalAlpha = Math.max(0, 1 - age);
       ctx.fillStyle = f.color;
@@ -323,8 +346,8 @@ export class Hud {
 
     // marker helper: world pos -> bearing offset + elevation arrow
     const marker = (pos: { x: number; y: number; z: number }, color: string, diamond: boolean) => {
-      const local = new THREE.Vector3(pos.x - ship.pos.x, pos.y - ship.pos.y, pos.z - ship.pos.z)
-        .applyQuaternion(this.camera.quaternion.clone().invert());
+      const local = this.tmpLocal.set(pos.x - ship.pos.x, pos.y - ship.pos.y, pos.z - ship.pos.z)
+        .applyQuaternion(this.invQuat);
       const bearing = Math.atan2(local.x, -local.z) * 180 / Math.PI;
       const clamped = Math.max(-SPAN / 2, Math.min(SPAN / 2, bearing));
       const x = cx + clamped * pxPerDeg;
@@ -372,8 +395,7 @@ export class Hud {
     if (!dest) return;
     const navQ = world.shipStats.navQuality;
     const d = vdist(ship.pos, dest.pos);
-    const local = new THREE.Vector3(dest.pos.x - origin.x, dest.pos.y - origin.y, dest.pos.z - origin.z);
-    const s = this.toScreen(local);
+    const s = this.toScreen(this.tmpLocal.set(dest.pos.x - origin.x, dest.pos.y - origin.y, dest.pos.z - origin.z));
     const toDest = vnorm(vsub(dest.pos, ship.pos));
     const fwd = qForward(ship.orient);
     const align = vdot(toDest, fwd); // 1 = dead ahead
@@ -405,8 +427,8 @@ export class Hud {
       }
     } else {
       // off-screen arrow on the reticle ring pointing toward the destination
-      const dir2 = new THREE.Vector3(dest.pos.x - origin.x, dest.pos.y - origin.y, dest.pos.z - origin.z)
-        .applyQuaternion(this.camera.quaternion.clone().invert());
+      const dir2 = this.tmpLocal.set(dest.pos.x - origin.x, dest.pos.y - origin.y, dest.pos.z - origin.z)
+        .applyQuaternion(this.invQuat);
       const ang = Math.atan2(dir2.x, dir2.y); // screen-space direction (up = +y)
       const ringR = 64;
       const ax = cx + Math.sin(ang) * ringR;
@@ -437,8 +459,7 @@ export class Hud {
       if (e.kind !== 'ship' && e.kind !== 'loot' && e.kind !== 'fragment') continue;
       const d = vdist(ship.pos, e.pos);
       if (d > stats.sensorRange || d < 80) continue;
-      const local = new THREE.Vector3(e.pos.x - origin.x, e.pos.y - origin.y, e.pos.z - origin.z);
-      const s = this.toScreen(local);
+      const s = this.toScreen(this.tmpLocal.set(e.pos.x - origin.x, e.pos.y - origin.y, e.pos.z - origin.z));
       if (s.behind) continue;
       const resolved = d < stats.resolveRange;
       if (e.kind === 'ship') {
@@ -653,13 +674,14 @@ export class Hud {
     const upAxis = qUp(ship.orient);
 
     const blip = (pos: { x: number; y: number; z: number }, color: string, isStation: boolean, isTarget: boolean) => {
-      const rel = vsub(pos, ship.pos);
-      const d = vlen(rel);
+      // scalar math: this runs for every entity every frame — no vec allocs
+      const relX = pos.x - ship.pos.x, relY = pos.y - ship.pos.y, relZ = pos.z - ship.pos.z;
+      const d = Math.sqrt(relX * relX + relY * relY + relZ * relZ);
       if (d > range || d < 1) return;
       const nd = Math.sqrt(d / range); // sqrt scale spreads nearby contacts
-      const fr = vdot(rel, fwd) / d;
-      const ri = vdot(rel, rightAxis) / d;
-      const up = vdot(rel, upAxis) / d;
+      const fr = (relX * fwd.x + relY * fwd.y + relZ * fwd.z) / d;
+      const ri = (relX * rightAxis.x + relY * rightAxis.y + relZ * rightAxis.z) / d;
+      const up = (relX * upAxis.x + relY * upAxis.y + relZ * upAxis.z) / d;
       const px = cx + ri * nd * rx;
       const py = cy - fr * nd * ry;
       const stalk = -up * nd * (ry * 0.9); // canvas y grows downward

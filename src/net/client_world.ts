@@ -80,6 +80,7 @@ export class ClientWorld implements IWorld {
   turboActive = false;
   drillHeat = 0;
   drillOverheated = false;
+  miningBeamOn = false;
   connected = false;
   time = 0;
   ready: Promise<void>;
@@ -467,6 +468,7 @@ export class ClientWorld implements IWorld {
       this.turboActive = !!s.ta;
       this.drillHeat = (s.dh ?? 0) / 100;
       this.drillOverheated = !!s.do;
+      this.miningBeamOn = !!s.mb;
       if (performance.now() > this.targetLockUntil) {
         e.targetId = s.tg ?? null;
       }
@@ -518,7 +520,11 @@ export class ClientWorld implements IWorld {
     if (this.shipStats.drillRate > 0) this.drillOn = on;
     this.cmd({ cmd: 'drill', on });
   }
-  setMiningBeam(on: boolean): void { this.cmd({ cmd: 'beam', on }); }
+  setMiningBeam(on: boolean): void {
+    // optimistic: the drone starts with the click, not a snapshot later
+    this.miningBeamOn = on && this.drillOn && !this.drillOverheated;
+    this.cmd({ cmd: 'beam', on });
+  }
   toggleCruise(): void { this.cmd({ cmd: 'cruise' }); }
   toggleFlightAssist(): void {
     this.flightAssist = !this.flightAssist;

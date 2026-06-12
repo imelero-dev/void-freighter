@@ -77,6 +77,41 @@ describe('mining cycle', () => {
     expect(mined).toBeGreaterThan(0);
   });
 
+  it('an active beam emits laser events with mining:true (and stops when released)', () => {
+    const sim = new Sim();
+    const { pid, e } = minerInField(sim);
+    const rock = [...sim.entities.values()]
+      .filter((x) => x.kind === 'asteroid')
+      .sort((a, b) => distOf(a, e) - distOf(b, e))[0];
+    e.pos = vadd(rock.pos, vscale(vnorm(vsub(e.pos, rock.pos)), rock.radius + 150));
+    e.vel = v3();
+    sim.setDrill(pid, true);
+    sim.setMiningBeam(pid, true);
+    const beams: Array<{ hit: boolean }> = [];
+    for (let i = 0; i < 40; i++) {
+      e.vel = v3();
+      e.orient = qLookAt(vnorm(vsub(rock.pos, e.pos)));
+      for (const ev of sim.tick()) {
+        if (ev.type === 'laser' && ev.mining) beams.push({ hit: ev.hit });
+      }
+    }
+    // beam FX cadence is every 2nd tick: 40 ticks -> ~20 events
+    expect(beams.length).toBeGreaterThanOrEqual(15);
+    expect(beams.length).toBeLessThanOrEqual(25);
+    expect(beams.some((b) => b.hit)).toBe(true);
+    expect(sim.meta(pid)!.beamFiring).toBe(true);
+
+    sim.setMiningBeam(pid, false);
+    let after = 0;
+    for (let i = 0; i < 20; i++) {
+      for (const ev of sim.tick()) {
+        if (ev.type === 'laser' && ev.mining) after++;
+      }
+    }
+    expect(after).toBe(0);
+    expect(sim.meta(pid)!.beamFiring).toBe(false);
+  });
+
   it('drill requires the module', () => {
     const sim = new Sim();
     const pid = sim.addPlayer('nodrill');

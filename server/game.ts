@@ -285,6 +285,7 @@ export class GameServer {
       if (meta.turboActive) selfWire.ta = 1;
       selfWire.dh = Math.round(meta.drillHeat * 100);
       if (meta.drillOverheated) selfWire.do = 1;
+      if (meta.beamFiring) selfWire.mb = 1;
       const snap: Record<string, unknown> = {
         t: 'snap', tick: this.sim.tickCount, time: Math.round(this.sim.time * 100) / 100,
         self: selfWire, ents,

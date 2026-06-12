@@ -28,6 +28,7 @@ export interface IWorld {
   readonly turboActive: boolean;
   readonly drillHeat: number;    // 0..1 mining beam heat
   readonly drillOverheated: boolean;
+  readonly miningBeamOn: boolean; // beam actually firing (RMB + drill + not overheated)
   // 0..1 fraction between the previous and current sim tick, for render interpolation
   readonly renderAlpha: number;
 

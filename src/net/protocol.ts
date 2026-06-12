@@ -57,6 +57,7 @@ export interface WireShip {
   ta?: 1;  // turbo active
   dh?: number; // drill heat ×100 (self only)
   do?: 1;  // drill overheated
+  mb?: 1;  // mining beam firing (self only)
 }
 
 export interface WireRock {

@@ -152,6 +152,7 @@ export interface PlayerMeta {
   turboActive: boolean;
   lastCombatAt: number;  // sim time of the last hit taken (field-repair lockout)
   miningBeam: boolean;   // RMB held with the drill deployed
+  beamFiring: boolean;   // beam actually firing this tick (drives FX/audio)
   drillHeat: number;     // 0..1 — overheats, cools when idle
   drillOverheated: boolean;
 }
@@ -223,7 +224,7 @@ export class Sim {
       cruiseRequested: false, flightAssist: true,
       forcefieldCooldown: 0, promptedDerelicts: new Set(),
       turboCharge: 1, turboActive: false, lastCombatAt: -999,
-      miningBeam: false, drillHeat: 0, drillOverheated: false,
+      miningBeam: false, beamFiring: false, drillHeat: 0, drillOverheated: false,
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
@@ -447,6 +448,9 @@ export class Sim {
   private tickPlayer(meta: PlayerMeta, dt: number, secondTick: boolean): void {
     const e = this.entities.get(meta.pid);
     if (!e || e.dead) return;
+    // re-asserted by tickMining further down; the early returns (towed,
+    // docking, docked) must not leave a stale "firing" flag behind
+    meta.beamFiring = false;
     const prof = meta.profile;
     meta.undockInvuln = Math.max(0, meta.undockInvuln - dt);
     meta.interdictCooldown = Math.max(0, meta.interdictCooldown - dt);
@@ -1793,6 +1797,10 @@ export class Sim {
   private tickMining(meta: PlayerMeta, e: Entity, dt: number): void {
     if (meta.stats.drillRate === 0) return;
     const firing = meta.drillOn && meta.miningBeam && !meta.drillOverheated && e.cruise === 'off' && !e.dockedAt;
+    meta.beamFiring = firing;
+    // beam FX cadence: every 2nd tick (10 Hz) is enough for a continuous
+    // look client-side and halves the event traffic in online snapshots
+    const emitBeam = firing && this.tickCount % 2 === 0;
 
     // heat model: builds while the beam is on, cools whenever it is not
     if (firing) {
@@ -1828,8 +1836,10 @@ export class Sim {
     }
     if (!rock) {
       // beam into the void: visual only
-      const end = vadd(e.pos, vscale(fwd, meta.stats.drillRange * 0.8));
-      this.events.push({ type: 'laser', fromId: e.id, toX: end.x, toY: end.y, toZ: end.z, hit: false, mining: true });
+      if (emitBeam) {
+        const end = vadd(e.pos, vscale(fwd, meta.stats.drillRange * 0.8));
+        this.events.push({ type: 'laser', fromId: e.id, toX: end.x, toY: end.y, toZ: end.z, hit: false, mining: true });
+      }
       return;
     }
 
@@ -1840,7 +1850,9 @@ export class Sim {
     st.hp -= rate * dt * (ROCK_TYPES[rock.rockType!].hpPerRadius / 1.5);
     rock.rockHp = Math.max(0, st.hp);
     meta.extractAcc += rate * dt;
-    this.events.push({ type: 'laser', fromId: e.id, toX: rock.pos.x, toY: rock.pos.y, toZ: rock.pos.z, hit: true, mining: true });
+    if (emitBeam) {
+      this.events.push({ type: 'laser', fromId: e.id, toX: rock.pos.x, toY: rock.pos.y, toZ: rock.pos.z, hit: true, mining: true });
+    }
 
     // are we carving a hotspot seam? (beam impact point vs seam axes)
     let onSeam = false;

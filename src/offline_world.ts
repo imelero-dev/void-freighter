@@ -64,6 +64,7 @@ export class OfflineWorld implements IWorld {
   get turboActive(): boolean { return this.meta.turboActive; }
   get drillHeat(): number { return this.meta.drillHeat; }
   get drillOverheated(): boolean { return this.meta.drillOverheated; }
+  get miningBeamOn(): boolean { return this.meta.beamFiring; }
   get input(): ShipInput { return this.meta.input; }
   set input(v: ShipInput) { Object.assign(this.meta.input, v); }
   get renderAlpha(): number { return this.acc / DT; }

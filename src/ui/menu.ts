@@ -159,6 +159,8 @@ export class Menu {
     };
     checkbox('Invert mouse Y', () => settings.invertY, (v) => { settings.invertY = v; });
     checkbox('Aim assist (pull to target)', () => settings.aimAssist, (v) => { settings.aimAssist = v; });
+    checkbox('Shadows', () => settings.shadows, (v) => { settings.shadows = v; });
+    checkbox('Show FPS', () => settings.showFps, (v) => { settings.showFps = v; });
     box.appendChild(setBox);
 
     const fsRow = el('div', 'vf-menu-row');
@@ -174,6 +176,14 @@ export class Menu {
     });
     document.addEventListener('fullscreenchange', () => {
       fsBtn.textContent = document.fullscreenElement ? '⛶ EXIT FULLSCREEN' : '⛶ FULLSCREEN';
+      // Keyboard Lock (Chromium): capture Esc so closing windows/menus does
+      // not yank the browser out of fullscreen. Silent no-op elsewhere.
+      const kb = (navigator as { keyboard?: { lock?: (keys: string[]) => Promise<void>; unlock?: () => void } }).keyboard;
+      if (document.fullscreenElement && kb?.lock) {
+        kb.lock(['Escape']).catch(() => { /* not granted: Esc exits as usual */ });
+      } else {
+        kb?.unlock?.();
+      }
     });
     fsRow.appendChild(fsBtn);
     fsRow.appendChild(button('CONTROLS [F1]', 'vf-btn', () => this.toggleHelp()));

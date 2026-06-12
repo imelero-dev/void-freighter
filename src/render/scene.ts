@@ -63,6 +63,23 @@ export class SceneManager {
     this.farCamera.updateProjectionMatrix();
   }
 
+  // Live shadow toggle. three.js bakes the shadow-map state into compiled
+  // shader programs, so every material in the near scene must be flagged for
+  // recompilation or the change silently does nothing.
+  setShadows(on: boolean): void {
+    if (this.renderer.shadowMap.enabled === on) return;
+    this.renderer.shadowMap.enabled = on;
+    this.sunLightNear.castShadow = on;
+    this.near.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const mat = mesh.material as THREE.Material | THREE.Material[];
+      if (Array.isArray(mat)) mat.forEach((m) => { m.needsUpdate = true; });
+      else if (mat) mat.needsUpdate = true;
+    });
+    if (on) this.renderer.shadowMap.needsUpdate = true;
+  }
+
   // dynamic FOV: widens with speed for a stronger sense of velocity
   setFov(fov: number): void {
     if (Math.abs(this.camera.fov - fov) < 0.05) return;

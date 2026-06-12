@@ -5,11 +5,16 @@ export interface GameSettings {
   invertY: boolean;
   volume: number;       // master, 0–1
   aimAssist: boolean;   // gentle pull toward the locked target
+  shadows: boolean;     // real-time shadow maps (costs GPU time)
+  showFps: boolean;     // small fps/frametime readout on the HUD
 }
 
 const KEY = 'vf_settings_v1';
 
-const DEFAULTS: GameSettings = { sensitivity: 1, invertY: false, volume: 1, aimAssist: true };
+const DEFAULTS: GameSettings = {
+  sensitivity: 1, invertY: false, volume: 1, aimAssist: true,
+  shadows: true, showFps: false,
+};
 
 function load(): GameSettings {
   try {
@@ -21,6 +26,8 @@ function load(): GameSettings {
       invertY: !!parsed.invertY,
       volume: clampNum(parsed.volume, 0, 1, 1),
       aimAssist: parsed.aimAssist !== false,
+      shadows: parsed.shadows !== false,
+      showFps: !!parsed.showFps,
     };
   } catch {
     return { ...DEFAULTS };

@@ -52,7 +52,6 @@ export class GameApp {
   private lastT = performance.now();
   private uiRefreshAcc = 0;
   private wasDocked = false;
-  private miningActive = false;
   private lowFuelWarned = false;
   private wasAligned = false;
   private fovCurrent = 68;
@@ -93,6 +92,7 @@ export class GameApp {
 
     this.bindInput();
     this.hud.resize();
+    this.applySettings();
     window.addEventListener('resize', this.onResize);
     this.audio.ensure();
     this.hud.pushLog('Systems online. Fly safe out there.', '#8fb');
@@ -222,6 +222,8 @@ export class GameApp {
 
   applySettings(): void {
     this.audio.applyVolume();
+    this.sm.setShadows(settings.shadows);
+    this.hud.showFps = settings.showFps;
   }
 
   private assistLevel = 0; // smoothed aim-assist strength (no jerky grabs)
@@ -650,13 +652,13 @@ export class GameApp {
         cruiseFrac: ship.cruiseSpeed / Math.max(1, w.shipStats.cruiseMax),
         docked,
         hullFrac,
-        mining: this.miningActive,
+        mining: w.miningBeamOn,
+        miningHeat: w.drillHeat,
         dead: false,
         turbo: w.turboActive,
         alarm: performance.now() < this.alarmUntil,
       });
     }
-    this.miningActive = false; // re-set by mining laser events each tick
   };
 
   private handleEvent(ev: import('../sim/types').SimEvent): void {
@@ -668,7 +670,6 @@ export class GameApp {
         break;
       case 'laser':
         if (ev.mining && ev.fromId === w.playerId) {
-          this.miningActive = true;
           this.audio.miningTick();
         }
         break;

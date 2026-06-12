@@ -20,6 +20,7 @@ export class AudioEngine {
   private stationGain!: GainNode;
   private alarmGain!: GainNode;
   private miningGain!: GainNode;
+  private miningOsc!: OscillatorNode;
   private alarmTimer = 0;
 
   muted = false;
@@ -132,6 +133,7 @@ export class AudioEngine {
     const mOsc = ctx.createOscillator();
     mOsc.type = 'sawtooth';
     mOsc.frequency.value = 86;
+    this.miningOsc = mOsc;
     const mTrem = ctx.createOscillator();
     mTrem.frequency.value = 13;
     const mTremGain = ctx.createGain();
@@ -173,8 +175,8 @@ export class AudioEngine {
   // Per-frame state tracking. All values already smoothed by setTargetAtTime.
   setState(s: {
     throttle: number; cruise: 'off' | 'charging' | 'cruise'; cruiseFrac: number;
-    docked: boolean; hullFrac: number; mining: boolean; dead: boolean; turbo: boolean;
-    alarm: boolean;
+    docked: boolean; hullFrac: number; mining: boolean; miningHeat: number;
+    dead: boolean; turbo: boolean; alarm: boolean;
   }): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
@@ -190,6 +192,8 @@ export class AudioEngine {
     // a permanent klaxon just trains the player to mute the game
     ramp(this.alarmGain, flying && s.alarm && !s.dead ? 0.07 : 0, 0.05);
     ramp(this.miningGain, s.mining ? 0.12 : 0, 0.08);
+    // the drone climbs as the drill heats up — an audible overheat warning
+    this.miningOsc.frequency.setTargetAtTime(86 + s.miningHeat * 74, t, 0.2);
   }
 
   // ------------------------------------------------------------------
