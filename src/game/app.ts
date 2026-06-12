@@ -733,6 +733,8 @@ export class GameApp {
       case 'comms':
         this.hud.setComms(ev.text);
         this.audio.commsStatic();
+        // radio traffic lands in the chat history too (Enter to review)
+        this.chat.addMessage('', ev.text, 'radio');
         break;
       case 'econ':
         this.hud.pushLog(`NEWS: ${ev.headline}`, '#7fb1c9');

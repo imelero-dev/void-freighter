@@ -52,16 +52,17 @@ export class CameraRig {
       this.smoothing = null;
     } else {
       const off = CHASE_OFFSETS[ship.hullId] ?? CHASE_OFFSETS.shuttle;
-      const target = vadd(pos, qrot(orient, off));
       if (!this.smoothing) {
-        this.smoothing = { pos: target, quat: orient };
+        this.smoothing = { pos: pos, quat: orient };
       } else {
+        // orientation eases for a cinematic feel; position is RIGID relative
+        // to the ship — positional lag at cruise/turbo speeds (km per frame)
+        // would leave the ship a dot on the horizon
         const k = 1 - Math.exp(-dt * 7);
-        this.smoothing.pos = vlerp(this.smoothing.pos, target, k);
         this.smoothing.quat = qnlerp(this.smoothing.quat, orient, k);
       }
-      camPos = this.smoothing.pos;
       camQuat = this.smoothing.quat;
+      camPos = vadd(pos, qrot(camQuat, off));
     }
     sm.setCamera(camPos, new THREE.Quaternion(camQuat.x, camQuat.y, camQuat.z, camQuat.w));
   }

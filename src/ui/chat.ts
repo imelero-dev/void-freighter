@@ -1,7 +1,12 @@
 // Chat overlay: message history + input line (Enter to open, Esc to close).
+// Recent messages fade from the overlay after a few seconds, but the full
+// history (incl. NPC radio traffic) is shown while the chat is open.
 
 import { el } from './dom';
 import type { IWorld } from '../world_api';
+
+const HISTORY_CAP = 60;
+const FADE_MS = 14_000;
 
 export class ChatUi {
   private root: HTMLElement;
@@ -42,26 +47,32 @@ export class ChatUi {
   openInput(): void {
     if (this.open) return;
     this.open = true;
+    this.root.classList.add('open');
     this.inputWrap.style.display = 'block';
     this.input.focus();
+    this.list.scrollTop = this.list.scrollHeight;
     this.onOpenChange?.(true);
   }
 
   closeInput(): void {
     this.open = false;
+    this.root.classList.remove('open');
     this.inputWrap.style.display = 'none';
     this.input.blur();
     this.onOpenChange?.(false);
   }
 
+  // channel 'radio' = NPC traffic/comms; kept in history like everything else
   addMessage(from: string, text: string, channel: string): void {
     const line = el('div', `vf-chat-line ${channel}`);
-    line.textContent = channel === 'system' ? text : `[${channel}] ${from}: ${text}`;
+    const prefix = channel === 'radio' ? '⌁ ' : '';
+    line.textContent = channel === 'system' ? text
+      : channel === 'radio' ? `${prefix}${from ? `${from}: ` : ''}${text}`
+        : `[${channel}] ${from}: ${text}`;
     this.list.appendChild(line);
-    while (this.list.children.length > 8) this.list.removeChild(this.list.firstChild!);
-    setTimeout(() => {
-      line.classList.add('fade');
-      setTimeout(() => line.remove(), 4000);
-    }, 14_000);
+    while (this.list.children.length > HISTORY_CAP) this.list.removeChild(this.list.firstChild!);
+    // fade from the overlay, but stay in history (visible while chat is open)
+    setTimeout(() => line.classList.add('faded'), FADE_MS);
+    if (this.open) this.list.scrollTop = this.list.scrollHeight;
   }
 }

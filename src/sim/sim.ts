@@ -863,6 +863,20 @@ export class Sim {
         }
       }
     }
+    // bulk carriers are solid: half a kilometre of hull is not a suggestion
+    for (const n of this.entities.values()) {
+      if (n.kind !== 'ship' || n.npc !== 'superfreighter' || n.dead) continue;
+      const d = vdist(e.pos, n.pos);
+      if (d < n.radius + e.radius) {
+        const out = vnorm(vsub(e.pos, n.pos));
+        e.pos = vadd(n.pos, vscale(out, n.radius + e.radius + 2));
+        const impact = vlen(vsub(e.vel, n.vel));
+        e.vel = vadd(vclone(n.vel), vscale(out, Math.max(15, impact * 0.25)));
+        if (impact > COLLISION_DAMAGE_SPEED) {
+          this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.4, -1, true);
+        }
+      }
+    }
   }
 
   // -------------------------------------------------------------------------

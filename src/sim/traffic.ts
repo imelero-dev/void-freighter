@@ -23,8 +23,8 @@ import { BOLT_SPEED } from './data';
 
 const BUBBLE_RADIUS = 30_000;       // npcs counted "near" a player
 const DESPAWN_RADIUS = 42_000;
-const TRAFFIC_CAP_NEAR_PLAYER = 6;
-const SPAWN_CHECK_S = 8;
+const TRAFFIC_CAP_NEAR_PLAYER = 3;
+const SPAWN_CHECK_S = 14;
 const LANE_NEAR = 120_000;          // m from a lane segment to count as "on lane"
 const STATION_NEAR = 60_000;
 const ARRIVE_DIST = 2_600;
@@ -287,10 +287,10 @@ export class TrafficSystem {
     const nearStation = sim.system.stations.find((s) => vdist(s.pos, player.pos) < STATION_NEAR);
     const lane = this.laneNear(player.pos);
     if (!nearStation && !lane) return;
-    if (!sim.rng.chance(0.8)) return;
+    if (!sim.rng.chance(0.4)) return;
 
     // first impression: an empty port fills up fast
-    const burst = population === 0 && nearStation ? 3 : 1;
+    const burst = population === 0 && nearStation ? 2 : 1;
     for (let i = 0; i < burst; i++) {
       if (nearStation) {
         // local port traffic: couriers and freighters arriving/leaving, the

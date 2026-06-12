@@ -161,7 +161,7 @@ export class EntitiesLayer {
         // ambient traffic paint jobs
         if (e.npc) {
           if (e.npc === 'superfreighter') {
-            ship.group.scale.setScalar(4.2); // a wall of cargo sliding past
+            ship.group.scale.setScalar(14); // half a kilometre of cargo sliding past
           } else if (e.npc === 'patrol') {
             // police: pale hull + blue strobe
             ship.group.traverse((node) => {

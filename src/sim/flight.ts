@@ -38,26 +38,39 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
   b.throttle = clamp(input.thrustForward, -0.3, 1);
   if (assist && !input.brake) {
     const desiredLocal = v3(
-      clamp(input.thrustRight, -1, 1) * 0.6,
-      clamp(input.thrustUp, -1, 1) * 0.6,
+      clamp(input.thrustRight, -1, 1) * 0.85,
+      clamp(input.thrustUp, -1, 1) * 0.85,
       -b.throttle,
     );
     const desired = vscale(qrot(b.orient, desiredLocal), perf.maxSpeed);
     const delta = vsub(desired, b.vel);
     const dl = vlen(delta);
-    // assist corrects the velocity vector faster than raw thrust accelerates —
-    // turns feel planted instead of floaty
-    const maxDelta = perf.accel * 1.35 * dt;
+    // assist corrects the velocity vector much faster than raw thrust — a
+    // futuristic ship should feel planted, not like a barge
+    const maxDelta = perf.accel * 1.6 * dt;
     if (dl > 1e-6) {
       const f = Math.min(1, maxDelta / dl);
       b.vel.x += delta.x * f;
       b.vel.y += delta.y * f;
       b.vel.z += delta.z * f;
     }
+    // overspeed bleed: past the cap (turbo release, cruise drop) excess
+    // velocity decays fast instead of taking half a minute to settle
+    const sp = vlen(b.vel);
+    if (sp > perf.maxSpeed * 1.02) {
+      const excess = sp - perf.maxSpeed;
+      const bleed = Math.min(excess, excess * 1.6 * dt + perf.accel * dt);
+      const f = (sp - bleed) / sp;
+      b.vel.x *= f;
+      b.vel.y *= f;
+      b.vel.z *= f;
+    }
   } else if (input.brake) {
+    // braking power scales with speed: dumping 1 km/s of turbo takes ~2.5 s,
+    // not twenty
     const dl = vlen(b.vel);
     if (dl > 1e-6) {
-      const dec = Math.min(dl, perf.accel * 1.2 * dt);
+      const dec = Math.min(dl, (perf.accel * 2 + dl * 1.1) * dt);
       const f = -dec / dl;
       b.vel.x += b.vel.x * f;
       b.vel.y += b.vel.y * f;

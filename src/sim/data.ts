@@ -346,8 +346,8 @@ export interface NpcDef {
 
 export const NPC_DEFS: Record<import('./types').NpcKind, NpcDef> = {
   superfreighter: {
-    kind: 'superfreighter', hull: 4000, shield: 1500, maxSpeed: 70, accel: 6, turnRate: 0.12,
-    laneSpeed: 300, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 110,
+    kind: 'superfreighter', hull: 4000, shield: 1500, maxSpeed: 60, accel: 5, turnRate: 0.1,
+    laneSpeed: 260, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 280,
   },
   freighter: {
     kind: 'freighter', hull: 320, shield: 160, maxSpeed: 115, accel: 14, turnRate: 0.7,
