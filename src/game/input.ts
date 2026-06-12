@@ -2,21 +2,22 @@
 // (Freelancer style), keys per the design doc layout.
 
 import type { ShipInput } from '../sim/types';
+import { binds } from '../ui/keybinds';
 import { settings } from '../ui/settings';
 
 export type GameAction =
   | 'toggleCruise' | 'zeroThrottle' | 'toggleAssist' | 'toggleDrill'
-  | 'dock' | 'tab' | 'targetReticle' | 'fireMissile'
+  | 'dock' | 'tab' | 'targetReticle' | 'fireMissile' | 'rescue'
   | 'map' | 'cargo' | 'ship' | 'journal' | 'market' | 'contacts' | 'chat'
-  | 'setDestination' | 'escape' | 'toggleCamera' | 'help';
+  | 'setDestination' | 'escape' | 'toggleCamera' | 'help' | 'controls';
 
-const KEY_ACTIONS: Record<string, GameAction> = {
-  CapsLock: 'toggleCruise', // "hypervelocity"
-  KeyX: 'zeroThrottle', KeyZ: 'toggleAssist', KeyG: 'toggleDrill',
-  Space: 'dock', Tab: 'tab', KeyT: 'targetReticle',
-  KeyM: 'map', KeyB: 'cargo', KeyC: 'ship', KeyJ: 'journal',
-  KeyK: 'market', KeyL: 'contacts', Enter: 'chat', KeyN: 'setDestination',
-  Escape: 'escape', KeyV: 'toggleCamera', F1: 'help',
+// bind id -> discrete action (axis-style binds are read in frame())
+const BIND_ACTIONS: Record<string, GameAction> = {
+  cruise: 'toggleCruise', cutThrottle: 'zeroThrottle', assist: 'toggleAssist',
+  drill: 'toggleDrill', dock: 'dock', tab: 'tab', reticle: 'targetReticle',
+  map: 'map', cargo: 'cargo', ship: 'ship', journal: 'journal',
+  market: 'market', contacts: 'contacts', chat: 'chat', dest: 'setDestination',
+  camera: 'toggleCamera', rescue: 'rescue', help: 'help',
 };
 
 export class InputManager {
@@ -83,8 +84,21 @@ export class InputManager {
     if (ev.code === 'Space') ev.preventDefault();
     if (!ev.repeat) {
       this.keys.add(ev.code);
-      const action = KEY_ACTIONS[ev.code];
-      if (action) this.emit(action);
+      if (ev.code === 'Escape') {
+        this.emit('escape');
+        return;
+      }
+      if (ev.code === 'F2') {
+        this.emit('controls');
+        return;
+      }
+      // dynamic keybinds: find which bound action this key triggers
+      for (const [bindId, action] of Object.entries(BIND_ACTIONS)) {
+        if (binds[bindId] === ev.code) {
+          this.emit(action);
+          break;
+        }
+      }
     }
   }
 
@@ -92,6 +106,11 @@ export class InputManager {
     const list = this.listeners.get(action) ?? [];
     list.push(fn);
     this.listeners.set(action, list);
+  }
+
+  // programmatic action dispatch (gamepad buttons, UI shortcuts)
+  trigger(action: GameAction): void {
+    this.emit(action);
   }
 
   onFire(fn: (on: boolean) => void): void {
@@ -128,18 +147,20 @@ export class InputManager {
       return;
     }
     const k = (code: string) => this.keys.has(code);
-    // gradual throttle: W/Shift up, S/Ctrl down; holding Ctrl past zero brakes
-    const up = k('KeyW') || k('ShiftLeft') || k('ShiftRight');
-    const down = k('KeyS') || k('ControlLeft') || k('ControlRight');
+    const b = (bindId: string) => binds[bindId] !== '' && k(binds[bindId]);
+    // gradual throttle: bound keys plus Shift/Ctrl legacy extras; holding
+    // throttle-down past zero brakes
+    const up = b('throttleUp') || k('ShiftLeft') || k('ShiftRight');
+    const down = b('throttleDown') || k('ControlLeft') || k('ControlRight');
     if (up) this.throttle = clamp(this.throttle + dt * 0.8, -0.3, 1);
     if (down) this.throttle = clamp(this.throttle - dt * 0.8, -0.3, 1);
     out.thrustForward = this.throttle;
     // pinned at 100% and still pushing -> turbo overburn
     out.turbo = up && this.throttle >= 1;
-    out.thrustRight = (k('KeyD') ? 1 : 0) - (k('KeyA') ? 1 : 0);
-    out.thrustUp = (k('KeyR') ? 1 : 0) - (k('KeyF') ? 1 : 0);
-    out.roll = (k('KeyE') ? 1 : 0) - (k('KeyQ') ? 1 : 0);
-    out.brake = (k('ControlLeft') || k('ControlRight')) && this.throttle <= 0.02;
+    out.thrustRight = (b('strafeRight') ? 1 : 0) - (b('strafeLeft') ? 1 : 0);
+    out.thrustUp = (b('strafeUp') ? 1 : 0) - (b('strafeDown') ? 1 : 0);
+    out.roll = (b('rollRight') ? 1 : 0) - (b('rollLeft') ? 1 : 0);
+    out.brake = down && this.throttle <= 0.02;
     // virtual cursor with a small deadzone and smooth curve
     const dead = 0.04;
     const curve = (v: number) => {

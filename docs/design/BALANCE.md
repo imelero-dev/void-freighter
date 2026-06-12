@@ -72,6 +72,22 @@ this file documents the *why*.
   **12%** of fitted ship value (clamped to available credits), respawn docked
   at last station. No rep/ship loss — the "non-hardcore" model from the GDD.
 
+## Workshop, warehouse & intel
+
+- **Workshop rental**: 2,500 cr per station, 24 h of world time. Crafting a
+  module consumes `recipe × tier² × 0.8` materials — raw-material value lands
+  at ~55-65% of the module's market price, so fabrication beats buying IF you
+  mine/refine the inputs yourself (and amortize the rental over several
+  crafts). Output goes to the module stash (install/sell at any shipyard).
+  Hull Patch Kits craft for 5 steel + 1 components (~300 cr of mats vs 380
+  market).
+- **Warehouse plots**: 250 m³ each; first plot 3,500 cr, each extra +1,750
+  (2nd: 5,250, 3rd: 7,000…). Lets you stockpile cheap goods at a producer and
+  ride price spikes — the capacity ladder keeps hoarding grindy.
+- **Nav intel**: unvisited stations sell their listing for 500 cr + 35 cr/Mm
+  of range (~500 nearby, ~2,200 across the system). Unlocks the services
+  registry and remote market feed without flying there.
+
 ## Danger map
 
 - Danger 0..1 drives pirate spawns, interdiction odds and bounty tiers:

@@ -4,8 +4,8 @@
 import {
   AMMO_PRICE, ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
   CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_MAX_SPEED, FUEL_PRICE,
-  COMBAT_LOCKOUT_S, GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
-  REPAIR_KIT_FRACTION,
+  COMBAT_LOCKOUT_S, CRAFT_RECIPES, craftMaterials, GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
+  REPAIR_KIT_FRACTION, REPAIR_KIT_RECIPE, WAREHOUSE_PLOT_M3, WORKSHOP_RENT_PRICE, WORKSHOP_RENT_S, warehousePlotPrice,
   TURBO_ACCEL_MULT, TURBO_BURST_S, TURBO_ENEMY_RADIUS, TURBO_RECHARGE_S, TURBO_SPEED,
   PIRATE_GOOD_DROPS, REFINE_RECIPES, REPAIR_PRICE, REP_DISCOUNT_MAX, REP_SMUGGLING_PENALTY,
   RESCUE_COST_FRACTION, RESCUE_COST_MIN, ROCK_TYPES, SHIELD_REGEN_DELAY,
@@ -19,7 +19,7 @@ import { Economy } from './economy';
 import { Rng } from './rng';
 import { dangerAt, generateSystem, rockSpawn, stationInfoCost, WORLD_SEED } from './system';
 import {
-  DT, emptyShipInput, type Contract, type Destination, type Entity,
+  DT, emptyShipInput, type CargoItem, type Contract, type Destination, type Entity,
   type EntityKind, type HullId, type MarketEntry, type ModuleSlot, type PirateTier,
   type PlayerProfile, type ShipInput, type SimEvent, type StationDef,
 } from './types';
@@ -116,6 +116,8 @@ export function defaultProfile(): PlayerProfile {
     moduleStash: [],
     missileAmmo: 0,
     cannonAmmo: 320, // full magazine for the starter Mk I cannon
+    workshopRentals: {},
+    warehouses: {},
     stats: {
       kills: 0, contractsDone: 0, unitsMined: 0, unitsTraded: 0,
       creditsEarned: 0, deaths: 0, distanceTravelled: 0,
@@ -195,6 +197,11 @@ export class Sim {
   addPlayer(name: string, profile?: PlayerProfile): number {
     const pid = this.nextId++;
     const prof = profile ?? defaultProfile();
+    // forward-compat for profiles saved before these systems existed
+    prof.workshopRentals ??= {};
+    prof.warehouses ??= {};
+    prof.moduleStash ??= [];
+    prof.cannonAmmo ??= 0;
     const e = blankEntity(pid, 'ship');
     e.isPlayer = true;
     e.name = name;
@@ -2328,6 +2335,141 @@ export class Sim {
     e2.hull = meta.stats.maxHull;
     e2.shield = meta.stats.maxShield;
     this.events.push({ type: 'log', text: `Hull exchanged: ${def.name}. Fly safe.`, color: '#8fb', pid });
+  }
+
+  // ---- workshop (rented fabrication bay) ----
+
+  workshopActive(profile: PlayerProfile, stationId: string): boolean {
+    return (profile.workshopRentals[stationId] ?? 0) > this.time;
+  }
+
+  rentWorkshop(pid: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || !e.dockedAt) return;
+    const st = this.station(e.dockedAt)!;
+    if (!st.services.includes('shipyard')) return;
+    if (this.workshopActive(meta.profile, st.id)) {
+      this.events.push({ type: 'log', text: 'Workshop bay already rented here.', color: '#fa4', pid });
+      return;
+    }
+    if (meta.profile.credits < WORKSHOP_RENT_PRICE) {
+      this.events.push({ type: 'log', text: `Workshop rental costs ${WORKSHOP_RENT_PRICE} cr.`, color: '#f66', pid });
+      return;
+    }
+    meta.profile.credits -= WORKSHOP_RENT_PRICE;
+    meta.profile.workshopRentals[st.id] = this.time + WORKSHOP_RENT_S;
+    this.events.push({ type: 'log', text: `Workshop bay rented at ${st.name} for 24 h (${WORKSHOP_RENT_PRICE} cr).`, color: '#8fb', pid });
+  }
+
+  craftModule(pid: number, slot: ModuleSlot, tier: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || !e.dockedAt || !Number.isInteger(tier) || tier < 1 || tier > 5) return;
+    if (!(slot in CRAFT_RECIPES)) return;
+    const st = this.station(e.dockedAt)!;
+    if (!this.workshopActive(meta.profile, st.id)) {
+      this.events.push({ type: 'log', text: 'No active workshop rental at this station.', color: '#f66', pid });
+      return;
+    }
+    const mats = craftMaterials(slot, tier);
+    for (const [good, qty] of Object.entries(mats)) {
+      if (this.freeQty(meta.profile, good) < qty) {
+        this.events.push({ type: 'log', text: `Missing materials: ${qty}× ${GOODS[good].name} needed.`, color: '#f66', pid });
+        return;
+      }
+    }
+    for (const [good, qty] of Object.entries(mats)) {
+      this.removeCargo(meta.profile, good, qty);
+    }
+    meta.profile.moduleStash.push({ slot, tier });
+    this.events.push({ type: 'log', text: `Fabricated ${MODULE_NAME(slot)} Mk ${tier} — stored in your stash.`, color: '#7fc97f', pid });
+  }
+
+  craftRepairKit(pid: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || !e.dockedAt) return;
+    const st = this.station(e.dockedAt)!;
+    if (!this.workshopActive(meta.profile, st.id)) {
+      this.events.push({ type: 'log', text: 'No active workshop rental at this station.', color: '#f66', pid });
+      return;
+    }
+    for (const [good, qty] of Object.entries(REPAIR_KIT_RECIPE)) {
+      if (this.freeQty(meta.profile, good) < qty) {
+        this.events.push({ type: 'log', text: `Missing materials: ${qty}× ${GOODS[good].name} needed.`, color: '#f66', pid });
+        return;
+      }
+    }
+    if (this.cargoFree(pid) < GOODS.repair_kit.volume) {
+      this.events.push({ type: 'log', text: 'Not enough cargo space for the kit.', color: '#f66', pid });
+      return;
+    }
+    for (const [good, qty] of Object.entries(REPAIR_KIT_RECIPE)) {
+      this.removeCargo(meta.profile, good, qty);
+    }
+    this.addCargo(meta.profile, 'repair_kit', 1);
+    this.events.push({ type: 'log', text: 'Fabricated 1× Hull Patch Kit.', color: '#7fc97f', pid });
+  }
+
+  // ---- warehouse (storage plots) ----
+
+  warehouseVolume(items: CargoItem[]): number {
+    return items.reduce((s, c) => s + GOODS[c.good].volume * c.qty, 0);
+  }
+
+  buyWarehousePlot(pid: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || !e.dockedAt) return;
+    const st = this.station(e.dockedAt)!;
+    const wh = meta.profile.warehouses[st.id];
+    const plots = wh ? Math.round(wh.capacity / WAREHOUSE_PLOT_M3) : 0;
+    const price = warehousePlotPrice(plots);
+    if (meta.profile.credits < price) {
+      this.events.push({ type: 'log', text: `A storage plot here costs ${price} cr.`, color: '#f66', pid });
+      return;
+    }
+    meta.profile.credits -= price;
+    if (wh) wh.capacity += WAREHOUSE_PLOT_M3;
+    else meta.profile.warehouses[st.id] = { capacity: WAREHOUSE_PLOT_M3, items: [] };
+    this.events.push({ type: 'log', text: `Storage plot leased at ${st.name}: +${WAREHOUSE_PLOT_M3} m³ (${price} cr).`, color: '#8fb', pid });
+  }
+
+  warehouseDeposit(pid: number, goodId: string, qty: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || !e.dockedAt || qty <= 0 || !Number.isFinite(qty)) return;
+    qty = Math.floor(qty);
+    const wh = meta.profile.warehouses[e.dockedAt];
+    if (!wh || !GOODS[goodId]) return;
+    if (this.freeQty(meta.profile, goodId) < qty) return;
+    const vol = GOODS[goodId].volume * qty;
+    if (this.warehouseVolume(wh.items) + vol > wh.capacity + 1e-6) {
+      this.events.push({ type: 'log', text: 'Not enough warehouse space.', color: '#f66', pid });
+      return;
+    }
+    this.removeCargo(meta.profile, goodId, qty);
+    const slot = wh.items.find((c) => c.good === goodId);
+    if (slot) slot.qty += qty;
+    else wh.items.push({ good: goodId, qty });
+  }
+
+  warehouseWithdraw(pid: number, goodId: string, qty: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || !e.dockedAt || qty <= 0 || !Number.isFinite(qty)) return;
+    qty = Math.floor(qty);
+    const wh = meta.profile.warehouses[e.dockedAt];
+    const slot = wh?.items.find((c) => c.good === goodId);
+    if (!wh || !slot || slot.qty < qty) return;
+    if (this.cargoFree(pid) < GOODS[goodId].volume * qty) {
+      this.events.push({ type: 'log', text: 'Not enough cargo space aboard.', color: '#f66', pid });
+      return;
+    }
+    slot.qty -= qty;
+    wh.items = wh.items.filter((c) => c.qty > 0);
+    this.addCargo(meta.profile, goodId, qty);
   }
 
   // ---- navigation ----

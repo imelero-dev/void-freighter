@@ -22,7 +22,9 @@ import { StationUi } from '../ui/station_windows';
 import { WindowManager } from '../ui/windows';
 import { AudioEngine } from './audio';
 import { CameraRig } from './camera';
+import { bindAxis, bindButton, clearHotasBind, describeAxis, describeButton, GamepadManager } from './gamepad';
 import { InputManager } from './input';
+import { BINDABLE, binds, HOTAS_AXES, HOTAS_BUTTONS, keyLabel, resetBinds, setBind } from '../ui/keybinds';
 
 export class GameApp {
   private sm: SceneManager;
@@ -31,6 +33,8 @@ export class GameApp {
   private fx: FxLayer;
   private dust: DustLayer;
   private cockpit: THREE.Group;
+  private gamepad = new GamepadManager();
+  private gpFireWas: boolean | null = null;
   private post: PostPipeline;
   private hud: Hud;
   private input: InputManager;
@@ -73,6 +77,7 @@ export class GameApp {
     this.stationUi = new StationUi(world, this.wm, this.audio);
     this.map = new SystemMap(world, this.wm, this.audio);
     this.buildContactsWindow();
+    this.buildControlsWindow();
 
     this.creditsHud = el('div', 'vf-credits-hud');
     document.body.appendChild(this.creditsHud);
@@ -163,10 +168,8 @@ export class GameApp {
       this.camera.toggle();
       this.hud.cameraMode = this.camera.mode;
     });
-    // rescue: H key handled as raw listener (not in the action map to keep it explicit)
-    window.addEventListener('keydown', (ev) => {
-      if (ev.code === 'KeyH' && !this.input.uiMode && !ev.repeat) this.world.hailRescue();
-    });
+    input.on('rescue', () => w.hailRescue());
+    input.on('controls', () => this.toggleWindow('controls'));
     this.chat.onOpenChange = (open) => {
       this.input.uiMode = open || this.wm.anyOpen();
     };
@@ -255,6 +258,114 @@ export class GameApp {
     this.input.releasePointer();
   }
 
+  // Controls window (F2): keyboard rebinding + HOTAS axis/button capture.
+  private buildControlsWindow(): void {
+    const win = this.wm.register('controls', 'CONTROLS & HOTAS', true);
+    let capturing: string | null = null;
+    win.refresh = () => {
+      while (win.body.firstChild) win.body.removeChild(win.body.firstChild);
+
+      // --- keyboard ---
+      win.body.appendChild(el('div', 'vf-section-title', '— KEYBOARD (click REBIND, then press a key · Esc cancels) —'));
+      const grid = el('div', 'vf-binds');
+      for (const def of BINDABLE) {
+        grid.appendChild(el('span', 'vf-bind-label', def.label));
+        grid.appendChild(el('span', 'vf-bind-key', capturing === def.id ? 'PRESS A KEY…' : keyLabel(binds[def.id])));
+        const btn = el('button', 'vf-mini');
+        btn.textContent = 'REBIND';
+        btn.addEventListener('click', () => {
+          this.audio.click();
+          capturing = def.id;
+          win.refresh();
+          const onKey = (ev: KeyboardEvent) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            window.removeEventListener('keydown', onKey, true);
+            if (ev.code !== 'Escape') setBind(def.id, ev.code);
+            capturing = null;
+            win.refresh();
+          };
+          window.addEventListener('keydown', onKey, true);
+        });
+        grid.appendChild(btn);
+      }
+      win.body.appendChild(grid);
+      const resetBtn = el('button', 'vf-btn danger');
+      resetBtn.textContent = 'RESET DEFAULTS';
+      resetBtn.addEventListener('click', () => {
+        this.audio.click();
+        resetBinds();
+        win.refresh();
+      });
+      win.body.appendChild(resetBtn);
+
+      // --- HOTAS / gamepad ---
+      win.body.appendChild(el('div', 'vf-section-title', '— HOTAS / GAMEPAD —'));
+      win.body.appendChild(el('div', 'vf-subline',
+        this.gamepad.deviceName ? `Device: ${this.gamepad.deviceName}` : 'No device detected — press any button on it to wake it up.'));
+      const hgrid = el('div', 'vf-binds');
+      for (const ax of HOTAS_AXES) {
+        hgrid.appendChild(el('span', 'vf-bind-label', ax.label));
+        hgrid.appendChild(el('span', 'vf-bind-key', capturing === `ax_${ax.id}` ? 'MOVE THE AXIS…' : describeAxis(ax.id)));
+        const cell = el('span', 'vf-bind-actions');
+        const bindBtn = el('button', 'vf-mini');
+        bindBtn.textContent = 'BIND';
+        bindBtn.addEventListener('click', () => {
+          this.audio.click();
+          capturing = `ax_${ax.id}`;
+          win.refresh();
+          this.gamepad.captureAxis((index, invert) => {
+            bindAxis(ax.id, index, invert);
+            capturing = null;
+            win.refresh();
+          });
+        });
+        const clearBtn = el('button', 'vf-mini sell');
+        clearBtn.textContent = '✕';
+        clearBtn.addEventListener('click', () => {
+          clearHotasBind('axis', ax.id);
+          win.refresh();
+        });
+        cell.appendChild(bindBtn);
+        cell.appendChild(clearBtn);
+        hgrid.appendChild(cell);
+      }
+      for (const bt of HOTAS_BUTTONS) {
+        hgrid.appendChild(el('span', 'vf-bind-label', bt.label));
+        hgrid.appendChild(el('span', 'vf-bind-key', capturing === `bt_${bt.id}` ? 'PRESS A BUTTON…' : describeButton(bt.id)));
+        const cell = el('span', 'vf-bind-actions');
+        const bindBtn = el('button', 'vf-mini');
+        bindBtn.textContent = 'BIND';
+        bindBtn.addEventListener('click', () => {
+          this.audio.click();
+          capturing = `bt_${bt.id}`;
+          win.refresh();
+          this.gamepad.captureButton((index) => {
+            bindButton(bt.id, index);
+            capturing = null;
+            win.refresh();
+          });
+        });
+        const clearBtn = el('button', 'vf-mini sell');
+        clearBtn.textContent = '✕';
+        clearBtn.addEventListener('click', () => {
+          clearHotasBind('button', bt.id);
+          win.refresh();
+        });
+        cell.appendChild(bindBtn);
+        cell.appendChild(clearBtn);
+        hgrid.appendChild(cell);
+      }
+      win.body.appendChild(hgrid);
+      win.body.appendChild(el('div', 'vf-stats',
+        'Tip: bind pitch/yaw to your stick and throttle to the slider — the mouse keeps working in parallel. ' +
+        'Axis capture auto-detects direction; use ✕ and re-bind moving the other way to flip it.'));
+    };
+    win.onClose = () => {
+      this.gamepad.cancelCapture();
+    };
+  }
+
   private buildContactsWindow(): void {
     const win = this.wm.register('contacts', 'CONTACTS');
     win.refresh = () => {
@@ -307,6 +418,16 @@ export class GameApp {
     // the InputManager for w.input
     const botInput = (window as any).VF?.botInput;
     if (botInput) Object.assign(w.input, botInput);
+    // HOTAS / gamepad layer
+    const gpFrame = this.gamepad.apply(w.input, (v) => {
+      this.input.throttle = v;
+    });
+    for (const action of gpFrame.actions) this.input.trigger(action);
+    if (gpFrame.missile) w.fireMissile();
+    if (gpFrame.fire !== null && gpFrame.fire !== this.gpFireWas) {
+      w.setFiring(gpFrame.fire);
+    }
+    this.gpFireWas = gpFrame.fire;
     this.applyAimAssist(w, dt);
     w.update(dt);
 

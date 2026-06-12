@@ -1,7 +1,7 @@
 // Station service windows: market, contracts board + journal, shipyard,
 // refinery, cargo hold. All rebuilt from world state on refresh().
 
-import { AMMO_PRICE, GOODS, HULLS, MODULE_NAMES, MODULE_TIER_TAGS, REFINE_RECIPES, modulePrice, MODULE_SELL_FACTOR, shipStats, FUEL_PRICE, REPAIR_PRICE, MISSILE_PRICE } from '../sim/data';
+import { AMMO_PRICE, craftMaterials, GOODS, HULLS, MODULE_NAMES, MODULE_TIER_TAGS, REFINE_RECIPES, REPAIR_KIT_RECIPE, WAREHOUSE_PLOT_M3, WORKSHOP_RENT_PRICE, modulePrice, MODULE_SELL_FACTOR, shipStats, warehousePlotPrice, FUEL_PRICE, REPAIR_PRICE, MISSILE_PRICE } from '../sim/data';
 import { ContractBoards } from '../sim/contracts';
 import type { Contract, HullId, ModuleSlot } from '../sim/types';
 import type { IWorld } from '../world_api';
@@ -18,6 +18,7 @@ const ALL_SLOTS: ModuleSlot[] = [
 
 export class StationUi {
   private dockBar: HTMLElement;
+  private shipyardTab: 'mech' | 'workshop' | 'warehouse' = 'mech';
 
   constructor(private world: IWorld, private wm: WindowManager, private audio: { click(): void; deny(): void; kaching(): void }) {
     this.dockBar = el('div', 'vf-dockbar');
@@ -376,6 +377,30 @@ export class StationUi {
       win.body.appendChild(this.keeperCard(st, 'dockmaster'));
       win.body.appendChild(el('div', 'vf-credits', fmtCredits(prof.credits)));
 
+      // tabs: mechanic / workshop / warehouse
+      const tabs = el('div', 'vf-tabs');
+      const mkTab = (id: 'mech' | 'workshop' | 'warehouse', label: string) => {
+        const b = button(label, `vf-tab${this.shipyardTab === id ? ' active' : ''}`, () => {
+          this.audio.click();
+          this.shipyardTab = id;
+          win.refresh();
+        });
+        tabs.appendChild(b);
+      };
+      mkTab('mech', 'MECHANIC');
+      mkTab('workshop', 'WORKSHOP');
+      mkTab('warehouse', 'WAREHOUSE');
+      win.body.appendChild(tabs);
+
+      if (this.shipyardTab === 'workshop') {
+        this.renderWorkshop(win, st);
+        return;
+      }
+      if (this.shipyardTab === 'warehouse') {
+        this.renderWarehouse(win, st);
+        return;
+      }
+
       // services row
       win.body.appendChild(this.servicesRow(() => win.refresh()));
 
@@ -482,6 +507,127 @@ export class StationUi {
   }
 
   // -------------------------------------------------------------------------
+
+  // WORKSHOP tab: rent the fabrication bay, craft modules + kits from materials.
+  private renderWorkshop(win: { body: HTMLElement; refresh(): void }, st: StationDef): void {
+    const prof = this.world.profile;
+    const active = this.world.workshopActive(st.id);
+    const head = el('div', 'vf-section');
+    if (active) {
+      const left = (prof.workshopRentals[st.id] ?? 0) - this.world.time;
+      head.appendChild(el('div', 'vf-ws-status active', `⚒ FABRICATION BAY ACTIVE — ${fmtTime(left)} remaining`));
+    } else {
+      head.appendChild(el('div', 'vf-ws-status', 'No bay rented at this station. Rent one to fabricate parts from raw materials.'));
+      head.appendChild(button(`RENT WORKSHOP — ${fmtCredits(WORKSHOP_RENT_PRICE)} / 24 h`, 'vf-btn accept', () => {
+        this.audio.click();
+        this.world.rentWorkshop();
+        setTimeout(() => win.refresh(), 80);
+      }));
+    }
+    win.body.appendChild(head);
+
+    // material inventory at a glance
+    const matIds = ['steel', 'alloy', 'components', 'machinery', 'adv_alloys', 'textiles', 'water'];
+    const inv = matIds.map((g) => `${GOODS[g].name}: ${this.heldQty(g)}`).join(' · ');
+    win.body.appendChild(el('div', 'vf-subline', `Materials aboard — ${inv}`));
+
+    const box = el('div', 'vf-section');
+    box.appendChild(el('div', 'vf-section-title', '— FABRICATION (output goes to your module stash) —'));
+    for (const slot of ALL_SLOTS) {
+      const row = el('div', 'vf-mod-row');
+      const ic = document.createElement('img');
+      ic.src = moduleIcon(slot);
+      ic.className = 'vf-mod-icon';
+      row.appendChild(ic);
+      row.appendChild(el('span', 'vf-mod-name', MODULE_NAMES[slot]));
+      const tiers = el('span', 'vf-mod-tiers');
+      for (let t = 1; t <= 5; t++) {
+        const mats = craftMaterials(slot, t);
+        const matsTxt = Object.entries(mats).map(([g, q]) => `${q}× ${GOODS[g].name}`).join(', ');
+        const haveAll = Object.entries(mats).every(([g, q]) => this.heldQty(g) >= q);
+        const b = button(`Mk${t}`, `vf-tier${haveAll && active ? ' craftable' : ''}`, () => {
+          this.audio.click();
+          this.world.craftModule(slot, t);
+          setTimeout(() => win.refresh(), 80);
+        });
+        b.title = matsTxt;
+        if (!active || !haveAll) b.disabled = true;
+        tiers.appendChild(b);
+      }
+      row.appendChild(tiers);
+      box.appendChild(row);
+    }
+    // consumables
+    const kitRow = el('div', 'vf-mod-row');
+    const kitIcon = document.createElement('img');
+    kitIcon.src = goodIcon('repair_kit');
+    kitIcon.className = 'vf-mod-icon';
+    kitRow.appendChild(kitIcon);
+    kitRow.appendChild(el('span', 'vf-mod-name', 'Hull Patch Kit'));
+    const kitMats = Object.entries(REPAIR_KIT_RECIPE).map(([g, q]) => `${q}× ${GOODS[g].name}`).join(', ');
+    const kitOk = Object.entries(REPAIR_KIT_RECIPE).every(([g, q]) => this.heldQty(g) >= q);
+    const kitBtn = button(`CRAFT (${kitMats})`, `vf-tier${kitOk && active ? ' craftable' : ''}`, () => {
+      this.audio.click();
+      this.world.craftRepairKit();
+      setTimeout(() => win.refresh(), 80);
+    });
+    if (!active || !kitOk) kitBtn.disabled = true;
+    kitRow.appendChild(kitBtn);
+    box.appendChild(kitRow);
+    win.body.appendChild(box);
+    win.body.appendChild(el('div', 'vf-stats', 'Hover a tier button for its bill of materials. Crafted modules appear under MECHANIC → SALVAGED MODULES.'));
+  }
+
+  // WAREHOUSE tab: lease storage plots, move goods between hold and storage.
+  private renderWarehouse(win: { body: HTMLElement; refresh(): void }, st: StationDef): void {
+    const prof = this.world.profile;
+    const wh = prof.warehouses[st.id];
+    const plots = wh ? Math.round(wh.capacity / WAREHOUSE_PLOT_M3) : 0;
+    const used = wh ? wh.items.reduce((s, c) => s + GOODS[c.good].volume * c.qty, 0) : 0;
+
+    const head = el('div', 'vf-section');
+    head.appendChild(el('div', 'vf-ws-status' + (wh ? ' active' : ''),
+      wh ? `▦ STORAGE: ${used.toFixed(0)} / ${wh.capacity} m³ (${plots} plot${plots > 1 ? 's' : ''})`
+        : 'No storage leased at this station.'));
+    const price = warehousePlotPrice(plots);
+    head.appendChild(button(`LEASE ${wh ? 'EXTRA ' : ''}PLOT (+${WAREHOUSE_PLOT_M3} m³) — ${fmtCredits(price)}`, 'vf-btn accept', () => {
+      this.audio.click();
+      this.world.buyWarehousePlot();
+      setTimeout(() => win.refresh(), 80);
+    }));
+    win.body.appendChild(head);
+    if (!wh) {
+      win.body.appendChild(el('div', 'vf-empty', 'Lease a plot to stockpile goods here — buy low, store, sell on the spike.'));
+      return;
+    }
+
+    const mover = (label: string, items: Array<{ good: string; qty: number }>, act: (g: string, q: number) => void) => {
+      const box = el('div', 'vf-section');
+      box.appendChild(el('div', 'vf-section-title', label));
+      if (items.length === 0) box.appendChild(el('div', 'vf-empty', 'empty'));
+      for (const c of items) {
+        const row = el('div', 'vf-row');
+        const img = document.createElement('img');
+        img.src = goodIcon(c.good);
+        row.appendChild(img);
+        row.appendChild(el('span', 'vf-cell name', `${c.qty}× ${GOODS[c.good].name}`));
+        const acts = el('span', 'vf-cell actions');
+        for (const n of [1, 10, c.qty]) {
+          acts.appendChild(button(n === c.qty ? 'all' : String(n), 'vf-mini', () => {
+            this.audio.click();
+            act(c.good, n);
+            setTimeout(() => win.refresh(), 80);
+          }));
+        }
+        row.appendChild(acts);
+        box.appendChild(row);
+      }
+      win.body.appendChild(box);
+    };
+    const holdItems = prof.cargo.filter((c) => !c.contractId).map((c) => ({ good: c.good, qty: c.qty }));
+    mover('— SHIP HOLD → DEPOSIT —', holdItems, (g, q) => this.world.warehouseDeposit(g, q));
+    mover('— STORED → WITHDRAW —', wh.items.map((c) => ({ good: c.good, qty: c.qty })), (g, q) => this.world.warehouseWithdraw(g, q));
+  }
 
   private buildRefinery(): void {
     const win = this.wm.register('refinery', 'REFINERY');

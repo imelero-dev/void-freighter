@@ -22,7 +22,8 @@ const CONTROLS: Array<[string, string]> = [
   ['H', 'hail rescue tow (fuel emergency)'],
   ['M', 'system map'], ['B', 'cargo hold'], ['C', 'ship & modules'], ['J', 'contract journal'],
   ['K', 'market (docked)'], ['L', 'contacts'], ['V', 'cockpit / chase camera'],
-  ['Enter', 'chat'], ['F1', 'this help'], ['Esc', 'close windows / pause menu'],
+  ['Enter', 'chat'], ['F1', 'this help'], ['F2', 'keybinds & HOTAS setup'],
+  ['Esc', 'close windows / pause menu'],
 ];
 
 export class Menu {
@@ -159,7 +160,23 @@ export class Menu {
     checkbox('Aim assist (pull to target)', () => settings.aimAssist, (v) => { settings.aimAssist = v; });
     box.appendChild(setBox);
 
-    box.appendChild(button('CONTROLS [F1]', 'vf-btn', () => this.toggleHelp()));
+    const fsRow = el('div', 'vf-menu-row');
+    const fsBtn = button('⛶ FULLSCREEN', 'vf-btn', () => {
+      if (document.fullscreenElement) {
+        void document.exitFullscreen();
+        fsBtn.textContent = '⛶ FULLSCREEN';
+      } else {
+        void document.documentElement.requestFullscreen().then(() => {
+          fsBtn.textContent = '⛶ EXIT FULLSCREEN';
+        }).catch(() => { /* browser denied */ });
+      }
+    });
+    document.addEventListener('fullscreenchange', () => {
+      fsBtn.textContent = document.fullscreenElement ? '⛶ EXIT FULLSCREEN' : '⛶ FULLSCREEN';
+    });
+    fsRow.appendChild(fsBtn);
+    fsRow.appendChild(button('CONTROLS [F1]', 'vf-btn', () => this.toggleHelp()));
+    box.appendChild(fsRow);
     box.appendChild(el('div', 'vf-menu-foot', 'all visuals & audio procedural · no assets were harmed'));
     this.root.appendChild(box);
   }

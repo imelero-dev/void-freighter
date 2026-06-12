@@ -66,6 +66,14 @@ export interface IWorld {
   restockCannonAmmo(): void;
   openDerelict(entityId: number): void;
   buyStationInfo(stationId: string): void;
+  // workshop & warehouse
+  rentWorkshop(): void;
+  craftModule(slot: ModuleSlot, tier: number): void;
+  craftRepairKit(): void;
+  buyWarehousePlot(): void;
+  warehouseDeposit(goodId: string, qty: number): void;
+  warehouseWithdraw(goodId: string, qty: number): void;
+  workshopActive(stationId: string): boolean;
   acceptContract(contractId: string): void;
   abandonContract(contractId: string): void;
   deliverSupply(contractId: string): void;

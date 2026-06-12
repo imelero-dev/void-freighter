@@ -191,6 +191,99 @@ describe('hull patch kits', () => {
   });
 });
 
+describe('workshop crafting', () => {
+  it('rent a bay, craft a module from materials into the stash', () => {
+    const sim = new Sim();
+    const pid = sim.addPlayer('crafter');
+    const meta = sim.meta(pid)!;
+    const e = sim.entities.get(pid)!;
+    e.dockedAt = 'bren_yards'; // shipyard station
+    meta.profile.credits = 10_000;
+
+    // no rental yet: craft refused (quantities sized to fit the starter hold)
+    sim.addCargo(meta.profile, 'steel', 20);
+    sim.addCargo(meta.profile, 'alloy', 10);
+    sim.addCargo(meta.profile, 'machinery', 2);
+    sim.craftModule(pid, 'engine', 1);
+    expect(meta.profile.moduleStash.length).toBe(0);
+
+    sim.rentWorkshop(pid);
+    expect(meta.profile.credits).toBe(10_000 - 2500);
+    expect(sim.workshopActive(meta.profile, 'bren_yards')).toBe(true);
+
+    sim.craftModule(pid, 'engine', 1);
+    expect(meta.profile.moduleStash).toEqual([{ slot: 'engine', tier: 1 }]);
+
+    // missing materials for a high tier
+    sim.craftModule(pid, 'engine', 5);
+    expect(meta.profile.moduleStash.length).toBe(1);
+
+    // repair kit fabrication
+    sim.addCargo(meta.profile, 'components', 2);
+    sim.craftRepairKit(pid);
+    expect(sim.freeQty(meta.profile, 'repair_kit')).toBe(1);
+  });
+
+  it('rental expires with world time', () => {
+    const sim = new Sim();
+    const pid = sim.addPlayer('renter');
+    const meta = sim.meta(pid)!;
+    const e = sim.entities.get(pid)!;
+    e.dockedAt = 'bren_yards';
+    meta.profile.credits = 5000;
+    sim.rentWorkshop(pid);
+    expect(sim.workshopActive(meta.profile, 'bren_yards')).toBe(true);
+    sim.time += 24 * 3600 + 1;
+    expect(sim.workshopActive(meta.profile, 'bren_yards')).toBe(false);
+  });
+});
+
+describe('warehouse storage', () => {
+  it('lease plots, deposit and withdraw with volume limits', () => {
+    const sim = new Sim();
+    const pid = sim.addPlayer('hoarder');
+    const meta = sim.meta(pid)!;
+    meta.profile.credits = 20_000;
+    // docked at morrow by default
+    sim.buyWarehousePlot(pid);
+    const wh = meta.profile.warehouses['morrow_granary'];
+    expect(wh.capacity).toBe(250);
+    expect(meta.profile.credits).toBe(20_000 - 3500);
+
+    sim.addCargo(meta.profile, 'steel', 20); // 16 m³
+    sim.warehouseDeposit(pid, 'steel', 20);
+    expect(sim.freeQty(meta.profile, 'steel')).toBe(0);
+    expect(wh.items).toEqual([{ good: 'steel', qty: 20 }]);
+
+    sim.warehouseWithdraw(pid, 'steel', 5);
+    expect(sim.freeQty(meta.profile, 'steel')).toBe(5);
+    expect(wh.items[0].qty).toBe(15);
+
+    // capacity is enforced
+    sim.addCargo(meta.profile, 'machinery', 10); // 18 m³ each... 1.8 each = 18 m³
+    wh.capacity = 20; // shrink to force the rejection
+    sim.warehouseDeposit(pid, 'machinery', 10);
+    expect(sim.freeQty(meta.profile, 'machinery')).toBe(10); // refused
+
+    // second plot costs more
+    wh.capacity = 250;
+    sim.buyWarehousePlot(pid);
+    expect(wh.capacity).toBe(500);
+    expect(meta.profile.credits).toBe(20_000 - 3500 - 5250);
+  });
+
+  it('sealed contract cargo cannot be stored', () => {
+    const sim = new Sim();
+    const pid = sim.addPlayer('sneak');
+    const meta = sim.meta(pid)!;
+    meta.profile.credits = 10_000;
+    sim.buyWarehousePlot(pid);
+    sim.addCargo(meta.profile, 'food', 5, 'contract_x');
+    sim.warehouseDeposit(pid, 'food', 5);
+    expect(meta.profile.warehouses['morrow_granary'].items.length).toBe(0);
+  });
+});
+
 describe('station info intel', () => {
   it('unlocks an unvisited station for credits scaled by distance', () => {
     const sim = new Sim();

@@ -209,6 +209,45 @@ export const MISSILE_PRICE = 30;        // cr per missile restock
 export const AMMO_PRICE = 0.6;          // cr per cannon round
 export const REPAIR_KIT_FRACTION = 0.3; // hull restored per kit
 export const COMBAT_LOCKOUT_S = 10;     // no field repairs this soon after taking fire
+
+// ---------------------------------------------------------------------------
+// Workshop (rented fabrication bay) & Warehouse (storage plots)
+// ---------------------------------------------------------------------------
+
+export const WORKSHOP_RENT_PRICE = 2500;       // cr per station
+export const WORKSHOP_RENT_S = 24 * 3600;      // 24 h of world time
+// Materials per module = base recipe × tier² × 0.8 (≈55-65% of market price
+// in raw material value — crafting pays off if you mine/refine your own)
+export const CRAFT_RECIPES: Record<ModuleSlot, Record<string, number>> = {
+  engine: { steel: 6, alloy: 3, machinery: 1 },
+  gyro: { steel: 4, alloy: 3, components: 1 },
+  shield: { alloy: 4, components: 3 },
+  armor: { steel: 8, adv_alloys: 1 },
+  cargo: { steel: 8, textiles: 2 },
+  weapon: { steel: 5, components: 3, alloy: 2 },
+  missile: { steel: 4, components: 2, machinery: 1 },
+  drill: { steel: 6, machinery: 2 },
+  collector: { alloy: 3, components: 2 },
+  scanner: { components: 4, alloy: 2 },
+  fueltank: { steel: 5, water: 2 },
+  nav: { components: 3, alloy: 1 },
+};
+
+export function craftMaterials(slot: ModuleSlot, tier: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [good, qty] of Object.entries(CRAFT_RECIPES[slot])) {
+    out[good] = Math.ceil(qty * tier * tier * 0.8);
+  }
+  return out;
+}
+
+// consumable recipe: hull patch kits can be fabricated too
+export const REPAIR_KIT_RECIPE: Record<string, number> = { steel: 5, components: 1 };
+
+export const WAREHOUSE_PLOT_M3 = 250;          // capacity per plot
+export function warehousePlotPrice(existingPlots: number): number {
+  return 3500 + existingPlots * 1750;          // each extra plot costs more
+}
 export const CRUISE_FUEL_PER_S = 0.25;  // at full cruise speed fraction
 export const INSURANCE_DEDUCTIBLE = 0.12; // fraction of ship value on death
 export const RESCUE_COST_FRACTION = 0.2;  // of credits, min below

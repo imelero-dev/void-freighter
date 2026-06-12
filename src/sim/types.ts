@@ -262,6 +262,10 @@ export interface PlayerProfile {
   moduleStash: Array<{ slot: ModuleSlot; tier: number }>; // looted modules, install/sell at shipyard
   missileAmmo: number;
   cannonAmmo: number;
+  // workshop rentals: stationId -> world-time expiry of the fabrication bay
+  workshopRentals: Record<string, number>;
+  // warehouse plots: stationId -> rented storage (volume-limited)
+  warehouses: Record<string, { capacity: number; items: CargoItem[] }>;
   stats: {
     kills: number;
     contractsDone: number;

@@ -550,6 +550,15 @@ export class ClientWorld implements IWorld {
   restockCannonAmmo(): void { this.cmd({ cmd: 'ammo' }); }
   openDerelict(entityId: number): void { this.cmd({ cmd: 'derelict', id: entityId }); }
   buyStationInfo(stationId: string): void { this.cmd({ cmd: 'buyinfo', id: stationId }); }
+  rentWorkshop(): void { this.cmd({ cmd: 'rentws' }); }
+  craftModule(slot: ModuleSlot, tier: number): void { this.cmd({ cmd: 'craft', slot, tier }); }
+  craftRepairKit(): void { this.cmd({ cmd: 'craftkit' }); }
+  buyWarehousePlot(): void { this.cmd({ cmd: 'buyplot' }); }
+  warehouseDeposit(goodId: string, qty: number): void { this.cmd({ cmd: 'whdep', good: goodId, qty }); }
+  warehouseWithdraw(goodId: string, qty: number): void { this.cmd({ cmd: 'whwit', good: goodId, qty }); }
+  workshopActive(stationId: string): boolean {
+    return (this.profile.workshopRentals?.[stationId] ?? 0) > this.time;
+  }
   acceptContract(id: string): void { this.cmd({ cmd: 'accept', id }); }
   abandonContract(id: string): void { this.cmd({ cmd: 'abandon', id }); }
   deliverSupply(id: string): void { this.cmd({ cmd: 'deliver', id }); }
