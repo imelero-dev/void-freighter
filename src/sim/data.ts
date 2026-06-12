@@ -325,6 +325,54 @@ export const PIRATES: Record<PirateTier, PirateDef> = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Ambient traffic (AI-LIFE)
+// ---------------------------------------------------------------------------
+
+export interface NpcDef {
+  kind: import('./types').NpcKind;
+  hull: number;
+  shield: number;
+  maxSpeed: number;
+  accel: number;
+  turnRate: number;
+  laneSpeed: number;      // m/s while riding a trade lane
+  shotDamage: number;     // 0 = unarmed
+  shotInterval: number;
+  weaponRange: number;
+  aimError: number;
+  radius: number;
+}
+
+export const NPC_DEFS: Record<import('./types').NpcKind, NpcDef> = {
+  superfreighter: {
+    kind: 'superfreighter', hull: 4000, shield: 1500, maxSpeed: 70, accel: 6, turnRate: 0.12,
+    laneSpeed: 900, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 110,
+  },
+  freighter: {
+    kind: 'freighter', hull: 320, shield: 160, maxSpeed: 115, accel: 14, turnRate: 0.7,
+    laneSpeed: 1400, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 26,
+  },
+  courier: {
+    kind: 'courier', hull: 90, shield: 60, maxSpeed: 200, accel: 34, turnRate: 1.8,
+    laneSpeed: 2100, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 10,
+  },
+  patrol: {
+    kind: 'patrol', hull: 220, shield: 200, maxSpeed: 230, accel: 42, turnRate: 2.2,
+    laneSpeed: 1800, shotDamage: 16, shotInterval: 0.3, weaponRange: 1300, aimError: 0.025, radius: 12,
+  },
+  merchant: {
+    kind: 'merchant', hull: 260, shield: 220, maxSpeed: 120, accel: 16, turnRate: 0.9,
+    laneSpeed: 1000, shotDamage: 12, shotInterval: 0.5, weaponRange: 1000, aimError: 0.04, radius: 16,
+  },
+};
+
+export const MERCHANT_HAIL_RANGE = 900;     // m to open trade
+export const MERCHANT_SELL_FACTOR = 0.85;   // they fence your goods at 85% base
+export const DISTRESS_REWARD_MIN = 300;
+export const DISTRESS_REWARD_MAX = 900;
+export const CIV_KILL_REP_PENALTY = 4;      // shooting civilians has consequences
+
 // Pirate loot: goods rolled from this table (id, min, max, weight).
 export const PIRATE_GOOD_DROPS: Array<{ good: string; min: number; max: number; weight: number }> = [
   { good: 'steel', min: 2, max: 8, weight: 3 },

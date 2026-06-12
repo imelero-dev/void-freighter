@@ -99,7 +99,7 @@ export class EntitiesLayer {
       // own ship handled by the camera layer (cockpit hides it; 3rd person shows it)
       seen.add(e.id);
       let view = this.views.get(e.id);
-      const kindKey = e.kind === 'ship' ? `ship_${e.hullId}_${e.pirate ?? ''}${e.derelict ? '_dead' : ''}` : e.kind;
+      const kindKey = e.kind === 'ship' ? `ship_${e.hullId}_${e.pirate ?? ''}_${e.npc ?? ''}${e.derelict ? '_dead' : ''}` : e.kind;
       if (view && view.kindKey !== kindKey) {
         this.dispose(e.id);
         view = undefined;
@@ -124,6 +124,8 @@ export class EntitiesLayer {
         tmpQ2.set(e.orient.x, e.orient.y, e.orient.z, e.orient.w);
         view.obj.quaternion.slerpQuaternions(tmpQ1, tmpQ2, alpha);
         if (view.ship) updateThrusters(view.ship, e);
+        const strobe = view.obj.userData.strobe as THREE.Mesh | undefined;
+        if (strobe) strobe.visible = Math.sin(time * 7 + e.id) > 0.2;
         if (e.id === world.playerId && !this.showPlayer) view.obj.visible = false;
         if (e.dockedAt) view.obj.visible = false;
       } else if (e.kind === 'bolt') {
@@ -156,6 +158,51 @@ export class EntitiesLayer {
     switch (e.kind) {
       case 'ship': {
         const ship = buildShipMesh(e.hullId, e.pirate);
+        // ambient traffic paint jobs
+        if (e.npc) {
+          if (e.npc === 'superfreighter') {
+            ship.group.scale.setScalar(4.2); // a wall of cargo sliding past
+          } else if (e.npc === 'patrol') {
+            // police: pale hull + blue strobe
+            ship.group.traverse((node) => {
+              const mesh = node as THREE.Mesh;
+              if (mesh.isMesh) {
+                const m = mesh.material as THREE.MeshStandardMaterial;
+                if (m.color) m.color.lerp(new THREE.Color(0xcdd8e4), 0.55);
+              }
+            });
+            const strobe = new THREE.Mesh(
+              new THREE.SphereGeometry(0.8, 6, 6),
+              new THREE.MeshBasicMaterial({ color: 0x55aaff }),
+            );
+            strobe.position.set(0, 2.2, 0);
+            ship.group.add(strobe);
+            ship.group.userData.strobe = strobe;
+          } else if (e.npc === 'merchant') {
+            ship.group.traverse((node) => {
+              const mesh = node as THREE.Mesh;
+              if (mesh.isMesh) {
+                const m = mesh.material as THREE.MeshStandardMaterial;
+                if (m.color) m.color.lerp(new THREE.Color(0xd8b46a), 0.3);
+              }
+            });
+            const lamp = new THREE.Mesh(
+              new THREE.SphereGeometry(0.7, 6, 6),
+              new THREE.MeshBasicMaterial({ color: 0xffcc66 }),
+            );
+            lamp.position.set(0, 3.4, 0);
+            ship.group.add(lamp);
+          } else {
+            // civilian liveries: muted blue-gray
+            ship.group.traverse((node) => {
+              const mesh = node as THREE.Mesh;
+              if (mesh.isMesh) {
+                const m = mesh.material as THREE.MeshStandardMaterial;
+                if (m.color) m.color.lerp(new THREE.Color(0x8fa3b0), 0.22);
+              }
+            });
+          }
+        }
         if (e.derelict) {
           // cold hull: darken everything, kill thruster glow
           ship.group.traverse((node) => {

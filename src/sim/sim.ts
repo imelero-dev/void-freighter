@@ -5,7 +5,7 @@ import {
   AMMO_PRICE, ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
   CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_MAX_SPEED, FUEL_PRICE,
   COMBAT_LOCKOUT_S, CRAFT_RECIPES, craftMaterials, GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
-  REPAIR_KIT_FRACTION, REPAIR_KIT_RECIPE, WAREHOUSE_PLOT_M3, WORKSHOP_RENT_PRICE, WORKSHOP_RENT_S, warehousePlotPrice,
+  NPC_DEFS, REPAIR_KIT_FRACTION, REPAIR_KIT_RECIPE, WAREHOUSE_PLOT_M3, WORKSHOP_RENT_PRICE, WORKSHOP_RENT_S, warehousePlotPrice,
   TURBO_ACCEL_MULT, TURBO_BURST_S, TURBO_ENEMY_RADIUS, TURBO_RECHARGE_S, TURBO_SPEED,
   PIRATE_GOOD_DROPS, REFINE_RECIPES, REPAIR_PRICE, REP_DISCOUNT_MAX, REP_SMUGGLING_PENALTY,
   RESCUE_COST_FRACTION, RESCUE_COST_MIN, ROCK_TYPES, SHIELD_REGEN_DELAY,
@@ -18,6 +18,7 @@ import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
 import { dangerAt, generateSystem, rockSpawn, stationInfoCost, WORLD_SEED } from './system';
+import { TrafficSystem } from './traffic';
 import {
   DT, emptyShipInput, type CargoItem, type Contract, type Destination, type Entity,
   type EntityKind, type HullId, type MarketEntry, type ModuleSlot, type PirateTier,
@@ -85,7 +86,7 @@ export function blankEntity(id: number, kind: EntityKind): Entity {
   return {
     id, kind, pos: v3(), vel: v3(), angVel: v3(), prevPos: v3(),
     orient: qident(), prevOrient: qident(), name: '',
-    isPlayer: false, pirate: null, factionId: '', hullId: 'shuttle',
+    isPlayer: false, pirate: null, npc: null, factionId: '', hullId: 'shuttle',
     hull: 1, maxHull: 1, shield: 0, maxShield: 0, shieldRegenTimer: 99,
     targetId: null, firing: false, weaponCooldown: 0, dead: false,
     throttle: 0, cruise: 'off', cruiseSpeed: 0, dockedAt: null,
@@ -169,6 +170,7 @@ export class Sim {
   system = generateSystem();
   economy: Economy;
   boards: ContractBoards;
+  traffic: TrafficSystem;
   time = 0;
   tickCount = 0;
   entities = new Map<number, Entity>();
@@ -176,7 +178,7 @@ export class Sim {
   newsLog: string[] = [];
   private nextId = 1;
   private events: SimEvent[] = [];
-  private rng: Rng;
+  rng: Rng; // shared with subsystems (traffic)
   private rocks = new Map<string, RockState>();      // "fieldId:idx" -> state
   private activeFields = new Set<string>();
   private secondAcc = 0;
@@ -187,6 +189,7 @@ export class Sim {
     this.economy = new Economy(this.system);
     this.boards = new ContractBoards(this.system);
     this.rng = new Rng(this.cfg.seed ^ 0xdead);
+    this.traffic = new TrafficSystem(this);
     this.boards.tick(0);
   }
 
@@ -243,6 +246,17 @@ export class Sim {
 
   meta(pid: number): PlayerMeta | undefined {
     return this.players.get(pid);
+  }
+
+  // subsystem hooks (traffic)
+  emit(ev: SimEvent): void {
+    this.events.push(ev);
+  }
+
+  spawnShipEntity(): Entity {
+    const e = blankEntity(this.nextId++, 'ship');
+    this.entities.set(e.id, e);
+    return e;
   }
 
   // Sync live entity state into the profile and return it (for persistence).
@@ -379,6 +393,8 @@ export class Sim {
       this.tickPlayer(meta, dt, secondTick);
     }
 
+    this.traffic.tick(dt, secondTick);
+
     for (const e of [...this.entities.values()]) {
       switch (e.kind) {
         case 'ship':
@@ -387,6 +403,8 @@ export class Sim {
             e.ttl -= dt;
             vaddTo(e.pos, vscale(e.vel, dt));
             if (e.ttl <= 0) this.entities.delete(e.id);
+          } else if (e.npc) {
+            this.traffic.tickNpc(e, dt);
           } else if (!e.isPlayer) {
             this.tickPirate(e, dt);
           }
@@ -944,21 +962,23 @@ export class Sim {
     if (!e.firing || e.weaponCooldown > 0 || e.dockedAt || e.cruise !== 'off') return;
     const stats = e.isPlayer ? this.players.get(e.id)?.stats : null;
     const pdef = e.pirate ? PIRATES[e.pirate] : null;
-    const damage = stats ? stats.weaponDamage : pdef?.shotDamage ?? 0;
-    const range = stats ? stats.weaponRange : pdef?.weaponRange ?? 0;
-    const interval = stats ? stats.weaponInterval : pdef?.shotInterval ?? 1;
+    const ndef = e.npc ? NPC_DEFS[e.npc] : null;
+    const aidef = pdef ?? (ndef && ndef.shotDamage > 0 ? ndef : null);
+    const damage = stats ? stats.weaponDamage : aidef?.shotDamage ?? 0;
+    const range = stats ? stats.weaponRange : aidef?.weaponRange ?? 0;
+    const interval = stats ? stats.weaponInterval : aidef?.shotInterval ?? 1;
     if (damage <= 0) return;
 
     let dir: Vec3;
-    if (pdef) {
-      // AI: lead the target, with tier-defined sloppiness
+    if (aidef) {
+      // AI: lead the target, with per-ship sloppiness
       const target = e.aggroId !== null ? this.entities.get(e.aggroId) : null;
       if (!target || target.dead) return;
       const aim = leadPoint(e.pos, e.vel, target.pos, target.vel, BOLT_SPEED);
       dir = vnorm(vsub(aim, e.pos));
       // turrets swivel freely; hull guns need the nose on target
       if (e.pirate !== 'turret' && angleBetween(qForward(e.orient), dir) > 0.25) return;
-      dir = jitterDir(dir, pdef.aimError, this.rng);
+      dir = jitterDir(dir, aidef.aimError, this.rng);
     } else {
       if (e.cannonAmmo <= 0) {
         e.weaponCooldown = 0.5;
@@ -1125,6 +1145,8 @@ export class Sim {
         this.dropCruise(target, 'damage');
         if (meta) this.events.push({ type: 'log', text: 'Cruise charge interrupted by weapons fire!', color: '#f66', pid: target.id });
       }
+      // ambient traffic reacts: civilians flee + scream, patrols answer
+      if (target.npc) this.traffic.onNpcDamaged(target, sourceId);
     }
 
     target.shieldRegenTimer = 0;
@@ -1154,6 +1176,7 @@ export class Sim {
     this.events.push({ type: 'explosion', entityId: e.id, big: true, x: e.pos.x, y: e.pos.y, z: e.pos.z });
 
     if (e.pirate) {
+      this.traffic.onPirateKilled(e.id, killerId);
       this.dropPirateLoot(e);
       // a dying carrier takes its remaining turrets with it
       if (e.pirate === 'corvette') {
@@ -1187,6 +1210,25 @@ export class Sim {
         const nearest = this.nearestStation(e.pos);
         if (!nearest.blackMarket) this.addRep(kmeta.profile, nearest.factionId, e.pirate === 'scout' ? 0.5 : 1);
       }
+      this.entities.delete(e.id);
+      return;
+    }
+
+    if (e.npc) {
+      // civilian wrecks shed a little of their cargo
+      if (e.npc !== 'patrol' && e.goodId && this.rng.chance(0.8)) {
+        const loot = blankEntity(this.nextId++, 'loot');
+        loot.pos = vclone(e.pos);
+        loot.vel = vscale(e.vel, 0.05);
+        loot.ttl = 240;
+        loot.radius = 4;
+        loot.name = 'cargo spill';
+        loot.goodId = e.goodId;
+        loot.qty = this.rng.int(3, 8);
+        loot.lootCredits = this.rng.int(20, 120);
+        this.entities.set(loot.id, loot);
+      }
+      this.traffic.onNpcKilled(e, killerId);
       this.entities.delete(e.id);
       return;
     }
@@ -1477,6 +1519,18 @@ export class Sim {
           e.aggroId = nearestPlayer.id;
           e.aiState = 'approach';
           this.events.push({ type: 'hostileDetected', pid: nearestPlayer.id });
+        } else {
+          // no player in reach? civilian traffic will do (never the police,
+          // never the bulk carriers — too big to crack)
+          for (const civ of this.entities.values()) {
+            if (civ.kind !== 'ship' || !civ.npc || civ.dead) continue;
+            if (civ.npc === 'patrol' || civ.npc === 'superfreighter') continue;
+            if (vdist(civ.pos, e.pos) < def.detectRange * 0.8) {
+              e.aggroId = civ.id;
+              e.aiState = 'approach';
+              break;
+            }
+          }
         }
         break;
       }

@@ -148,6 +148,9 @@ export type EntityKind = 'ship' | 'asteroid' | 'fragment' | 'loot' | 'missile' |
 export type PirateTier = 'scout' | 'fighter' | 'raider' | 'elite' | 'corvette' | 'turret';
 export type AiState = 'patrol' | 'approach' | 'attack' | 'flee';
 
+// Non-hostile ambient traffic (the AI-LIFE layer)
+export type NpcKind = 'superfreighter' | 'freighter' | 'courier' | 'patrol' | 'merchant';
+
 export interface Entity {
   id: number;
   kind: EntityKind;
@@ -163,6 +166,7 @@ export interface Entity {
   // ships
   isPlayer: boolean;
   pirate: PirateTier | null;
+  npc: NpcKind | null;       // ambient traffic (non-hostile AI-LIFE)
   factionId: string;
   hullId: HullId | 'pirate';
   hull: number;
@@ -360,6 +364,9 @@ export type SimEvent =
   | { type: 'fine'; pid: number; amount: number; desc: string }
   | { type: 'forcefield'; pid: number; body: string }
   | { type: 'derelict'; pid: number; entityId: number; name: string; story: string }
+  // wandering merchant inventory (response to a hail)
+  | { type: 'merchant'; pid: number; entityId: number; name: string; wares: Array<{ good: string; qty: number; price: number }>; module: { slot: ModuleSlot; tier: number; price: number } | null }
+  | { type: 'distress'; pid: number; entityId: number; text: string }
   | { type: 'cruiseChange'; entityId: number; state: CruiseState }
   | { type: 'refined'; pid: number; goodIn: string; qtyIn: number; goodOut: string; qtyOut: number };
 

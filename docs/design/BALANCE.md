@@ -88,6 +88,27 @@ this file documents the *why*.
   of range (~500 nearby, ~2,200 across the system). Unlocks the services
   registry and remote market feed without flying there.
 
+## Ambient traffic (AI-LIFE)
+
+- Player-centric bubble: max **6 NPCs within 30 km** of each player, despawn
+  at 42 km (completing their route off-screen). Spawn rolls every 8 s.
+- Trade lanes = every producer→consumer station pair from the economy
+  profiles. Lane traffic rides at 0.9–2.1 km/s; arriving (or despawning)
+  haulers **transfer real stock** to their destination (4–10 units,
+  super-freighters ×4) — the visible ships are the economy's circulation.
+- Mix: near ports couriers/freighters + 25% patrol; on lanes 12%
+  super-freighter, 55% freighter, else courier.
+- **Patrols** (faction police): 220/200, 53 dps, lead-aimed; scan 8 km, leash
+  14 km; they answer any attack on civilians — including yours.
+- **Merchants**: deep-space only, ~every 3.5–6.5 min per player; hail ≤900 m
+  ([U]). 4–7 wares at 1.25–1.8× base, 30% carry a salvaged module at 70%
+  price, else 40% one gem at 0.6× base. They also fence anything at 85%.
+- **Distress events** every 4.5–7.5 min in unpoliced space: a civilian + 1–2
+  pirates; clear the pirates while the civilian lives → 300–900 cr + rep +2.
+- Killing civilians: rep −4 with their faction and every patrol in 11 km
+  turns on you. Pirates prey on civilian traffic too (never patrols or bulk
+  carriers).
+
 ## Danger map
 
 - Danger 0..1 drives pirate spawns, interdiction odds and bounty tiers:

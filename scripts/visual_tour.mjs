@@ -156,6 +156,37 @@ async function main() {
   await sleep(2500);
   await shot('12_asteroid_field');
 
+  // ambient traffic showcase: a bulk carrier sliding past + patrol + trader
+  await page.evaluate(() => {
+    const w = window.VF.world;
+    const V = window.VF.vec;
+    const sim = w.sim;
+    const e = w.player;
+    const fwd = V.qForward(e.orient);
+    const mk = (npc, hullId, name, off, hull) => {
+      const n = sim.spawnShipEntity();
+      n.npc = npc;
+      n.hullId = hullId;
+      n.factionId = 'meridian';
+      n.name = name;
+      n.maxHull = hull;
+      n.hull = hull;
+      n.maxShield = 200;
+      n.shield = 200;
+      n.pos = V.vadd(e.pos, off);
+      n.prevPos = { ...n.pos };
+      n.spawnPos = { ...n.pos };
+      return n;
+    };
+    const sf = mk('superfreighter', 'freighter', 'BHC "Iron Promise" (bulk carrier)', V.vadd(V.vscale(fwd, 900), { x: 250, y: 80, z: 0 }), 4000);
+    sf.orient = e.orient;
+    sf.vel = V.vscale(fwd, 30);
+    mk('patrol', 'interceptor', 'Meridian Charter Patrol', V.vadd(V.vscale(fwd, 500), { x: -160, y: -30, z: 0 }), 220);
+    mk('merchant', 'prospector', '"Lucky Ledger" (trader)', V.vadd(V.vscale(fwd, 420), { x: 60, y: 40, z: 60 }), 260);
+  });
+  await sleep(1200);
+  await shot('14_traffic');
+
   // dogfight: spawn a pirate dead ahead and exchange fire
   await page.evaluate(() => {
     const w = window.VF.world;

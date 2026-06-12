@@ -14,6 +14,20 @@ const RED = '#e8402a';
 const CYAN = '#7fb1c9';
 const GRAY = '#8a8d90';
 const GREEN = '#7fc97f';
+const PATROL_BLUE = '#6db1ff';
+const MERCHANT_GOLD = '#d8c46a';
+const CIV_TEAL = '#9fc9c9';
+
+function shipColor(e: { pirate: unknown; isPlayer: boolean; derelict: boolean; npc: string | null }, resolved: boolean): string {
+  if (e.derelict) return '#7a8a82';
+  if (!resolved && !e.isPlayer) return GRAY;
+  if (e.pirate) return RED;
+  if (e.isPlayer) return GREEN;
+  if (e.npc === 'patrol') return PATROL_BLUE;
+  if (e.npc === 'merchant') return MERCHANT_GOLD;
+  if (e.npc) return CIV_TEAL;
+  return CYAN;
+}
 
 export interface LogLine {
   text: string;
@@ -147,7 +161,7 @@ export class Hud {
       const tl = new THREE.Vector3(target.pos.x - origin.x, target.pos.y - origin.y, target.pos.z - origin.z);
       const s = this.toScreen(tl);
       if (!s.behind) {
-        ctx.strokeStyle = target.pirate ? RED : CYAN;
+        ctx.strokeStyle = target.kind === 'ship' ? shipColor(target, true) : CYAN;
         ctx.lineWidth = 1.2;
         const r = 14;
         ctx.strokeRect(s.x - r, s.y - r, r * 2, r * 2);
@@ -436,7 +450,7 @@ export class Hud {
           ctx.textAlign = 'center';
           ctx.fillText('?', s.x, s.y + 1);
         } else {
-          ctx.strokeStyle = e.pirate ? RED : e.isPlayer ? GREEN : CYAN;
+          ctx.strokeStyle = shipColor(e, true);
           ctx.beginPath();
           ctx.moveTo(s.x, s.y - 6);
           ctx.lineTo(s.x + 6, s.y + 5);
@@ -661,7 +675,7 @@ export class Hud {
       if (e.id === world.playerId || e.dead) continue;
       const resolved = vdist(e.pos, ship.pos) < world.shipStats.resolveRange;
       let color = GRAY;
-      if (e.kind === 'ship') color = e.derelict ? '#7a8a82' : !resolved ? GRAY : e.pirate ? RED : e.isPlayer ? GREEN : CYAN;
+      if (e.kind === 'ship') color = shipColor(e, resolved);
       else if (e.kind === 'asteroid') color = 'rgba(140,140,150,0.45)';
       else if (e.kind === 'loot') color = '#d8c46a';
       else if (e.kind === 'fragment') color = '#9ab3a0';
@@ -693,9 +707,7 @@ export class Hud {
     const d = vdist(ship.pos, target.pos);
     const resolved = d < world.shipStats.resolveRange;
     ctx.font = '12px "Lucida Console", monospace';
-    ctx.fillStyle = target.kind !== 'ship' ? GRAY
-      : target.derelict ? '#7a8a82'
-        : !resolved ? GRAY : target.pirate ? RED : target.isPlayer ? GREEN : CYAN;
+    ctx.fillStyle = target.kind !== 'ship' ? GRAY : shipColor(target, resolved);
     const name = target.kind === 'ship' && !resolved && !target.isPlayer ? 'UNRESOLVED SIGNATURE' : target.name.toUpperCase();
     ctx.fillText(name.slice(0, 26), x + 10, y + 30);
     ctx.font = '11px "Lucida Console", monospace';

@@ -179,6 +179,10 @@ export class GameServer {
       case 'ammo': sim.restockCannonAmmo(pid); break;
       case 'derelict': sim.openDerelict(pid, int(msg.id)); break;
       case 'buyinfo': if (typeof msg.id === 'string') sim.buyStationInfo(pid, msg.id.slice(0, 64)); break;
+      case 'hail': sim.traffic.hailMerchant(pid, int(msg.id)); break;
+      case 'mbuy': if (typeof msg.good === 'string') sim.traffic.merchantBuy(pid, int(msg.id), msg.good, int(msg.qty)); break;
+      case 'mbuymod': sim.traffic.merchantBuyModule(pid, int(msg.id)); break;
+      case 'msell': if (typeof msg.good === 'string') sim.traffic.merchantSell(pid, int(msg.id), msg.good, int(msg.qty)); break;
       case 'rentws': sim.rentWorkshop(pid); break;
       case 'craft':
         if (typeof msg.slot === 'string' && msg.slot in MODULE_NAMES) sim.craftModule(pid, msg.slot as ModuleSlot, int(msg.tier));

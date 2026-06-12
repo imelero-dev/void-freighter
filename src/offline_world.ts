@@ -151,6 +151,10 @@ export class OfflineWorld implements IWorld {
   restockCannonAmmo(): void { this.sim.restockCannonAmmo(this.playerId); }
   openDerelict(entityId: number): void { this.sim.openDerelict(this.playerId, entityId); }
   buyStationInfo(stationId: string): void { this.sim.buyStationInfo(this.playerId, stationId); }
+  hailMerchant(entityId: number): void { this.sim.traffic.hailMerchant(this.playerId, entityId); }
+  merchantBuy(entityId: number, goodId: string, qty: number): void { this.sim.traffic.merchantBuy(this.playerId, entityId, goodId, qty); }
+  merchantBuyModule(entityId: number): void { this.sim.traffic.merchantBuyModule(this.playerId, entityId); }
+  merchantSell(entityId: number, goodId: string, qty: number): void { this.sim.traffic.merchantSell(this.playerId, entityId, goodId, qty); }
   rentWorkshop(): void { this.sim.rentWorkshop(this.playerId); }
   craftModule(slot: ModuleSlot, tier: number): void { this.sim.craftModule(this.playerId, slot, tier); }
   craftRepairKit(): void { this.sim.craftRepairKit(this.playerId); }

@@ -52,6 +52,7 @@ export interface WireShip {
   ca?: number; // cannon ammo (self only)
   pl?: 1;  // is a player
   dl?: 1;  // derelict hulk
+  np?: import('../sim/types').NpcKind; // ambient traffic kind
   tb?: number; // turbo charge ×100 (self only)
   ta?: 1;  // turbo active
 }
@@ -158,6 +159,7 @@ export function wireShip(e: Entity): WireShip {
   w.ca = e.cannonAmmo;
   if (e.isPlayer) w.pl = 1;
   if (e.derelict) w.dl = 1;
+  if (e.npc) w.np = e.npc;
   return w;
 }
 

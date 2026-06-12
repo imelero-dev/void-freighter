@@ -396,6 +396,7 @@ export class ClientWorld implements IWorld {
           e.cruiseSpeed = w.cs;
           e.dockedAt = w.dk ?? null;
           e.derelict = !!w.dl;
+          e.npc = w.np ?? null;
           break;
         }
         case 'f':
@@ -550,6 +551,10 @@ export class ClientWorld implements IWorld {
   restockCannonAmmo(): void { this.cmd({ cmd: 'ammo' }); }
   openDerelict(entityId: number): void { this.cmd({ cmd: 'derelict', id: entityId }); }
   buyStationInfo(stationId: string): void { this.cmd({ cmd: 'buyinfo', id: stationId }); }
+  hailMerchant(entityId: number): void { this.cmd({ cmd: 'hail', id: entityId }); }
+  merchantBuy(entityId: number, goodId: string, qty: number): void { this.cmd({ cmd: 'mbuy', id: entityId, good: goodId, qty }); }
+  merchantBuyModule(entityId: number): void { this.cmd({ cmd: 'mbuymod', id: entityId }); }
+  merchantSell(entityId: number, goodId: string, qty: number): void { this.cmd({ cmd: 'msell', id: entityId, good: goodId, qty }); }
   rentWorkshop(): void { this.cmd({ cmd: 'rentws' }); }
   craftModule(slot: ModuleSlot, tier: number): void { this.cmd({ cmd: 'craft', slot, tier }); }
   craftRepairKit(): void { this.cmd({ cmd: 'craftkit' }); }

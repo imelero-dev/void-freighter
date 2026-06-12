@@ -10,7 +10,7 @@ import { FxLayer } from '../render/fx';
 import { PostPipeline } from '../render/post';
 import { SceneManager } from '../render/scene';
 import { buildStarfield } from '../render/starfield';
-import { BOLT_SPEED, GOODS } from '../sim/data';
+import { BOLT_SPEED, GOODS, MODULE_NAMES, MODULE_TIER_TAGS } from '../sim/data';
 import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
 import { settings } from '../ui/settings';
 import type { IWorld } from '../world_api';
@@ -170,6 +170,23 @@ export class GameApp {
     });
     input.on('rescue', () => w.hailRescue());
     input.on('controls', () => this.toggleWindow('controls'));
+    input.on('hail', () => {
+      const ship = w.player;
+      const target = ship?.targetId != null ? w.entities.get(ship.targetId) : null;
+      if (target?.npc === 'merchant') {
+        w.hailMerchant(target.id);
+      } else {
+        // no merchant targeted: hail the nearest one in range
+        if (!ship) return;
+        for (const e of w.entities.values()) {
+          if (e.npc === 'merchant' && !e.dead && vdist(e.pos, ship.pos) < 950) {
+            w.hailMerchant(e.id);
+            return;
+          }
+        }
+        this.hud.pushLog('No trader in hailing range.', '#8a8d90');
+      }
+    });
     this.chat.onOpenChange = (open) => {
       this.input.uiMode = open || this.wm.anyOpen();
     };
@@ -229,6 +246,101 @@ export class GameApp {
     this.audio.click();
     this.wm.toggle(id);
   }
+
+  // Wandering merchant trade window: their wares (premium prices, the odd
+  // gem) + a fence section that buys your goods at 85% of base.
+  private openMerchantWindow(ev: Extract<import('../sim/types').SimEvent, { type: 'merchant' }>): void {
+    const id = 'merchant';
+    let win = this.merchantWin;
+    if (!win) {
+      win = this.wm.register(id, 'TRADER', true);
+      this.merchantWin = win;
+    }
+    this.wm.setTitle(id, ev.name.toUpperCase());
+    while (win.body.firstChild) win.body.removeChild(win.body.firstChild);
+    const w = this.world;
+    const refreshLater = () => setTimeout(() => w.hailMerchant(ev.entityId), 200);
+
+    win.body.appendChild(el('div', 'vf-subline', 'No customs out here. No refunds either.'));
+    const waresBox = el('div', 'vf-section');
+    waresBox.appendChild(el('div', 'vf-section-title', '— THEIR WARES —'));
+    if (ev.wares.length === 0 && !ev.module) {
+      waresBox.appendChild(el('div', 'vf-empty', 'Cleaned out. Come back another rotation.'));
+    }
+    for (const ware of ev.wares) {
+      const def = GOODS[ware.good];
+      const row = el('div', 'vf-row');
+      const gem = ware.price < def.basePrice;
+      row.appendChild(el('span', `vf-cell name${def.legal ? '' : ' illegal'}`, `${ware.qty}× ${def.name}`));
+      const priceEl = el('span', 'vf-cell num', `${ware.price} cr`);
+      if (gem) {
+        priceEl.style.color = '#7fc97f';
+        priceEl.textContent += ' ◆';
+      }
+      row.appendChild(priceEl);
+      const acts = el('span', 'vf-cell actions');
+      for (const n of [1, ware.qty]) {
+        const b = el('button', 'vf-mini');
+        b.textContent = n === ware.qty ? 'all' : String(n);
+        b.addEventListener('click', () => {
+          this.audio.click();
+          w.merchantBuy(ev.entityId, ware.good, n);
+          refreshLater();
+        });
+        acts.appendChild(b);
+      }
+      row.appendChild(acts);
+      waresBox.appendChild(row);
+    }
+    if (ev.module) {
+      const row = el('div', 'vf-row');
+      row.appendChild(el('span', 'vf-cell name', `⚙ ${MODULE_NAMES[ev.module.slot]} ${MODULE_TIER_TAGS[ev.module.tier]} (salvaged)`));
+      const priceEl = el('span', 'vf-cell num', `${ev.module.price} cr ◆`);
+      priceEl.style.color = '#7fc97f';
+      row.appendChild(priceEl);
+      const b = el('button', 'vf-mini');
+      b.textContent = 'BUY';
+      b.addEventListener('click', () => {
+        this.audio.kaching();
+        w.merchantBuyModule(ev.entityId);
+        refreshLater();
+      });
+      row.appendChild(b);
+      waresBox.appendChild(row);
+    }
+    win.body.appendChild(waresBox);
+
+    // fence: they buy anything
+    const sellBox = el('div', 'vf-section');
+    sellBox.appendChild(el('div', 'vf-section-title', '— THEY BUY (85% of base value) —'));
+    const sellable = w.profile.cargo.filter((c) => !c.contractId);
+    if (sellable.length === 0) sellBox.appendChild(el('div', 'vf-empty', 'Your hold has nothing they want.'));
+    for (const c of sellable) {
+      const def = GOODS[c.good];
+      const row = el('div', 'vf-row');
+      row.appendChild(el('span', 'vf-cell name', `${c.qty}× ${def.name}`));
+      row.appendChild(el('span', 'vf-cell num', `${Math.round(def.basePrice * 0.85)} cr/u`));
+      const acts = el('span', 'vf-cell actions');
+      for (const n of [1, c.qty]) {
+        const b = el('button', 'vf-mini sell');
+        b.textContent = n === c.qty ? 'all' : String(n);
+        b.addEventListener('click', () => {
+          this.audio.kaching();
+          w.merchantSell(ev.entityId, c.good, n);
+          refreshLater();
+        });
+        acts.appendChild(b);
+      }
+      row.appendChild(acts);
+      sellBox.appendChild(row);
+    }
+    win.body.appendChild(sellBox);
+    win.refresh = () => {};
+    this.wm.show(id);
+    this.input.releasePointer();
+  }
+
+  private merchantWin: ReturnType<WindowManager['register']> | null = null;
 
   // Derelict story prompt: short creepy log + breach-or-leave choice.
   private openDerelictWindow(entityId: number, name: string, story: string): void {
@@ -645,6 +757,14 @@ export class GameApp {
       case 'derelict':
         this.audio.commsStatic();
         this.openDerelictWindow(ev.entityId, ev.name, ev.story);
+        break;
+      case 'merchant':
+        this.audio.click();
+        this.openMerchantWindow(ev);
+        break;
+      case 'distress':
+        this.audio.hostileDetected();
+        this.hud.flashAlert('MAYDAY — CIVILIAN UNDER ATTACK', '#e8402a', 3200);
         break;
     }
   }

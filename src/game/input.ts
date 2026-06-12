@@ -7,7 +7,7 @@ import { settings } from '../ui/settings';
 
 export type GameAction =
   | 'toggleCruise' | 'zeroThrottle' | 'toggleAssist' | 'toggleDrill'
-  | 'dock' | 'tab' | 'targetReticle' | 'fireMissile' | 'rescue'
+  | 'dock' | 'tab' | 'targetReticle' | 'fireMissile' | 'rescue' | 'hail'
   | 'map' | 'cargo' | 'ship' | 'journal' | 'market' | 'contacts' | 'chat'
   | 'setDestination' | 'escape' | 'toggleCamera' | 'help' | 'controls';
 
@@ -17,7 +17,7 @@ const BIND_ACTIONS: Record<string, GameAction> = {
   drill: 'toggleDrill', dock: 'dock', tab: 'tab', reticle: 'targetReticle',
   map: 'map', cargo: 'cargo', ship: 'ship', journal: 'journal',
   market: 'market', contacts: 'contacts', chat: 'chat', dest: 'setDestination',
-  camera: 'toggleCamera', rescue: 'rescue', help: 'help',
+  camera: 'toggleCamera', rescue: 'rescue', help: 'help', hail: 'hail',
 };
 
 export class InputManager {

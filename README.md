@@ -25,6 +25,12 @@ contains zero binary assets.
 One shared star system, one shared economy: every player's trades move the
 same prices. Stations are safe ground; deep space is not.
 
+The void is worked, not empty: bulk carriers and couriers ride the trade
+lanes (and actually deliver the stock they carry), faction patrols hunt
+pirates, wandering merchants sell what customs wouldn't approve ([U] to
+hail), and sometimes a MAYDAY crackles in from a civilian who won't last
+another minute without you.
+
 ## Quick start (offline)
 
 ```bash
