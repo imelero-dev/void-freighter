@@ -43,9 +43,11 @@ export class ContractBoards {
   }
 
   // Reputation tier required to accept (0 / T2 / T3 by reward size).
+  // Rewards scale with distance, so the gates sit well above a rookie's
+  // short-haul range — every board also guarantees ungated local runs.
   static repRequired(c: Contract): number {
-    if (c.reward >= 2600) return REP_CONTRACT_GATE_T3;
-    if (c.reward >= 1100) return REP_CONTRACT_GATE_T2;
+    if (c.reward >= 3500) return REP_CONTRACT_GATE_T3;
+    if (c.reward >= 1800) return REP_CONTRACT_GATE_T2;
     return -100;
   }
 
@@ -54,21 +56,28 @@ export class ContractBoards {
     const count = st.services.includes('shipyard') ? 8 : 6;
     const out: Contract[] = [];
     for (let i = 0; i < count; i++) {
-      const type = rng.pickWeighted(
+      // the first two offers are always rookie-friendly local hauls
+      const type = i < 2 ? 'transport' : rng.pickWeighted(
         ['transport', 'urgent', 'supply', 'bounty'] as ContractType[],
         [4, 2, st.services.includes('refinery') ? 2.5 : 1.5, 2]);
-      const c = this.generate(st, type, time, rng);
+      const c = this.generate(st, type, time, rng, i < 2);
       if (c) out.push(c);
     }
     return out;
   }
 
-  private generate(st: StationDef, type: ContractType, time: number, rng: Rng): Contract | null {
+  private generate(st: StationDef, type: ContractType, time: number, rng: Rng, localRun = false): Contract | null {
     const id = `c${this.counter++}_${Math.floor(rng.next() * 1e6)}`;
     switch (type) {
       case 'transport':
       case 'urgent': {
-        const dest = rng.pick(this.system.stations.filter((s) => s.id !== st.id));
+        let candidates = this.system.stations.filter((s) => s.id !== st.id);
+        if (localRun) {
+          candidates = [...candidates]
+            .sort((a, b) => dist(st.pos, a.pos) - dist(st.pos, b.pos))
+            .slice(0, 3);
+        }
+        const dest = rng.pick(candidates);
         // black market boards offer smuggling runs (illegal goods, fat pay)
         const pool = st.blackMarket && rng.chance(0.5)
           ? ['stims', 'small_arms', 'artifacts']
@@ -76,7 +85,7 @@ export class ContractBoards {
         const goodId = rng.pick(pool);
         const def = GOODS[goodId];
         // small offers must fit a starter hold; big ones pay for a hauler
-        const big = rng.chance(0.3);
+        const big = !localRun && rng.chance(0.3);
         const qty = big ? rng.int(40, 110) : rng.int(6, 16);
         const d = dist(st.pos, dest.pos);
         const travel = d / AVG_CRUISE_SPEED + 150;

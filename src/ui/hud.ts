@@ -28,8 +28,10 @@ export class Hud {
   comms: { text: string; at: number } | null = null;
   alert: { text: string; color: string; until: number } | null = null;
   cameraMode: 'cockpit' | 'chase' = 'cockpit';
+  destAligned = false; // exposed so the app can play the snap tone on change
 
   private proj = new THREE.Vector3();
+  private floaters: Array<{ pos: { x: number; y: number; z: number }; text: string; color: string; at: number }> = [];
 
   constructor(private camera: THREE.PerspectiveCamera) {
     this.canvas = document.createElement('canvas');
@@ -49,6 +51,12 @@ export class Hud {
 
   flashAlert(text: string, color = RED, durationMs = 2600): void {
     this.alert = { text, color, until: performance.now() + durationMs };
+  }
+
+  // floating combat text anchored to a world position
+  pushFloater(pos: { x: number; y: number; z: number }, text: string, color: string): void {
+    this.floaters.push({ pos, text, color, at: performance.now() });
+    if (this.floaters.length > 24) this.floaters.shift();
   }
 
   resize(): void {
@@ -215,6 +223,25 @@ export class Hud {
     // ---- destination GPS marker ----
     this.drawDestination(world, ship, origin, cx, cy, W, H);
 
+    // ---- floating combat text ----
+    for (let i = this.floaters.length - 1; i >= 0; i--) {
+      const f = this.floaters[i];
+      const age = (now - f.at) / 1000;
+      if (age > 1.1) {
+        this.floaters.splice(i, 1);
+        continue;
+      }
+      const local = new THREE.Vector3(f.pos.x - origin.x, f.pos.y - origin.y, f.pos.z - origin.z);
+      const s = this.toScreen(local);
+      if (s.behind) continue;
+      ctx.globalAlpha = Math.max(0, 1 - age);
+      ctx.fillStyle = f.color;
+      ctx.font = '13px "Lucida Console", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(f.text, s.x, s.y - 20 - age * 26);
+      ctx.globalAlpha = 1;
+    }
+
     // ---- contact blips in 3D view ----
     this.drawContacts(world, ship, origin);
 
@@ -258,6 +285,7 @@ export class Hud {
   private drawDestination(world: IWorld, ship: Entity, origin: { x: number; y: number; z: number }, cx: number, cy: number, W: number, H: number): void {
     const ctx = this.ctx;
     const dest = world.destination;
+    this.destAligned = false;
     if (!dest) return;
     const navQ = world.shipStats.navQuality;
     const d = vdist(ship.pos, dest.pos);
@@ -267,6 +295,7 @@ export class Hud {
     const fwd = qForward(ship.orient);
     const align = vdot(toDest, fwd); // 1 = dead ahead
     const aligned = align > 0.995;
+    this.destAligned = aligned;
     const onScreen = !s.behind && s.x > 0 && s.x < W && s.y > 0 && s.y < H;
 
     if (onScreen) {

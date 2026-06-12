@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 import { BodiesLayer } from '../render/bodies';
+import { DustLayer } from '../render/dust';
 import { EntitiesLayer } from '../render/entities';
 import { FxLayer } from '../render/fx';
 import { PostPipeline } from '../render/post';
@@ -26,6 +27,7 @@ export class GameApp {
   private bodies: BodiesLayer;
   private entities: EntitiesLayer;
   private fx: FxLayer;
+  private dust: DustLayer;
   private post: PostPipeline;
   private hud: Hud;
   private input: InputManager;
@@ -42,6 +44,7 @@ export class GameApp {
   private wasDocked = false;
   private miningActive = false;
   private lowFuelWarned = false;
+  private wasAligned = false;
 
   onExit: (() => void) | null = null;
 
@@ -51,6 +54,7 @@ export class GameApp {
     this.bodies = new BodiesLayer(this.sm, world.system);
     this.entities = new EntitiesLayer(this.sm, world);
     this.fx = new FxLayer(this.sm, world, this.entities);
+    this.dust = new DustLayer(this.sm, world);
     this.post = new PostPipeline(this.sm);
     this.hud = new Hud(this.sm.camera);
     this.input = new InputManager(canvas);
@@ -217,6 +221,10 @@ export class GameApp {
 
     const w = this.world;
     this.input.frame(dt, w.input);
+    // E2E bot override: scripts write window.VF.botInput instead of fighting
+    // the InputManager for w.input
+    const botInput = (window as any).VF?.botInput;
+    if (botInput) Object.assign(w.input, botInput);
     w.update(dt);
 
     // events
@@ -231,12 +239,17 @@ export class GameApp {
     this.bodies.update(w.time);
     this.entities.update(w.time);
     this.fx.update(dt);
+    this.dust.update();
 
     const hullFrac = ship ? ship.hull / ship.maxHull : 1;
     const damageLevel = hullFrac < 0.25 ? (0.25 - hullFrac) * 4 : 0;
     this.post.render(w.time, Math.min(1, damageLevel));
     this.hud.draw(w, this.sm.origin, this.input.cursorX, this.input.cursorY, this.input.uiMode);
     if (this.map.isOpen) this.map.draw();
+
+    // GPS alignment snap tone (rising edge only)
+    if (this.hud.destAligned && !this.wasAligned) this.audio.alignSnap();
+    this.wasAligned = this.hud.destAligned;
 
     // credits readout
     this.creditsHud.textContent = `${fmtCredits(w.profile.credits)}${w.online ? (w.connected ? ' · ONLINE' : ' · RECONNECTING…') : ''}`;
@@ -308,12 +321,16 @@ export class GameApp {
           this.audio.laser();
         }
         break;
-      case 'hit':
+      case 'hit': {
         if (ev.entityId === w.playerId) {
           if (ev.shield) this.audio.hitShield();
           else this.audio.hitHull();
+        } else if (ev.amount > 0) {
+          // floating combat text over whatever we (or someone) hit
+          this.hud.pushFloater({ x: ev.x, y: ev.y, z: ev.z }, `-${ev.amount}`, ev.shield ? '#7fb1c9' : '#d9a441');
         }
         break;
+      }
       case 'explosion':
         this.audio.explosion(ev.big);
         break;

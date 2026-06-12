@@ -567,7 +567,8 @@ export class Sim {
     if (meta.destination) {
       const d = vdist(e.pos, meta.destination.pos);
       cap = Math.min(cap, Math.max(CRUISE_DROP_SPEED, d / 4));
-      if (d < 30_000) {
+      // the mass cap has already braked us; final drop right at the doorstep
+      if (d < 2500) {
         this.dropCruise(e, 'arrival');
         this.events.push({ type: 'log', text: `Arriving: ${meta.destination.name}.`, color: '#8fb', pid: meta.pid });
         return;

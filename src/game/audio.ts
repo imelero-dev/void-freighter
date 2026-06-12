@@ -295,6 +295,10 @@ export class AudioEngine {
     }
   }
 
+  alignSnap(): void {
+    this.blip(880, 1240, 0.12, 'sine', 0.05);
+  }
+
   alarmFuel(): void {
     this.blip(620, 620, 0.25, 'square', 0.07);
     setTimeout(() => this.blip(470, 470, 0.3, 'square', 0.07), 300);
