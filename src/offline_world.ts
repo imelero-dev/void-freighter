@@ -141,6 +141,7 @@ export class OfflineWorld implements IWorld {
   setDestination(dest: Destination | null): void { this.sim.setDestination(this.playerId, dest); }
   hailRescue(): void { this.sim.hailRescue(this.playerId); }
   useFuelCells(qty: number): void { this.sim.useFuelCells(this.playerId, qty); }
+  useRepairKit(): void { this.sim.useRepairKit(this.playerId); }
   buyGood(goodId: string, qty: number): void { this.sim.buyGood(this.playerId, goodId, qty); }
   sellGood(goodId: string, qty: number): void { this.sim.sellGood(this.playerId, goodId, qty); }
   refine(inputGood: string, qty: number): void { this.sim.refine(this.playerId, inputGood, qty); }
@@ -149,6 +150,7 @@ export class OfflineWorld implements IWorld {
   restockMissiles(): void { this.sim.restockMissiles(this.playerId); }
   restockCannonAmmo(): void { this.sim.restockCannonAmmo(this.playerId); }
   openDerelict(entityId: number): void { this.sim.openDerelict(this.playerId, entityId); }
+  buyStationInfo(stationId: string): void { this.sim.buyStationInfo(this.playerId, stationId); }
   acceptContract(id: string): void { this.sim.acceptContract(this.playerId, id); }
   abandonContract(id: string): void { this.sim.abandonContract(this.playerId, id); }
   deliverSupply(id: string): void { this.sim.deliverSupply(this.playerId, id); }

@@ -152,8 +152,14 @@ export class StationUi {
 
       const table = el('div', 'vf-table market-grid');
       const header = el('div', 'vf-row vf-header');
-      for (const h of ['', 'COMMODITY', 'BUY', 'SELL', 'STOCK', 'HELD', 'BEST KNOWN', '']) {
-        header.appendChild(el('span', 'vf-cell', h));
+      // header cells carry the same column classes as the body rows so the
+      // labels align with their (right-aligned) values
+      const headers: Array<[string, string]> = [
+        ['', 'icon'], ['COMMODITY', 'name'], ['BUY', 'num'], ['SELL', 'num'],
+        ['STOCK', 'num'], ['HELD', 'num'], ['BEST KNOWN', 'best'], ['', 'actions'],
+      ];
+      for (const [h, cls] of headers) {
+        header.appendChild(el('span', `vf-cell ${cls}`, h));
       }
       table.appendChild(header);
 
@@ -549,6 +555,13 @@ export class StationUi {
           row.appendChild(button('USE → FUEL (+8 ea)', 'vf-mini', () => {
             this.audio.click();
             this.world.useFuelCells(Math.min(c.qty, 5));
+            setTimeout(() => win.refresh(), 80);
+          }));
+        }
+        if (c.good === 'repair_kit' && !c.contractId) {
+          row.appendChild(button('USE → HULL +30% (not in combat)', 'vf-mini', () => {
+            this.audio.click();
+            this.world.useRepairKit();
             setTimeout(() => win.refresh(), 80);
           }));
         }

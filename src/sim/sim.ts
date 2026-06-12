@@ -4,7 +4,8 @@
 import {
   AMMO_PRICE, ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
   CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_MAX_SPEED, FUEL_PRICE,
-  GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
+  COMBAT_LOCKOUT_S, GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
+  REPAIR_KIT_FRACTION,
   TURBO_ACCEL_MULT, TURBO_BURST_S, TURBO_ENEMY_RADIUS, TURBO_RECHARGE_S, TURBO_SPEED,
   PIRATE_GOOD_DROPS, REFINE_RECIPES, REPAIR_PRICE, REP_DISCOUNT_MAX, REP_SMUGGLING_PENALTY,
   RESCUE_COST_FRACTION, RESCUE_COST_MIN, ROCK_TYPES, SHIELD_REGEN_DELAY,
@@ -16,7 +17,7 @@ import { integrateFlight } from './flight';
 import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
-import { dangerAt, generateSystem, rockSpawn, WORLD_SEED } from './system';
+import { dangerAt, generateSystem, rockSpawn, stationInfoCost, WORLD_SEED } from './system';
 import {
   DT, emptyShipInput, type Contract, type Destination, type Entity,
   type EntityKind, type HullId, type MarketEntry, type ModuleSlot, type PirateTier,
@@ -89,6 +90,7 @@ export function blankEntity(id: number, kind: EntityKind): Entity {
     targetId: null, firing: false, weaponCooldown: 0, dead: false,
     throttle: 0, cruise: 'off', cruiseSpeed: 0, dockedAt: null,
     aiState: 'patrol', aggroId: null, spawnPos: v3(), aiTimer: 0,
+    aiPhase: 0, missileCooldown: 0,
     missileAmmo: 0, cannonAmmo: 0, lockTimer: 0, lockedOn: false,
     parentId: 0, derelict: false, derelictOpened: false,
     rockType: null, rockHp: 0, rockMaxHp: 0, rockYield: null, fieldId: null, rockIndex: -1,
@@ -144,6 +146,7 @@ export interface PlayerMeta {
   promptedDerelicts: Set<number>;
   turboCharge: number;   // 0..1 burst gauge
   turboActive: boolean;
+  lastCombatAt: number;  // sim time of the last hit taken (field-repair lockout)
 }
 
 interface RockState {
@@ -205,7 +208,7 @@ export class Sim {
       extractAcc: 0, stats: shipStats(prof.hullId, prof.modules), rescueTimer: 0,
       cruiseRequested: false, flightAssist: true,
       forcefieldCooldown: 0, promptedDerelicts: new Set(),
-      turboCharge: 1, turboActive: false,
+      turboCharge: 1, turboActive: false, lastCombatAt: -999,
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
@@ -1118,6 +1121,10 @@ export class Sim {
     }
 
     target.shieldRegenTimer = 0;
+    if (target.isPlayer && !environmental) {
+      const tmeta = this.players.get(target.id);
+      if (tmeta) tmeta.lastCombatAt = this.time;
+    }
     // attacker position rides along for the HUD damage-direction arrows
     const src = !environmental && sourceId >= 0 ? this.entities.get(sourceId) : undefined;
     const from = src ? { fx: src.pos.x, fy: src.pos.y, fz: src.pos.z } : {};
@@ -1473,7 +1480,11 @@ export class Sim {
           break;
         }
         this.steerToward(e, target!.pos, def, 1, dt);
-        if (vdist(target!.pos, e.pos) < def.weaponRange * 0.85) e.aiState = 'attack';
+        if (vdist(target!.pos, e.pos) < def.weaponRange * 0.85) {
+          e.aiState = 'attack';
+          e.aiPhase = 0;
+          e.aiTimer = 8; // reposition budget
+        }
         break;
       }
       case 'attack': {
@@ -1484,20 +1495,67 @@ export class Sim {
           break;
         }
         const d = vdist(target!.pos, e.pos);
-        // strafe orbit: aim at target with lateral jink
-        const jink = Math.sin(this.time * 1.3 + e.id * 2.1);
-        const toT = vnorm(vsub(target!.pos, e.pos));
-        const side = vnorm(vsub(qrot(e.orient, v3(1, 0, 0)), vscale(toT, 0.2)));
-        const aimPos = vadd(target!.pos, vscale(side, jink * d * 0.18));
-        const throttle = d > def.weaponRange * 0.55 ? 1 : d < 320 ? -0.2 : 0.35;
-        this.steerToward(e, aimPos, def, throttle, dt);
-        // fire when roughly aimed
-        const ang = angleBetween(qForward(e.orient), vsub(target!.pos, e.pos));
         e.targetId = target!.id;
-        e.firing = d < def.weaponRange && ang < 0.12;
+        e.missileCooldown = Math.max(0, e.missileCooldown - dt);
+
+        if (e.pirate === 'corvette') {
+          // the Ironclad just bears down and lets the turrets work
+          this.steerToward(e, target!.pos, def, d > 900 ? 1 : 0.3, dt);
+          const angC = angleBetween(qForward(e.orient), vsub(target!.pos, e.pos));
+          e.firing = d < def.weaponRange && angC < 0.2;
+        } else {
+          // dogfight phases: chase the six -> attack run -> break off
+          const jink = v3(
+            Math.sin(this.time * 1.7 + e.id) * 90,
+            Math.sin(this.time * 1.3 + e.id * 2.3) * 50,
+            Math.cos(this.time * 1.5 + e.id) * 90,
+          );
+          switch (e.aiPhase) {
+            case 0: { // reposition: work toward the target's tail
+              const tFwd = qForward(target!.orient);
+              const tail = vadd(vadd(target!.pos, vscale(tFwd, -340)), jink);
+              this.steerToward(e, tail, def, 1, dt);
+              // opportunistic snapshots while closing
+              const aim = leadPoint(e.pos, e.vel, target!.pos, target!.vel, BOLT_SPEED);
+              const ang0 = angleBetween(qForward(e.orient), vsub(aim, e.pos));
+              e.firing = d < def.weaponRange * 0.9 && ang0 < 0.08;
+              const behind = vdot(tFwd, vnorm(vsub(e.pos, target!.pos))) < -0.25;
+              if ((behind && d < def.weaponRange) || e.aiTimer <= 0) {
+                e.aiPhase = 1;
+                e.aiTimer = this.rng.range(3, 5);
+              }
+              break;
+            }
+            case 1: { // attack run: nose on the intercept point, guns hot
+              const aim = vadd(leadPoint(e.pos, e.vel, target!.pos, target!.vel, BOLT_SPEED), vscale(jink, 0.3));
+              const throttle = d > 650 ? 0.9 : d < 280 ? 0.15 : 0.5;
+              this.steerToward(e, aim, def, throttle, dt);
+              const ang1 = angleBetween(qForward(e.orient), vsub(aim, e.pos));
+              e.firing = d < def.weaponRange && ang1 < 0.14;
+              if (d < 210 || e.aiTimer <= 0) {
+                e.aiPhase = 2;
+                e.aiTimer = this.rng.range(1.6, 2.6);
+                e.firing = false;
+              }
+              break;
+            }
+            default: { // break off: peel away hard, then come back around
+              const side = qrot(e.orient, v3(e.id % 2 === 0 ? 1 : -1, e.id % 3 === 0 ? 0.5 : -0.3, 0));
+              const breakPoint = vadd(e.pos, vadd(vscale(vnorm(side), 900), vscale(qForward(e.orient), 480)));
+              this.steerToward(e, breakPoint, def, 1, dt);
+              e.firing = false;
+              if (e.aiTimer <= 0) {
+                e.aiPhase = 0;
+                e.aiTimer = 8;
+              }
+              break;
+            }
+          }
+        }
         // missiles for heavies — warlords launch a volley
-        if (def.missiles > 0 && e.missileAmmo > 0 && e.aiTimer <= 0 && d < 2500 && ang < 0.3) {
-          e.aiTimer = this.rng.range(16, 26);
+        const angM = angleBetween(qForward(e.orient), vsub(target!.pos, e.pos));
+        if (def.missiles > 0 && e.missileAmmo > 0 && e.missileCooldown <= 0 && d < 2500 && angM < 0.3) {
+          e.missileCooldown = this.rng.range(16, 26);
           const volley = e.pirate === 'elite' ? Math.min(2, e.missileAmmo) : 1;
           for (let v = 0; v < volley; v++) {
             e.missileAmmo--;
@@ -2017,6 +2075,42 @@ export class Sim {
     this.events.push({ type: 'log', text: `Cannon rearmed (${cost} cr).`, color: '#8fb', pid });
   }
 
+  // Field repair: a Hull Patch Kit restores 30% of max hull — but you cannot
+  // weld plating while someone is shooting at you.
+  useRepairKit(pid: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || e.dead) return;
+    if (e.dockedAt) {
+      this.events.push({ type: 'log', text: 'Use the station repair service while docked — it is cheaper.', color: '#fa4', pid });
+      return;
+    }
+    if (this.freeQty(meta.profile, 'repair_kit') < 1) return;
+    if (e.hull >= e.maxHull - 0.5) {
+      this.events.push({ type: 'log', text: 'Hull integrity nominal — save the kit.', color: '#fa4', pid });
+      return;
+    }
+    // combat lockout: recent hits or a hostile actively hunting you
+    let inCombat = this.time - meta.lastCombatAt < COMBAT_LOCKOUT_S;
+    if (!inCombat) {
+      for (const h of this.entities.values()) {
+        if (h.kind === 'ship' && h.pirate && h.pirate !== 'turret' && !h.dead
+          && h.aggroId === pid && vdist(h.pos, e.pos) < 8000) {
+          inCombat = true;
+          break;
+        }
+      }
+    }
+    if (inCombat) {
+      this.events.push({ type: 'log', text: 'Cannot patch the hull under fire — break contact first.', color: '#f66', pid });
+      return;
+    }
+    this.removeCargo(meta.profile, 'repair_kit', 1);
+    const healed = Math.round(e.maxHull * REPAIR_KIT_FRACTION);
+    e.hull = Math.min(e.maxHull, e.hull + healed);
+    this.events.push({ type: 'log', text: `Hull patched: +${healed} integrity. The welds will hold. Probably.`, color: '#8fb', pid });
+  }
+
   useFuelCells(pid: number, qty: number): void {
     const meta = this.players.get(pid);
     if (!meta || qty <= 0 || !Number.isFinite(qty)) return;
@@ -2237,6 +2331,24 @@ export class Sim {
   }
 
   // ---- navigation ----
+
+  // Buy nav intel on an unvisited station: unlocks its services listing and
+  // live market feed, priced by how far away it is.
+  buyStationInfo(pid: number, stationId: string): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e) return;
+    const st = this.station(stationId);
+    if (!st || meta.profile.knownStations.includes(stationId)) return;
+    const cost = stationInfoCost(e.pos, st);
+    if (meta.profile.credits < cost) {
+      this.events.push({ type: 'log', text: `Nav intel on ${st.name} costs ${cost} cr — you cannot afford it.`, color: '#f66', pid });
+      return;
+    }
+    meta.profile.credits -= cost;
+    meta.profile.knownStations.push(stationId);
+    this.events.push({ type: 'log', text: `Nav intel purchased: ${st.name} (${cost} cr). Market feed unlocked.`, color: '#8fb', pid });
+  }
 
   setDestination(pid: number, dest: Destination | null): void {
     const meta = this.players.get(pid);

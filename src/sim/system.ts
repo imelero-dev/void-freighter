@@ -37,7 +37,7 @@ const PLANETS: PlanetSpec[] = [
     station: {
       id: 'cinder_forge', name: 'Cinder Forge', faction: 'helion',
       services: ['market', 'contracts', 'fuel', 'refinery', 'shipyard'],
-      produces: { steel: 5, alloy: 3, adv_alloys: 1.2 },
+      produces: { steel: 5, alloy: 3, adv_alloys: 1.2, repair_kit: 0.5 },
       consumes: { food: 4, water: 5, medicine: 1.2, iron_ore: 6, copper_ore: 4 },
       refineryEff: 0.9, blackMarket: false,
     },
@@ -47,7 +47,7 @@ const PLANETS: PlanetSpec[] = [
     station: {
       id: 'bren_yards', name: 'Bren Yards', faction: 'helion',
       services: ['market', 'contracts', 'fuel', 'shipyard', 'refinery'],
-      produces: { ship_parts: 2.5, machinery: 3 },
+      produces: { ship_parts: 2.5, machinery: 3, repair_kit: 0.6 },
       consumes: { steel: 6, alloy: 4, components: 4, food: 3.5, textiles: 1.5 },
       refineryEff: 0.85, blackMarket: false,
     },
@@ -248,6 +248,12 @@ export function rockSpawn(field: FieldDef, belt: BeltDef, index: number): RockSp
   const sizeRoll = Math.pow(rng.next(), 2.2);
   const radius = type === 'rare' ? 18 + sizeRoll * 60 : 25 + sizeRoll * 175;
   return { pos, radius, type, spinSeed: rng.int(1, 1e9) };
+}
+
+// Buying nav intel on an unvisited station: base fee + range surcharge.
+export function stationInfoCost(from: Vec3, st: StationDef): number {
+  const d = Math.hypot(st.pos.x - from.x, st.pos.y - from.y, st.pos.z - from.z);
+  return Math.round((500 + (d / 1e6) * 35) / 10) * 10;
 }
 
 // Danger level (0..1) at a world position: belts/fields project danger near

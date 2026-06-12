@@ -174,6 +174,7 @@ export class AudioEngine {
   setState(s: {
     throttle: number; cruise: 'off' | 'charging' | 'cruise'; cruiseFrac: number;
     docked: boolean; hullFrac: number; mining: boolean; dead: boolean; turbo: boolean;
+    alarm: boolean;
   }): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
@@ -185,7 +186,9 @@ export class AudioEngine {
     ramp(this.cruiseGain, s.cruise === 'cruise' ? 0.10 + s.cruiseFrac * 0.16 : s.cruise === 'charging' ? 0.06 : s.turbo ? 0.08 : 0);
     ramp(this.lifeGain, flying ? 0.035 : 0);
     ramp(this.stationGain, s.docked ? 0.13 : 0, 0.8);
-    ramp(this.alarmGain, flying && s.hullFrac < 0.25 && !s.dead ? 0.07 : 0, 0.05);
+    // alarm is event-driven (bursts on new damage), not a constant siren —
+    // a permanent klaxon just trains the player to mute the game
+    ramp(this.alarmGain, flying && s.alarm && !s.dead ? 0.07 : 0, 0.05);
     ramp(this.miningGain, s.mining ? 0.12 : 0, 0.08);
   }
 

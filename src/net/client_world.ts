@@ -540,6 +540,7 @@ export class ClientWorld implements IWorld {
   }
   hailRescue(): void { this.cmd({ cmd: 'rescue' }); }
   useFuelCells(qty: number): void { this.cmd({ cmd: 'fuelcells', qty }); }
+  useRepairKit(): void { this.cmd({ cmd: 'repkit' }); }
   buyGood(goodId: string, qty: number): void { this.cmd({ cmd: 'buy', good: goodId, qty }); }
   sellGood(goodId: string, qty: number): void { this.cmd({ cmd: 'sell', good: goodId, qty }); }
   refine(inputGood: string, qty: number): void { this.cmd({ cmd: 'refine', good: inputGood, qty }); }
@@ -548,6 +549,7 @@ export class ClientWorld implements IWorld {
   restockMissiles(): void { this.cmd({ cmd: 'restock' }); }
   restockCannonAmmo(): void { this.cmd({ cmd: 'ammo' }); }
   openDerelict(entityId: number): void { this.cmd({ cmd: 'derelict', id: entityId }); }
+  buyStationInfo(stationId: string): void { this.cmd({ cmd: 'buyinfo', id: stationId }); }
   acceptContract(id: string): void { this.cmd({ cmd: 'accept', id }); }
   abandonContract(id: string): void { this.cmd({ cmd: 'abandon', id }); }
   deliverSupply(id: string): void { this.cmd({ cmd: 'deliver', id }); }

@@ -155,6 +155,71 @@ describe('ironclad corvette', () => {
   });
 });
 
+describe('hull patch kits', () => {
+  it('repairs 30% in the field, but never under fire', () => {
+    const sim = new Sim();
+    const { pid, e, meta } = deepSpacePlayer(sim);
+    sim.addCargo(meta.profile, 'repair_kit', 2);
+    e.hull = Math.round(e.maxHull * 0.4);
+
+    // under fire: locked out
+    const pirate = sim.spawnPirate('fighter', vadd(e.pos, v3(900, 0, 0)), pid);
+    sim.applyDamage(e, 1, pirate.id, false);
+    sim.useRepairKit(pid);
+    expect(sim.freeQty(meta.profile, 'repair_kit')).toBe(2); // not consumed
+    expect(e.hull).toBeLessThan(e.maxHull * 0.5);
+
+    // clear the area and wait out the lockout
+    sim.entities.delete(pirate.id);
+    runTicks(sim, 20 * 11);
+    const before = e.hull;
+    sim.useRepairKit(pid);
+    expect(sim.freeQty(meta.profile, 'repair_kit')).toBe(1);
+    expect(e.hull).toBeGreaterThan(before);
+  });
+
+  it('refuses while docked and when hull is full', () => {
+    const sim = new Sim();
+    const pid = sim.addPlayer('safe');
+    const meta = sim.meta(pid)!;
+    sim.addCargo(meta.profile, 'repair_kit', 1);
+    sim.useRepairKit(pid); // docked
+    expect(sim.freeQty(meta.profile, 'repair_kit')).toBe(1);
+    sim.undock(pid);
+    sim.useRepairKit(pid); // full hull
+    expect(sim.freeQty(meta.profile, 'repair_kit')).toBe(1);
+  });
+});
+
+describe('station info intel', () => {
+  it('unlocks an unvisited station for credits scaled by distance', () => {
+    const sim = new Sim();
+    const pid = sim.addPlayer('scout');
+    const meta = sim.meta(pid)!;
+    meta.profile.credits = 50_000;
+    const unknown = sim.system.stations.find((s) => !meta.profile.knownStations.includes(s.id))!;
+    sim.buyStationInfo(pid, unknown.id);
+    expect(meta.profile.knownStations).toContain(unknown.id);
+    expect(meta.profile.credits).toBeLessThan(50_000);
+    const paid = 50_000 - meta.profile.credits;
+    expect(paid).toBeGreaterThanOrEqual(500);
+    // buying twice is a no-op
+    sim.buyStationInfo(pid, unknown.id);
+    expect(meta.profile.credits).toBe(50_000 - paid);
+  });
+
+  it('rejects when broke', () => {
+    const sim = new Sim();
+    const pid = sim.addPlayer('broke');
+    const meta = sim.meta(pid)!;
+    meta.profile.credits = 10;
+    const unknown = sim.system.stations.find((s) => !meta.profile.knownStations.includes(s.id))!;
+    sim.buyStationInfo(pid, unknown.id);
+    expect(meta.profile.knownStations).not.toContain(unknown.id);
+    expect(meta.profile.credits).toBe(10);
+  });
+});
+
 describe('planetary exclusion field', () => {
   it('bounces ships off and raises a warning event', () => {
     const sim = new Sim();

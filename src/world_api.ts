@@ -54,6 +54,7 @@ export interface IWorld {
   setDestination(dest: Destination | null): void;
   hailRescue(): void;
   useFuelCells(qty: number): void;
+  useRepairKit(): void;
 
   // station services
   buyGood(goodId: string, qty: number): void;
@@ -64,6 +65,7 @@ export interface IWorld {
   restockMissiles(): void;
   restockCannonAmmo(): void;
   openDerelict(entityId: number): void;
+  buyStationInfo(stationId: string): void;
   acceptContract(contractId: string): void;
   abandonContract(contractId: string): void;
   deliverSupply(contractId: string): void;

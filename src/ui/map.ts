@@ -2,9 +2,10 @@
 // Set Destination. Unvisited stations are unlabeled hollow marks — the
 // frontier stays dark until you fly it.
 
-import type { Destination } from '../sim/types';
+import { stationInfoCost } from '../sim/system';
+import type { Destination, StationDef } from '../sim/types';
 import type { IWorld } from '../world_api';
-import { button, el, fmtDistance, fmtTime } from './dom';
+import { button, clearChildren, el, fmtDistance, fmtTime } from './dom';
 import type { WindowManager } from './windows';
 
 interface Pickable {
@@ -29,14 +30,22 @@ export class SystemMap {
   private selected: Pickable | null = null;
   private dragging = false;
 
+  private sidebar: HTMLElement;
+
   constructor(private world: IWorld, private wm: WindowManager, private audio: { click(): void }) {
     const win = wm.register('map', 'SYSTEM CHART — VESPER', true);
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'vf-map-canvas';
-    this.canvas.width = 860;
+    this.canvas.width = 760;
     this.canvas.height = 560;
     this.ctx = this.canvas.getContext('2d')!;
-    win.body.appendChild(this.canvas);
+    const row = el('div', 'vf-map-flex');
+    this.sidebar = el('div', 'vf-map-side');
+    row.appendChild(this.sidebar);
+    const canvasWrap = el('div', 'vf-map-canvaswrap');
+    canvasWrap.appendChild(this.canvas);
+    row.appendChild(canvasWrap);
+    win.body.appendChild(row);
     const bar = el('div', 'vf-map-bar');
     this.info = el('span', 'vf-map-info', 'Click a marker to select it.');
     this.setBtn = button('SET DESTINATION [N]', 'vf-btn accept', () => {
@@ -57,6 +66,7 @@ export class SystemMap {
     win.body.appendChild(bar);
     win.refresh = () => {
       this.isOpen = true;
+      this.rebuildSidebar();
       this.draw();
     };
     win.onClose = () => {
@@ -90,6 +100,59 @@ export class SystemMap {
       const my = (ev.clientY - rect.top) * (this.canvas.height / rect.height);
       this.pick(mx, my);
     });
+  }
+
+  // Sidebar: every station with its services (if known) or a BUY INFO offer
+  // priced by distance.
+  private rebuildSidebar(): void {
+    clearChildren(this.sidebar);
+    const ship = this.world.player;
+    if (!ship) return;
+    const known = new Set(this.world.profile.knownStations);
+    this.sidebar.appendChild(el('div', 'vf-map-side-title', 'STATION REGISTRY'));
+    const stations = [...this.world.system.stations]
+      .sort((a, b) => distTo(ship.pos, a) - distTo(ship.pos, b));
+    for (const st of stations) {
+      const card = el('div', `vf-map-st${known.has(st.id) ? '' : ' unknown'}`);
+      const name = el('div', `vf-map-st-name${st.blackMarket ? ' black' : ''}`, st.name);
+      name.addEventListener('click', () => {
+        this.selectStation(st);
+      });
+      card.appendChild(name);
+      card.appendChild(el('div', 'vf-map-st-dist', fmtDistance(distTo(ship.pos, st))));
+      if (known.has(st.id)) {
+        const tags: string[] = [];
+        if (st.services.includes('market')) tags.push(st.blackMarket ? 'BLACK MKT' : 'MARKET');
+        if (st.services.includes('contracts')) tags.push('JOBS');
+        if (st.services.includes('shipyard')) tags.push('SHIPYARD');
+        if (st.services.includes('refinery')) tags.push(`REF ${Math.round(st.refineryEff * 100)}%`);
+        if (st.services.includes('fuel')) tags.push('FUEL');
+        card.appendChild(el('div', 'vf-map-st-svc', tags.join(' · ')));
+      } else {
+        const cost = stationInfoCost(ship.pos, st);
+        const b = button(`BUY INFO (${cost} cr)`, 'vf-mini', () => {
+          this.audio.click();
+          this.world.buyStationInfo(st.id);
+          setTimeout(() => this.rebuildSidebar(), 120);
+        });
+        if (this.world.profile.credits < cost) b.disabled = true;
+        card.appendChild(b);
+      }
+      this.sidebar.appendChild(card);
+    }
+  }
+
+  private selectStation(st: StationDef): void {
+    this.selected = {
+      kind: 'station', id: st.id, name: st.name,
+      x: st.pos.x, z: st.pos.z, pos: st.pos, known: true,
+    };
+    const ship = this.world.player;
+    const dist = ship ? distTo(ship.pos, st) : 0;
+    const eta = dist / Math.max(1, this.world.shipStats.cruiseMax * 0.6);
+    this.info.textContent = `${st.name} — ${fmtDistance(dist)} · ~${fmtTime(eta)} cruise`;
+    this.audio.click();
+    this.draw();
   }
 
   private scale(): number {
@@ -290,4 +353,8 @@ export class SystemMap {
     ctx.font = '10px monospace';
     ctx.fillText('wheel: zoom · drag: pan · click: select', 10, H - 10);
   }
+}
+
+function distTo(pos: { x: number; y: number; z: number }, st: StationDef): number {
+  return Math.hypot(st.pos.x - pos.x, st.pos.y - pos.y, st.pos.z - pos.z);
 }

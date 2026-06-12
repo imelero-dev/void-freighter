@@ -35,6 +35,8 @@ good('consumer_goods', 'Consumer Electronics', 'consumer', 85, 0.30, 0.7);
 good('machinery', 'Heavy Machinery', 'industrial', 140, 0.30, 1.8);
 good('ship_parts', 'Ship Parts', 'industrial', 180, 0.30, 1.4);
 good('adv_alloys', 'Advanced Alloys', 'industrial', 260, 0.35, 0.9);
+// consumable: patches 30% of max hull in the field — never under fire
+good('repair_kit', 'Hull Patch Kit', 'industrial', 380, 0.30, 0.6);
 // illegal — only tradeable at black market stations
 good('stims', 'Combat Stims', 'illegal', 200, 0.55, 0.3, false);
 good('small_arms', 'Small Arms', 'illegal', 240, 0.50, 0.6, false);
@@ -205,6 +207,8 @@ export const FUEL_PRICE = 2;            // cr per unit
 export const REPAIR_PRICE = 2.5;        // cr per hull point
 export const MISSILE_PRICE = 30;        // cr per missile restock
 export const AMMO_PRICE = 0.6;          // cr per cannon round
+export const REPAIR_KIT_FRACTION = 0.3; // hull restored per kit
+export const COMBAT_LOCKOUT_S = 10;     // no field repairs this soon after taking fire
 export const CRUISE_FUEL_PER_S = 0.25;  // at full cruise speed fraction
 export const INSURANCE_DEDUCTIBLE = 0.12; // fraction of ship value on death
 export const RESCUE_COST_FRACTION = 0.2;  // of credits, min below

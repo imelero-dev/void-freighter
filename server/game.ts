@@ -169,6 +169,7 @@ export class GameServer {
       case 'undock': sim.undock(pid); break;
       case 'rescue': sim.hailRescue(pid); break;
       case 'fuelcells': sim.useFuelCells(pid, int(msg.qty)); break;
+      case 'repkit': sim.useRepairKit(pid); break;
       case 'buy': if (typeof msg.good === 'string') sim.buyGood(pid, msg.good, int(msg.qty)); break;
       case 'sell': if (typeof msg.good === 'string') sim.sellGood(pid, msg.good, int(msg.qty)); break;
       case 'refine': if (typeof msg.good === 'string') sim.refine(pid, msg.good, int(msg.qty)); break;
@@ -177,6 +178,7 @@ export class GameServer {
       case 'restock': sim.restockMissiles(pid); break;
       case 'ammo': sim.restockCannonAmmo(pid); break;
       case 'derelict': sim.openDerelict(pid, int(msg.id)); break;
+      case 'buyinfo': if (typeof msg.id === 'string') sim.buyStationInfo(pid, msg.id.slice(0, 64)); break;
       case 'accept': if (typeof msg.id === 'string') sim.acceptContract(pid, msg.id); break;
       case 'abandon': if (typeof msg.id === 'string') sim.abandonContract(pid, msg.id); break;
       case 'deliver': if (typeof msg.id === 'string') sim.deliverSupply(pid, msg.id); break;

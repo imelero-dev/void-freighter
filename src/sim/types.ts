@@ -183,6 +183,8 @@ export interface Entity {
   aggroId: number | null;
   spawnPos: Vec3;
   aiTimer: number;
+  aiPhase: number;           // attack sub-state: 0 reposition, 1 run, 2 break
+  missileCooldown: number;
   missileAmmo: number;
   cannonAmmo: number;
   lockTimer: number;         // missile lock progress on current target

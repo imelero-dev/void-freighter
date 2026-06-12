@@ -49,6 +49,7 @@ export class GameApp {
   private lowFuelWarned = false;
   private wasAligned = false;
   private fovCurrent = 68;
+  private alarmUntil = 0;   // hull klaxon bursts on damage, then shuts up
 
   onExit: (() => void) | null = null;
 
@@ -182,28 +183,43 @@ export class GameApp {
     this.audio.applyVolume();
   }
 
-  // Optional aim assist: a gentle steering pull toward the locked hostile's
-  // intercept point when it's already near your nose. Helps mouse aiming feel
-  // planted without flying the ship for you.
+  private assistLevel = 0; // smoothed aim-assist strength (no jerky grabs)
+
+  // Optional aim assist: subtle magnetism toward the locked hostile's
+  // intercept point. Three rules keep it from fighting the player:
+  //  - narrow cone (8°): it polishes your aim, it never acquires for you
+  //  - strength fades to zero as soon as you move the mouse yourself
+  //  - smoothed over time, so it eases in/out instead of snatching the nose
   private applyAimAssist(w: IWorld, dt: number): void {
-    if (!settings.aimAssist || this.input.uiMode) return;
+    const decay = () => {
+      this.assistLevel = Math.max(0, this.assistLevel - dt * 6);
+    };
+    if (!settings.aimAssist || this.input.uiMode) return decay();
     const ship = w.player;
-    if (!ship || ship.dockedAt || ship.cruise !== 'off') return;
+    if (!ship || ship.dockedAt || ship.cruise !== 'off') return decay();
     const target = ship.targetId !== null ? w.entities.get(ship.targetId) : null;
-    if (!target || target.dead || target.kind !== 'ship' || !target.pirate) return;
+    if (!target || target.dead || target.kind !== 'ship' || !target.pirate) return decay();
     const d = vdist(ship.pos, target.pos);
-    if (d > w.shipStats.weaponRange * 1.3) return;
+    if (d > w.shipStats.weaponRange * 1.2) return decay();
+
     const aim = leadPoint(ship.pos, ship.vel, target.pos, target.vel, BOLT_SPEED);
-    // intercept direction in ship-local frame
     const qc = { x: -ship.orient.x, y: -ship.orient.y, z: -ship.orient.z, w: ship.orient.w };
     const local = qrot(qc, vnorm(vsub(aim, ship.pos)));
     const yawErr = Math.atan2(-local.x, -local.z);
     const pitchErr = Math.atan2(local.y, -local.z);
     const ang = Math.hypot(yawErr, pitchErr);
-    if (ang > 0.35) return; // only assists once you're roughly on it
-    const strength = 0.5 * (1 - ang / 0.35); // fades out at the cone edge
-    w.input.yaw = clampInput(w.input.yaw + yawErr * strength);
-    w.input.pitch = clampInput(w.input.pitch + pitchErr * strength);
+    const CONE = 0.14;
+    // the player's own stick input dominates: any deliberate movement mutes
+    // the assist almost entirely
+    const userMag = Math.min(1, Math.hypot(w.input.yaw, w.input.pitch) * 2.5);
+    const targetLevel = ang < CONE ? 0.35 * (1 - ang / CONE) * (1 - userMag) : 0;
+    this.assistLevel += (targetLevel - this.assistLevel) * Math.min(1, dt * 8);
+    if (this.assistLevel < 0.01) return;
+    // convert angular error into a small rate command, capped well below
+    // full stick authority
+    const k = 5;
+    w.input.yaw = clampInput(w.input.yaw + clampInput(yawErr * k) * this.assistLevel);
+    w.input.pitch = clampInput(w.input.pitch + clampInput(pitchErr * k) * this.assistLevel);
   }
 
   private toggleWindow(id: string): void {
@@ -375,6 +391,7 @@ export class GameApp {
         mining: this.miningActive,
         dead: false,
         turbo: w.turboActive,
+        alarm: performance.now() < this.alarmUntil,
       });
     }
     this.miningActive = false; // re-set by mining laser events each tick
@@ -408,6 +425,11 @@ export class GameApp {
         if (ev.entityId === w.playerId) {
           if (ev.shield) this.audio.hitShield();
           else this.audio.hitHull();
+          // hull-critical klaxon: a 3.5 s burst per fresh hit, not a loop
+          const p = w.player;
+          if (!ev.shield && p && p.hull / p.maxHull < 0.3) {
+            this.alarmUntil = performance.now() + 3500;
+          }
           // incoming-fire direction warning
           if (ev.fx !== undefined && w.player) {
             this.hud.addDamageDir({ x: ev.fx, y: ev.fy!, z: ev.fz! }, w.player.pos);
