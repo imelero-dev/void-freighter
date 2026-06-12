@@ -1,0 +1,150 @@
+// Keyboard + mouse input: pointer-locked virtual cursor steers pitch/yaw
+// (Freelancer style), keys per the design doc layout.
+
+import type { ShipInput } from '../sim/types';
+
+export type GameAction =
+  | 'toggleCruise' | 'zeroThrottle' | 'toggleAssist' | 'toggleDrill'
+  | 'dock' | 'tab' | 'targetReticle' | 'fireMissile'
+  | 'map' | 'cargo' | 'ship' | 'journal' | 'market' | 'contacts' | 'chat'
+  | 'setDestination' | 'escape' | 'toggleCamera' | 'help';
+
+const KEY_ACTIONS: Record<string, GameAction> = {
+  ShiftLeft: 'toggleCruise', ShiftRight: 'toggleCruise',
+  KeyX: 'zeroThrottle', KeyZ: 'toggleAssist', KeyG: 'toggleDrill',
+  Space: 'dock', Tab: 'tab', KeyT: 'targetReticle',
+  KeyM: 'map', KeyB: 'cargo', KeyC: 'ship', KeyJ: 'journal',
+  KeyK: 'market', KeyL: 'contacts', Enter: 'chat', KeyN: 'setDestination',
+  Escape: 'escape', KeyV: 'toggleCamera', F1: 'help',
+};
+
+export class InputManager {
+  // virtual cursor offset in [-1, 1]
+  cursorX = 0;
+  cursorY = 0;
+  throttle = 0;
+  firing = false;
+  pointerLocked = false;
+  uiMode = false; // true while a window has focus: flight input suspended
+
+  private keys = new Set<string>();
+  private listeners = new Map<GameAction, Array<() => void>>();
+  private fireListeners: Array<(on: boolean) => void> = [];
+  private missileListeners: Array<() => void> = [];
+
+  constructor(private canvas: HTMLCanvasElement) {
+    window.addEventListener('keydown', (ev) => this.onKeyDown(ev));
+    window.addEventListener('keyup', (ev) => this.keys.delete(ev.code));
+    window.addEventListener('blur', () => this.keys.clear());
+    canvas.addEventListener('click', () => {
+      if (!this.uiMode && !this.pointerLocked) void canvas.requestPointerLock();
+    });
+    document.addEventListener('pointerlockchange', () => {
+      this.pointerLocked = document.pointerLockElement === canvas;
+      if (!this.pointerLocked) {
+        this.firing = false;
+        for (const fn of this.fireListeners) fn(false);
+      }
+    });
+    window.addEventListener('mousemove', (ev) => {
+      if (!this.pointerLocked || this.uiMode) return;
+      const s = Math.min(window.innerWidth, window.innerHeight) * 0.42;
+      this.cursorX = clamp(this.cursorX + ev.movementX / s, -1, 1);
+      this.cursorY = clamp(this.cursorY + ev.movementY / s, -1, 1);
+    });
+    window.addEventListener('mousedown', (ev) => {
+      if (!this.pointerLocked || this.uiMode) return;
+      if (ev.button === 0) {
+        this.firing = true;
+        for (const fn of this.fireListeners) fn(true);
+      } else if (ev.button === 2) {
+        for (const fn of this.missileListeners) fn();
+      }
+    });
+    window.addEventListener('mouseup', (ev) => {
+      if (ev.button === 0 && this.firing) {
+        this.firing = false;
+        for (const fn of this.fireListeners) fn(false);
+      }
+    });
+    window.addEventListener('contextmenu', (ev) => ev.preventDefault());
+  }
+
+  private onKeyDown(ev: KeyboardEvent): void {
+    // let the chat input take everything except Escape
+    if (this.uiMode && ev.code !== 'Escape' && ev.code !== 'Tab') {
+      if (ev.code === 'Enter') this.emit('chat');
+      if (ev.code === 'Escape') this.emit('escape');
+      return;
+    }
+    if (ev.code === 'Tab') ev.preventDefault();
+    if (ev.code === 'Space') ev.preventDefault();
+    if (!ev.repeat) {
+      this.keys.add(ev.code);
+      const action = KEY_ACTIONS[ev.code];
+      if (action) this.emit(action);
+    }
+  }
+
+  on(action: GameAction, fn: () => void): void {
+    const list = this.listeners.get(action) ?? [];
+    list.push(fn);
+    this.listeners.set(action, list);
+  }
+
+  onFire(fn: (on: boolean) => void): void {
+    this.fireListeners.push(fn);
+  }
+
+  onMissile(fn: () => void): void {
+    this.missileListeners.push(fn);
+  }
+
+  private emit(action: GameAction): void {
+    for (const fn of this.listeners.get(action) ?? []) fn();
+  }
+
+  releasePointer(): void {
+    if (this.pointerLocked) document.exitPointerLock();
+  }
+
+  zeroThrottle(): void {
+    this.throttle = 0;
+  }
+
+  // Build this frame's ShipInput; dt for throttle ramp.
+  frame(dt: number, out: ShipInput): void {
+    if (this.uiMode) {
+      out.thrustForward = this.throttle;
+      out.thrustRight = 0;
+      out.thrustUp = 0;
+      out.pitch = 0;
+      out.yaw = 0;
+      out.roll = 0;
+      out.brake = false;
+      return;
+    }
+    const k = (code: string) => this.keys.has(code);
+    if (k('KeyW')) this.throttle = clamp(this.throttle + dt * 0.7, -0.3, 1);
+    if (k('KeyS')) this.throttle = clamp(this.throttle - dt * 0.7, -0.3, 1);
+    out.thrustForward = this.throttle;
+    out.thrustRight = (k('KeyD') ? 1 : 0) - (k('KeyA') ? 1 : 0);
+    out.thrustUp = (k('KeyR') ? 1 : 0) - (k('KeyF') ? 1 : 0);
+    out.roll = (k('KeyE') ? 1 : 0) - (k('KeyQ') ? 1 : 0);
+    out.brake = k('ControlLeft') || k('ControlRight');
+    // virtual cursor with a small deadzone and smooth curve
+    const dead = 0.06;
+    const curve = (v: number) => {
+      const a = Math.abs(v);
+      if (a < dead) return 0;
+      const t = (a - dead) / (1 - dead);
+      return Math.sign(v) * t * t * (3 - 2 * t);
+    };
+    out.yaw = -curve(this.cursorX);
+    out.pitch = -curve(this.cursorY);
+  }
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return v < min ? min : v > max ? max : v;
+}

@@ -315,6 +315,14 @@ export class Sim {
     this.time += dt;
     this.tickCount++;
 
+    // render interpolation bases
+    for (const e of this.entities.values()) {
+      e.prevPos.x = e.pos.x;
+      e.prevPos.y = e.pos.y;
+      e.prevPos.z = e.pos.z;
+      e.prevOrient = qclone(e.orient);
+    }
+
     const econEvent = this.economy.tick(this.time, dt);
     if (econEvent) {
       this.newsLog.unshift(econEvent.headline);
@@ -654,7 +662,7 @@ export class Sim {
       edge = Math.min(edge, vdist(pos, p.pos) - p.radius * 1.5);
     }
     for (const s of this.system.stations) {
-      edge = Math.min(edge, vdist(pos, s.pos) - 2600);
+      edge = Math.min(edge, vdist(pos, s.pos) - 1500);
     }
     for (const belt of this.system.belts) {
       for (const f of belt.fields) {

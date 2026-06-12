@@ -62,6 +62,7 @@ export class OfflineWorld implements IWorld {
   get drillOn(): boolean { return this.meta.drillOn; }
   get input(): ShipInput { return this.meta.input; }
   set input(v: ShipInput) { Object.assign(this.meta.input, v); }
+  get renderAlpha(): number { return this.acc / DT; }
 
   get dockedStation(): StationDef | null {
     const at = this.player?.dockedAt;
