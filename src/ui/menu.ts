@@ -12,6 +12,14 @@ export interface MenuCallbacks {
   settingsChanged(): void;
 }
 
+// phones fly in landscape: best-effort orientation pin (most browsers only
+// grant it in fullscreen; elsewhere it rejects and the rotate hint covers us)
+function tryLockLandscape(): void {
+  if (isMobile() && screen.orientation && typeof (screen.orientation as any).lock === 'function') {
+    (screen.orientation as any).lock('landscape').catch(() => { /* unsupported / denied */ });
+  }
+}
+
 const CONTROLS: Array<[string, string]> = [
   ['Shift / W', 'throttle up (gradual)'], ['Ctrl / S', 'throttle down — hold past zero to brake'],
   ['Caps Lock', 'cruise drive — "hypervelocity"'], ['X', 'cut throttle'],
@@ -44,6 +52,21 @@ export class Menu {
     this.buildHelp();
     this.statusLine = el('div', 'vf-menu-status', '');
     this.build();
+    // phones in portrait outside fullscreen: nudge toward landscape (the
+    // flight UI assumes a wide viewport)
+    if (isMobile()) {
+      const hint = el('div', 'vf-rotate-hint', '↻  Rotate device for best experience');
+      document.body.appendChild(hint);
+      const update = () => {
+        const portrait = window.innerHeight > window.innerWidth;
+        if (portrait) tryLockLandscape();
+        hint.style.display = portrait && !document.fullscreenElement ? 'block' : 'none';
+      };
+      window.addEventListener('resize', update);
+      window.addEventListener('orientationchange', update);
+      document.addEventListener('fullscreenchange', update);
+      update();
+    }
   }
 
   private resumeBtn: HTMLButtonElement | null = null;
@@ -164,6 +187,8 @@ export class Menu {
     checkbox('Show FPS', () => settings.showFps, (v) => { settings.showFps = v; });
     if (isMobile()) {
       checkbox('Touch controls', () => settings.mobileControls, (v) => { settings.mobileControls = v; });
+      slider('Touch sensitivity', 0.5, 3, 0.1,
+        () => settings.touchSens, (v) => { settings.touchSens = v; }, (v) => `${v.toFixed(1)}×`);
     }
     box.appendChild(setBox);
 
@@ -175,6 +200,7 @@ export class Menu {
       } else {
         void document.documentElement.requestFullscreen().then(() => {
           fsBtn.textContent = '⛶ EXIT FULLSCREEN';
+          tryLockLandscape();
         }).catch(() => { /* browser denied */ });
       }
     });
@@ -188,6 +214,7 @@ export class Menu {
       } else {
         kb?.unlock?.();
       }
+      if (document.fullscreenElement) tryLockLandscape();
     });
     fsRow.appendChild(fsBtn);
     fsRow.appendChild(button('CONTROLS [F1]', 'vf-btn', () => this.toggleHelp()));

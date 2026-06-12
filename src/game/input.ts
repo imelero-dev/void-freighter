@@ -32,6 +32,9 @@ export class InputManager {
   // roll-hold state written by TouchControls (no key code to bind to)
   touchRollLeft = false;
   touchRollRight = false;
+  // strafe stick written by TouchControls drag-from-roll, [-1, 1]
+  touchStrafeX = 0;
+  touchStrafeY = 0;
 
   private keys = new Set<string>();
   private listeners = new Map<GameAction, Array<() => void>>();
@@ -189,8 +192,8 @@ export class InputManager {
     out.thrustForward = this.throttle;
     // pinned at 100% and still pushing -> turbo overburn
     out.turbo = up && this.throttle >= 1;
-    out.thrustRight = (b('strafeRight') ? 1 : 0) - (b('strafeLeft') ? 1 : 0);
-    out.thrustUp = (b('strafeUp') ? 1 : 0) - (b('strafeDown') ? 1 : 0);
+    out.thrustRight = clamp((b('strafeRight') ? 1 : 0) - (b('strafeLeft') ? 1 : 0) + this.touchStrafeX, -1, 1);
+    out.thrustUp = clamp((b('strafeUp') ? 1 : 0) - (b('strafeDown') ? 1 : 0) + this.touchStrafeY, -1, 1);
     out.roll = (b('rollRight') || this.touchRollRight ? 1 : 0) - (b('rollLeft') || this.touchRollLeft ? 1 : 0);
     out.brake = down && this.throttle <= 0.02;
     // virtual cursor with a small deadzone and smooth curve

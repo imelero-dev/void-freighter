@@ -22,6 +22,7 @@ import { StationUi } from '../ui/station_windows';
 import { WindowManager } from '../ui/windows';
 import { AudioEngine } from './audio';
 import { CameraRig } from './camera';
+import { buzz, HAPTIC } from './haptics';
 import { bindAxis, bindButton, clearHotasBind, describeAxis, describeButton, GamepadManager } from './gamepad';
 import { InputManager } from './input';
 import { isMobile, TouchControls } from './touch';
@@ -56,6 +57,7 @@ export class GameApp {
   private wasDocked = false;
   private lowFuelWarned = false;
   private wasAligned = false;
+  private wasOverheated = false;
   private fovCurrent = 68;
   private alarmUntil = 0;   // hull klaxon bursts on damage, then shuts up
 
@@ -553,6 +555,7 @@ export class GameApp {
     if (dt > 0.25) dt = 0.25;
 
     const w = this.world;
+    this.touchControls?.update(dt); // throttle bar sync + look-stick recenter
     // single-player pause: the sim freezes entirely (online keeps running —
     // you can't pause other people's universe)
     if (this.paused && !w.online) {
@@ -611,11 +614,17 @@ export class GameApp {
     if (this.hud.destAligned && !this.wasAligned) this.audio.alignSnap();
     this.wasAligned = this.hud.destAligned;
 
+    // drill overheat buzz (rising edge — the audio drone already ramps with heat)
+    const overheated = w.drillHeat >= 1;
+    if (overheated && !this.wasOverheated) buzz(HAPTIC.overheat);
+    this.wasOverheated = overheated;
+
     // credits readout
     this.creditsHud.textContent = `${fmtCredits(w.profile.credits)}${w.online ? (w.connected ? ' · ONLINE' : ' · RECONNECTING…') : ''}`;
 
     // dock state transitions
     const docked = !!ship?.dockedAt;
+    this.touchControls?.setDocked(docked);
     if (docked && !this.wasDocked) {
       this.stationUi.updateDockBar();
       this.input.releasePointer();
@@ -692,7 +701,10 @@ export class GameApp {
       case 'hit': {
         if (ev.entityId === w.playerId) {
           if (ev.shield) this.audio.hitShield();
-          else this.audio.hitHull();
+          else {
+            this.audio.hitHull();
+            buzz(HAPTIC.hullHit);
+          }
           // hull-critical klaxon: a 3.5 s burst per fresh hit, not a loop
           const p = w.player;
           if (!ev.shield && p && p.hull / p.maxHull < 0.3) {
@@ -721,6 +733,7 @@ export class GameApp {
       }
       case 'docked': {
         this.audio.dockThunk();
+        buzz(HAPTIC.docked);
         const st = w.system.stations.find((s) => s.id === ev.stationId);
         this.hud.pushLog(`Docked at ${st?.name ?? ev.stationId}. Shields charging.`, '#8fb');
         break;
@@ -747,6 +760,7 @@ export class GameApp {
         break;
       case 'lockWarning':
         this.audio.lockWarning();
+        buzz(HAPTIC.lockWarning);
         this.hud.flashAlert('⚠ MISSILE LOCK ⚠');
         break;
       case 'hostileDetected':

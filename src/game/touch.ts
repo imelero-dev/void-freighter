@@ -1,7 +1,8 @@
 // Touch controls for phones/tablets: floating look stick (left thumb),
-// absolute throttle slider, fire/secondary hold buttons and an action bar.
-// Pure DOM overlay in the amber HUD style; it writes straight into the
-// InputManager so the sim keeps seeing a single input source.
+// absolute throttle slider, fire/secondary hold buttons and two collapsible
+// NAV/SYS action menus in the top-left corner (ROLL holds stay at the bottom
+// corners). Pure DOM overlay in the amber HUD style; it writes straight into
+// the InputManager so the sim keeps seeing a single input source.
 
 import { el } from '../ui/dom';
 import { settings } from '../ui/settings';
@@ -19,6 +20,8 @@ export function isMobile(): boolean {
 
 const NUB_RADIUS = 80;     // max visual stick deflection, px
 const RECENTER_S = 0.15;   // cursor glide back to center after release
+const STRAFE_ENGAGE = 22;  // px of drag off a ROLL button before strafe kicks in
+const STRAFE_RANGE = 70;   // px of drag for full strafe deflection
 
 export class TouchControls {
   private root: HTMLElement;
@@ -35,39 +38,47 @@ export class TouchControls {
   private recenterFromX = 0;
   private recenterFromY = 0;
   private visible = true;
-  private raf = 0;
-  private lastT = 0;
+  private docked = false;
+  private popovers: HTMLElement[] = [];
+  private strafeResets: Array<() => void> = [];
 
   constructor(private input: InputManager) {
     this.root = this.build();
     document.body.appendChild(this.root);
-    // zone geometry depends on the viewport: rebuild on rotation/resize
+    // all geometry is CSS-driven; on rotation/resize just drop any touches
+    // mid-gesture (their coordinates no longer mean anything)
     window.addEventListener('resize', this.onLayoutChange);
     window.addEventListener('orientationchange', this.onLayoutChange);
-    this.lastT = performance.now();
-    this.raf = requestAnimationFrame(this.loop);
+    // capture phase so a tap anywhere outside an open menu closes it before
+    // whatever it landed on handles the touch
+    document.addEventListener('touchstart', this.onDocTouch, true);
   }
 
-  private onLayoutChange = () => this.rebuild();
-
-  rebuild(): void {
-    this.releaseAll();
-    this.root.remove();
-    this.root = this.build();
-    this.root.style.display = this.visible ? '' : 'none';
-    document.body.appendChild(this.root);
-  }
+  private onLayoutChange = () => this.releaseAll();
 
   setVisible(on: boolean): void {
     this.visible = on;
-    this.root.style.display = on ? '' : 'none';
-    if (!on) this.releaseAll();
+    this.applyVisibility();
+  }
+
+  // docked: the dockbar covers the top of the screen and has every service
+  // plus UNDOCK — flight controls would sit dead underneath it
+  setDocked(on: boolean): void {
+    if (this.docked === on) return;
+    this.docked = on;
+    this.applyVisibility();
+  }
+
+  private applyVisibility(): void {
+    const show = this.visible && !this.docked;
+    this.root.style.display = show ? '' : 'none';
+    if (!show) this.releaseAll();
   }
 
   destroy(): void {
-    cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.onLayoutChange);
     window.removeEventListener('orientationchange', this.onLayoutChange);
+    document.removeEventListener('touchstart', this.onDocTouch, true);
     this.releaseAll();
     this.root.remove();
   }
@@ -77,16 +88,19 @@ export class TouchControls {
   private build(): HTMLElement {
     const root = el('div');
     root.id = 'vf-touch';
+    this.popovers = [];
+    this.strafeResets = [];
 
-    // top strip: window toggles
-    const top = el('div', 'vf-touch-top');
-    const topActions: Array<[string, GameAction]> = [
+    // top-left: two collapsed menus replace the old top/bottom button strips
+    const menus = el('div', 'vf-touch-menus');
+    menus.appendChild(this.menuButton('NAV ▾', [
       ['MAP', 'map'], ['CARGO', 'cargo'], ['SHIP', 'ship'], ['JRNL', 'journal'],
-    ];
-    for (const [label, action] of topActions) {
-      top.appendChild(this.tapButton(label, () => this.input.trigger(action)));
-    }
-    root.appendChild(top);
+    ]));
+    menus.appendChild(this.menuButton('SYS ▾', [
+      ['CRUISE', 'toggleCruise'], ['DOCK', 'dock'], ['DRILL', 'toggleDrill'],
+      ['ASSIST', 'toggleAssist'], ['LIGHTS', 'lights'], ['CAM', 'toggleCamera'],
+    ]));
+    root.appendChild(menus);
 
     // look zone (left thumb): floating joystick drives the virtual cursor
     this.lookZone = el('div', 'vf-touch-look');
@@ -123,20 +137,103 @@ export class TouchControls {
     sec.classList.add('vf-touch-secondary');
     root.appendChild(sec);
 
-    // bottom bar: roll holds + discrete actions
-    const bottom = el('div', 'vf-touch-bottom');
-    bottom.appendChild(this.holdButton('◀ROLL', (on) => { this.input.touchRollLeft = on; }));
-    const bottomActions: Array<[string, GameAction]> = [
-      ['CRUISE', 'toggleCruise'], ['DOCK', 'dock'], ['DRILL', 'toggleDrill'],
-      ['ASSIST', 'toggleAssist'], ['LIGHTS', 'lights'], ['CAM', 'toggleCamera'],
-    ];
-    for (const [label, action] of bottomActions) {
-      bottom.appendChild(this.tapButton(label, () => this.input.trigger(action)));
-    }
-    bottom.appendChild(this.holdButton('ROLL▶', (on) => { this.input.touchRollRight = on; }));
-    root.appendChild(bottom);
+    // roll holds stay pinned to the bottom corners: they are held through
+    // whole maneuvers, a popover would be unworkable. Dragging off them
+    // turns the hold into a strafe mini-stick (issue #1).
+    const rollL = this.rollButton('◀ROLL', (on) => { this.input.touchRollLeft = on; });
+    rollL.classList.add('vf-touch-roll-l');
+    root.appendChild(rollL);
+    const rollR = this.rollButton('ROLL▶', (on) => { this.input.touchRollRight = on; });
+    rollR.classList.add('vf-touch-roll-r');
+    root.appendChild(rollR);
     return root;
   }
+
+  // Hold = roll, drag past STRAFE_ENGAGE = strafe stick centered on the
+  // touch-down point (right/left = lateral, up/down = vertical). Once strafe
+  // engages it stays engaged until release so the mode never flaps.
+  private rollButton(label: string, setRoll: (on: boolean) => void): HTMLButtonElement {
+    const b = el('button', 'vf-touch-btn', label);
+    let id: number | null = null;
+    let ox = 0;
+    let oy = 0;
+    let strafing = false;
+    const reset = () => {
+      id = null;
+      strafing = false;
+      b.classList.remove('held');
+      b.textContent = label;
+      setRoll(false);
+      this.input.touchStrafeX = 0;
+      this.input.touchStrafeY = 0;
+    };
+    this.strafeResets.push(reset);
+    b.addEventListener('touchstart', (ev) => {
+      ev.preventDefault();
+      if (id !== null) return;
+      const t = ev.changedTouches[0];
+      id = t.identifier;
+      ox = t.clientX;
+      oy = t.clientY;
+      b.classList.add('held');
+      setRoll(true);
+    }, { passive: false });
+    b.addEventListener('touchmove', (ev) => {
+      ev.preventDefault();
+      const t = findTouch(ev.changedTouches, id);
+      if (!t) return;
+      const dx = t.clientX - ox;
+      const dy = t.clientY - oy;
+      if (!strafing && Math.hypot(dx, dy) > STRAFE_ENGAGE) {
+        strafing = true;
+        setRoll(false);
+        b.textContent = '✛ STRAFE';
+      }
+      if (strafing) {
+        this.input.touchStrafeX = clamp(dx / STRAFE_RANGE, -1, 1);
+        this.input.touchStrafeY = clamp(-dy / STRAFE_RANGE, -1, 1);
+      }
+    }, { passive: false });
+    const up = (ev: TouchEvent) => {
+      if (!findTouch(ev.changedTouches, id)) return;
+      reset();
+    };
+    b.addEventListener('touchend', up);
+    b.addEventListener('touchcancel', up);
+    return b;
+  }
+
+  // collapsed menu button + its popover; only one popover open at a time
+  private menuButton(label: string, actions: Array<[string, GameAction]>): HTMLElement {
+    const wrap = el('div', 'vf-touch-menu');
+    const btn = el('button', 'vf-touch-menubtn', label);
+    const pop = el('div', 'vf-touch-popover');
+    for (const [l, action] of actions) {
+      pop.appendChild(this.tapButton(l, () => {
+        this.input.trigger(action);
+        this.closePopovers();
+      }));
+    }
+    btn.addEventListener('touchstart', (ev) => {
+      ev.preventDefault();
+      const wasOpen = pop.classList.contains('open');
+      this.closePopovers();
+      if (!wasOpen) pop.classList.add('open');
+    }, { passive: false });
+    wrap.appendChild(btn);
+    wrap.appendChild(pop);
+    this.popovers.push(pop);
+    return wrap;
+  }
+
+  private closePopovers(): void {
+    for (const p of this.popovers) p.classList.remove('open');
+  }
+
+  private onDocTouch = (ev: TouchEvent) => {
+    const t = ev.target;
+    if (!(t instanceof Element) || !t.closest('.vf-touch-menu')) this.closePopovers();
+  };
 
   private tapButton(label: string, fn: () => void): HTMLButtonElement {
     const b = el('button', 'vf-touch-btn', label);
@@ -193,8 +290,9 @@ export class TouchControls {
     const len = Math.hypot(dx, dy);
     const k = len > NUB_RADIUS ? NUB_RADIUS / len : 1;
     this.placeStick(this.nub, this.lookOx + dx * k, this.lookOy + dy * k);
-    // same scale as the mouse cursor, ×1.5 sensitivity for thumbs
-    const s = Math.min(window.innerWidth, window.innerHeight) * 0.34 / (settings.sensitivity * 1.5);
+    // same scale as the mouse cursor; thumbs get their own multiplier
+    // ("Touch sensitivity" in SETTINGS, issue #6)
+    const s = Math.min(window.innerWidth, window.innerHeight) * 0.34 / settings.touchSens;
     const my = settings.invertY ? -dy : dy;
     this.input.cursorX = clamp(dx / s, -1, 1);
     this.input.cursorY = clamp(my / s, -1, 1);
@@ -222,7 +320,7 @@ export class TouchControls {
     ev.preventDefault();
     if (this.input.uiMode) return;
     let t = findTouch(ev.changedTouches, this.throttleId);
-    if (!t && ev.type === 'touchstart') {
+    if (!t && ev.type === 'touchstart' && this.throttleId === null) {
       t = ev.changedTouches[0];
       this.throttleId = t.identifier;
     }
@@ -237,12 +335,10 @@ export class TouchControls {
 
   // ----- per-frame upkeep --------------------------------------------------
 
-  private loop = () => {
-    this.raf = requestAnimationFrame(this.loop);
-    const now = performance.now();
-    const dt = Math.min(0.25, (now - this.lastT) / 1000); // same clamp as the main loop
-    this.lastT = now;
-    if (!this.visible) return;
+  // Driven by GameApp's render loop (no rAF of its own): throttle bar sync
+  // and the look-stick recenter glide.
+  update(dt: number): void {
+    if (!this.visible || this.docked) return;
     // bar tracks the live value (keyboard ramp / cut-throttle move it too)
     this.throttleFill.style.height = `${Math.round(clamp(this.input.throttle, 0, 1) * 100)}%`;
     if (this.lookId === null && this.recenterLeft > 0) {
@@ -252,9 +348,10 @@ export class TouchControls {
       this.input.cursorX = this.recenterFromX * e;
       this.input.cursorY = this.recenterFromY * e;
     }
-  };
+  }
 
   private releaseAll(): void {
+    this.closePopovers();
     this.lookId = null;
     this.throttleId = null;
     this.recenterLeft = 0;
@@ -264,6 +361,7 @@ export class TouchControls {
     this.input.rmbOn(false);
     this.input.touchRollLeft = false;
     this.input.touchRollRight = false;
+    for (const reset of this.strafeResets) reset();
     this.stickBase.style.display = 'none';
     this.nub.style.display = 'none';
   }
