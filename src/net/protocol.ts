@@ -11,8 +11,8 @@ export const PROFILE_EVERY_SNAPS = 5;    // profile piggybacked at 2 Hz
 
 export interface InputMsg {
   t: 'input';
-  // [thrustForward, thrustRight, thrustUp, pitch, yaw, roll, brake]
-  i: [number, number, number, number, number, number, number];
+  // [thrustForward, thrustRight, thrustUp, pitch, yaw, roll, brake, turbo]
+  i: [number, number, number, number, number, number, number, number];
 }
 
 export interface CmdMsg {
@@ -52,6 +52,8 @@ export interface WireShip {
   ca?: number; // cannon ammo (self only)
   pl?: 1;  // is a player
   dl?: 1;  // derelict hulk
+  tb?: number; // turbo charge ×100 (self only)
+  ta?: 1;  // turbo active
 }
 
 export interface WireRock {

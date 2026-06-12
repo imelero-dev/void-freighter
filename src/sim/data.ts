@@ -348,3 +348,11 @@ export const CRUISE_MIN_SPEED = 800;    // m/s entry speed
 export const CRUISE_MASS_LOCK = 220_000; // m from planet/station center: cruise drops out (scaled by body)
 export const CRUISE_DROP_SPEED = 220;   // exit speed after cruise
 export const COLLISION_DAMAGE_SPEED = 90; // m/s impact over this damages hull
+
+// Turbo overburn: hold throttle-up at 100% to push past the speed cap.
+// Free in safe space; with hostiles nearby it drains a burst gauge.
+export const TURBO_SPEED = 1000;          // m/s ceiling
+export const TURBO_ACCEL_MULT = 2.2;
+export const TURBO_BURST_S = 3.5;         // gauge duration in combat
+export const TURBO_RECHARGE_S = 9;        // empty -> full
+export const TURBO_ENEMY_RADIUS = 6000;   // hostiles inside this force burst mode

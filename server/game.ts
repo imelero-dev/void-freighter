@@ -146,10 +146,11 @@ export class GameServer {
     }
     const sim = this.sim;
     const pid = session.pid;
-    if (msg.t === 'input' && Array.isArray(msg.i) && msg.i.length === 7) {
+    if (msg.t === 'input' && Array.isArray(msg.i) && msg.i.length >= 7) {
       sim.setInput(pid, {
         thrustForward: Number(msg.i[0]), thrustRight: Number(msg.i[1]), thrustUp: Number(msg.i[2]),
         pitch: Number(msg.i[3]), yaw: Number(msg.i[4]), roll: Number(msg.i[5]), brake: !!msg.i[6],
+        turbo: !!msg.i[7],
       });
       return;
     }
@@ -264,9 +265,12 @@ export class GameServer {
         ents.push(wireEntity(e));
       }
       session.snapCounter++;
+      const selfWire = wireShip(p);
+      selfWire.tb = Math.round(meta.turboCharge * 100);
+      if (meta.turboActive) selfWire.ta = 1;
       const snap: Record<string, unknown> = {
         t: 'snap', tick: this.sim.tickCount, time: Math.round(this.sim.time * 100) / 100,
-        self: wireShip(p), ents,
+        self: selfWire, ents,
         // clients generate pristine rocks deterministically; sync only damage
         rocks: this.sim.touchedRocks(),
       };

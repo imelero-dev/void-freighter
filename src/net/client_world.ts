@@ -2,7 +2,7 @@
 // IWorld by mirroring server snapshots; the own ship is predicted locally
 // with the shared flight integrator and reconciled against server state.
 
-import { shipStats, ROCK_TYPES, type ShipStats } from '../sim/data';
+import { shipStats, ROCK_TYPES, TURBO_ACCEL_MULT, TURBO_SPEED, type ShipStats } from '../sim/data';
 import { integrateFlight } from '../sim/flight';
 import { blankEntity, defaultProfile, SHIP_RADIUS } from '../sim/sim';
 import { dangerAt, generateSystem, rockSpawn } from '../sim/system';
@@ -76,6 +76,8 @@ export class ClientWorld implements IWorld {
   destination: Destination | null = null;
   flightAssist = true;
   drillOn = false;
+  turboCharge = 1;
+  turboActive = false;
   connected = false;
   time = 0;
   ready: Promise<void>;
@@ -193,7 +195,7 @@ export class ClientWorld implements IWorld {
         const i = this.input;
         this.ws.send(JSON.stringify({
           t: 'input',
-          i: [r3(i.thrustForward), r3(i.thrustRight), r3(i.thrustUp), r3(i.pitch), r3(i.yaw), r3(i.roll), i.brake ? 1 : 0],
+          i: [r3(i.thrustForward), r3(i.thrustRight), r3(i.thrustUp), r3(i.pitch), r3(i.yaw), r3(i.roll), i.brake ? 1 : 0, i.turbo ? 1 : 0],
         }));
       }
     }
@@ -211,8 +213,13 @@ export class ClientWorld implements IWorld {
         e.vel = v3(sv.vx, sv.vy, sv.vz);
         e.orient = qnlerp(e.orient, { x: sv.q[0], y: sv.q[1], z: sv.q[2], w: sv.q[3] }, 1 - Math.exp(-dt * 6));
       } else {
-        // predict locally with the shared integrator
-        integrateFlight(e, this.input, this.shipStats, dt, this.flightAssist);
+        // predict locally with the shared integrator (turbo overrides the cap,
+        // mirroring the server's perf calculation)
+        const stats = this.shipStats;
+        const perf = this.turboActive
+          ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate }
+          : stats;
+        integrateFlight(e, this.input, perf, dt, this.flightAssist);
         // reconcile against extrapolated server state
         const age = (performance.now() - this.lastSnapAt) / 1000;
         const sx = sv.x + sv.vx * age, sy = sv.y + sv.vy * age, sz = sv.z + sv.vz * age;
@@ -452,6 +459,8 @@ export class ClientWorld implements IWorld {
       e.lockedOn = !!s.lk;
       e.lockTimer = s.lt ?? 0;
       e.throttle = s.th;
+      this.turboCharge = (s.tb ?? 100) / 100;
+      this.turboActive = !!s.ta;
       if (performance.now() > this.targetLockUntil) {
         e.targetId = s.tg ?? null;
       }

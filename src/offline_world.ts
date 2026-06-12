@@ -60,6 +60,8 @@ export class OfflineWorld implements IWorld {
   get newsLog(): string[] { return this.sim.newsLog; }
   get flightAssist(): boolean { return this.meta.flightAssist; }
   get drillOn(): boolean { return this.meta.drillOn; }
+  get turboCharge(): number { return this.meta.turboCharge; }
+  get turboActive(): boolean { return this.meta.turboActive; }
   get input(): ShipInput { return this.meta.input; }
   set input(v: ShipInput) { Object.assign(this.meta.input, v); }
   get renderAlpha(): number { return this.acc / DT; }

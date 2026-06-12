@@ -24,6 +24,8 @@ export interface IWorld {
   readonly online: boolean;
   readonly flightAssist: boolean;
   readonly drillOn: boolean;
+  readonly turboCharge: number;  // 0..1 burst gauge
+  readonly turboActive: boolean;
   // 0..1 fraction between the previous and current sim tick, for render interpolation
   readonly renderAlpha: number;
 

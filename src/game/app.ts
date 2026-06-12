@@ -298,7 +298,8 @@ export class GameApp {
       const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
       const maneuverKick = Math.min(1.1, speed / Math.max(1, w.shipStats.maxSpeed)) * 6;
       const cruiseKick = ship.cruise === 'cruise' ? Math.min(1, ship.cruiseSpeed / w.shipStats.cruiseMax) * 10 + 3 : 0;
-      this.fovCurrent += (68 + Math.max(maneuverKick, cruiseKick) - this.fovCurrent) * Math.min(1, dt * 4);
+      const turboKick = w.turboActive ? 6 + (speed / 1000) * 8 : 0;
+      this.fovCurrent += (68 + Math.max(maneuverKick, cruiseKick, turboKick) - this.fovCurrent) * Math.min(1, dt * 4);
       this.sm.setFov(this.fovCurrent);
     }
     this.bodies.update(w.time);
@@ -364,6 +365,7 @@ export class GameApp {
         hullFrac,
         mining: this.miningActive,
         dead: false,
+        turbo: w.turboActive,
       });
     }
     this.miningActive = false; // re-set by mining laser events each tick

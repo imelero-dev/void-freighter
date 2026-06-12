@@ -173,15 +173,16 @@ export class AudioEngine {
   // Per-frame state tracking. All values already smoothed by setTargetAtTime.
   setState(s: {
     throttle: number; cruise: 'off' | 'charging' | 'cruise'; cruiseFrac: number;
-    docked: boolean; hullFrac: number; mining: boolean; dead: boolean;
+    docked: boolean; hullFrac: number; mining: boolean; dead: boolean; turbo: boolean;
   }): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const ramp = (g: GainNode, v: number, tc = 0.25) => g.gain.setTargetAtTime(v, t, tc);
     const flying = !s.docked;
-    ramp(this.engineGain, flying ? 0.05 + Math.abs(s.throttle) * 0.16 : 0.015);
-    this.engineOsc.frequency.setTargetAtTime(flying ? 48 + Math.abs(s.throttle) * 40 + (s.cruise === 'cruise' ? 35 : 0) : 36, t, 0.3);
-    ramp(this.cruiseGain, s.cruise === 'cruise' ? 0.10 + s.cruiseFrac * 0.16 : s.cruise === 'charging' ? 0.06 : 0);
+    ramp(this.engineGain, flying ? 0.05 + Math.abs(s.throttle) * 0.16 + (s.turbo ? 0.1 : 0) : 0.015);
+    this.engineOsc.frequency.setTargetAtTime(
+      flying ? 48 + Math.abs(s.throttle) * 40 + (s.cruise === 'cruise' ? 35 : 0) + (s.turbo ? 55 : 0) : 36, t, 0.3);
+    ramp(this.cruiseGain, s.cruise === 'cruise' ? 0.10 + s.cruiseFrac * 0.16 : s.cruise === 'charging' ? 0.06 : s.turbo ? 0.08 : 0);
     ramp(this.lifeGain, flying ? 0.035 : 0);
     ramp(this.stationGain, s.docked ? 0.13 : 0, 0.8);
     ramp(this.alarmGain, flying && s.hullFrac < 0.25 && !s.dead ? 0.07 : 0, 0.05);

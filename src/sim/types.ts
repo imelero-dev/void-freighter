@@ -305,10 +305,11 @@ export interface ShipInput {
   yaw: number;
   roll: number;
   brake: boolean;
+  turbo: boolean;         // throttle pinned at 100% and still pushing
 }
 
 export function emptyShipInput(): ShipInput {
-  return { thrustForward: 0, thrustRight: 0, thrustUp: 0, pitch: 0, yaw: 0, roll: 0, brake: false };
+  return { thrustForward: 0, thrustRight: 0, thrustUp: 0, pitch: 0, yaw: 0, roll: 0, brake: false, turbo: false };
 }
 
 // ---------------------------------------------------------------------------

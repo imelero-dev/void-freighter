@@ -19,6 +19,76 @@ function deepSpacePlayer(sim: Sim) {
   return { pid, e, meta };
 }
 
+describe('turbo overburn', () => {
+  it('pinned throttle in empty space sails past the speed cap toward 1 km/s', () => {
+    const sim = new Sim();
+    const { pid, e, meta } = deepSpacePlayer(sim);
+    meta.input.thrustForward = 1;
+    meta.input.turbo = true;
+    runTicks(sim, 20 * 25);
+    const speed = Math.hypot(e.vel.x, e.vel.y, e.vel.z);
+    expect(speed).toBeGreaterThan(meta.stats.maxSpeed * 1.5);
+    expect(speed).toBeLessThanOrEqual(1001);
+    // free overburn: the gauge stays charged with nobody around
+    expect(meta.turboCharge).toBeGreaterThan(0.9);
+  });
+
+  it('with hostiles nearby it is a burst limited by the gauge', () => {
+    const sim = new Sim();
+    const { pid, e, meta } = deepSpacePlayer(sim);
+    sim.spawnPirate('fighter', vadd(e.pos, v3(2000, 0, 0)));
+    meta.input.thrustForward = 1;
+    meta.input.turbo = true;
+    runTicks(sim, 20 * 5); // 5 s > 3.5 s gauge
+    expect(meta.turboCharge).toBe(0);
+    expect(meta.turboActive).toBe(false); // drained
+    // letting go recharges
+    meta.input.turbo = false;
+    runTicks(sim, 20 * 10);
+    expect(meta.turboCharge).toBeGreaterThan(0.9);
+  });
+});
+
+describe('encounter pacing', () => {
+  it('loitering in a dangerous field draws pirates within a few minutes', () => {
+    const sim = new Sim();
+    const pid = sim.addPlayer('bait');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const field = sim.system.belts.find((b) => b.danger > 0.5)!.fields[0];
+    e.pos = { ...field.pos };
+    e.vel = v3();
+    sim.meta(pid)!.undockInvuln = 1e9; // observe without dying
+    let sawPirate = false;
+    for (let i = 0; i < 20 * 240 && !sawPirate; i++) {
+      sim.tick();
+      e.vel = v3();
+      for (const x of sim.entities.values()) {
+        if (x.kind === 'ship' && x.pirate) sawPirate = true;
+      }
+    }
+    expect(sawPirate).toBe(true);
+  });
+
+  it('drifting in deep space eventually surfaces a wreck or derelict', () => {
+    const sim = new Sim();
+    const pid = sim.addPlayer('drifter');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    e.pos = v3(8e6, 2e6, -8e6); // far from everything
+    e.vel = v3();
+    sim.meta(pid)!.undockInvuln = 1e9;
+    let found = false;
+    for (let i = 0; i < 20 * 420 && !found; i++) {
+      sim.tick();
+      for (const x of sim.entities.values()) {
+        if (x.derelict || x.kind === 'loot') found = true;
+      }
+    }
+    expect(found).toBe(true);
+  });
+});
+
 describe('cannon ammo', () => {
   it('firing consumes rounds and stops when dry; rearm refills for credits', () => {
     const sim = new Sim();

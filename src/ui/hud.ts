@@ -155,16 +155,26 @@ export class Hud {
     ctx.font = '20px "Lucida Console", monospace';
     ctx.fillText(speed > 10_000 ? `${(speed / 1000).toFixed(1)} km/s` : `${Math.round(speed)} m/s`, lx, ly - 56);
     ctx.font = '11px "Lucida Console", monospace';
+    ctx.fillStyle = world.turboActive ? '#ff8830' : AMBER_DIM;
+    ctx.fillText(
+      world.turboActive ? 'TURBO OVERBURN'
+        : ship.cruise === 'cruise' ? 'CRUISE'
+          : ship.cruise === 'charging' ? 'CRUISE CHARGE…'
+            : `THR ${Math.round(ship.throttle * 100)}%`,
+      lx, ly - 38);
+    // vertical gauges, well separated: throttle / fuel / turbo
+    ctx.textAlign = 'center';
+    this.vbar(lx, ly - 24, 7, 70, Math.abs(ship.throttle), ship.throttle < 0 ? RED : AMBER);
     ctx.fillStyle = AMBER_DIM;
-    ctx.fillText(ship.cruise === 'cruise' ? 'CRUISE' : ship.cruise === 'charging' ? 'CRUISE CHARGE…' : `THR ${Math.round(ship.throttle * 100)}%`, lx, ly - 38);
-    // throttle bar
-    this.vbar(lx, ly - 24, 6, 70, Math.abs(ship.throttle), ship.throttle < 0 ? RED : AMBER);
-    // fuel
+    ctx.fillText('THR', lx + 3, ly + 56);
     const fuelFrac = world.profile.fuel / stats.fuelMax;
-    this.vbar(lx + 16, ly - 24, 6, 70, fuelFrac, fuelFrac < 0.2 ? RED : CYAN);
+    this.vbar(lx + 30, ly - 24, 7, 70, fuelFrac, fuelFrac < 0.2 ? RED : CYAN);
     ctx.fillStyle = AMBER_DIM;
-    ctx.fillText('THR', lx - 4, ly + 58);
-    ctx.fillText('FUE', lx + 12, ly + 58);
+    ctx.fillText('FUE', lx + 33, ly + 56);
+    this.vbar(lx + 60, ly - 24, 7, 70, world.turboCharge, world.turboActive ? '#ff8830' : 'rgba(255, 136, 48, 0.55)');
+    ctx.fillStyle = AMBER_DIM;
+    ctx.fillText('TRB', lx + 63, ly + 56);
+    ctx.textAlign = 'left';
     if (fuelFrac < 0.2) {
       ctx.fillStyle = RED;
       ctx.fillText(fuelFrac <= 0.02 ? 'FUEL EMPTY — F1 help' : 'FUEL LOW', lx - 4, ly + 76);

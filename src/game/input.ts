@@ -124,6 +124,7 @@ export class InputManager {
       out.yaw = 0;
       out.roll = 0;
       out.brake = false;
+      out.turbo = false;
       return;
     }
     const k = (code: string) => this.keys.has(code);
@@ -133,6 +134,8 @@ export class InputManager {
     if (up) this.throttle = clamp(this.throttle + dt * 0.8, -0.3, 1);
     if (down) this.throttle = clamp(this.throttle - dt * 0.8, -0.3, 1);
     out.thrustForward = this.throttle;
+    // pinned at 100% and still pushing -> turbo overburn
+    out.turbo = up && this.throttle >= 1;
     out.thrustRight = (k('KeyD') ? 1 : 0) - (k('KeyA') ? 1 : 0);
     out.thrustUp = (k('KeyR') ? 1 : 0) - (k('KeyF') ? 1 : 0);
     out.roll = (k('KeyE') ? 1 : 0) - (k('KeyQ') ? 1 : 0);

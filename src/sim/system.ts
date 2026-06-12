@@ -260,9 +260,10 @@ export function dangerAt(system: SystemDef, pos: Vec3): number {
       const d = Math.hypot(pos.x - field.pos.x, pos.y - field.pos.y, pos.z - field.pos.z);
       if (d < field.radius * 4) danger = Math.max(danger, field.danger * (1 - d / (field.radius * 4) * 0.5));
     }
-    // proximity to the belt ring itself (even between fields)
+    // proximity to the belt ring itself (even between fields) — crossing a
+    // belt lane is never free
     const ringDist = Math.abs(Math.hypot(pos.x, pos.z) - belt.ringRadius);
-    if (ringDist < 2e6) danger = Math.max(danger, belt.danger * 0.4);
+    if (ringDist < 2e6) danger = Math.max(danger, belt.danger * 0.5);
   }
   const rust = system.stations.find((s) => s.blackMarket);
   if (rust) {

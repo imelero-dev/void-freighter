@@ -5,6 +5,7 @@ import {
   AMMO_PRICE, ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
   CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_MAX_SPEED, FUEL_PRICE,
   GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
+  TURBO_ACCEL_MULT, TURBO_BURST_S, TURBO_ENEMY_RADIUS, TURBO_RECHARGE_S, TURBO_SPEED,
   PIRATE_GOOD_DROPS, REFINE_RECIPES, REPAIR_PRICE, REP_DISCOUNT_MAX, REP_SMUGGLING_PENALTY,
   RESCUE_COST_FRACTION, RESCUE_COST_MIN, ROCK_TYPES, SHIELD_REGEN_DELAY,
   SMUGGLING_INSPECTION_CHANCE, STATION_TURRET_DPS, STARTER_MODULES, modulePrice, shipStats,
@@ -141,6 +142,8 @@ export interface PlayerMeta {
   flightAssist: boolean;
   forcefieldCooldown: number;
   promptedDerelicts: Set<number>;
+  turboCharge: number;   // 0..1 burst gauge
+  turboActive: boolean;
 }
 
 interface RockState {
@@ -197,11 +200,12 @@ export class Sim {
     const meta: PlayerMeta = {
       pid, name, profile: prof, input: emptyShipInput(), firing: false, drillOn: false,
       destination: null, docking: null, undockInvuln: 0, interdictCooldown: 0,
-      commsTimer: 90 + this.rng.range(0, 120), wreckTimer: 240 + this.rng.range(0, 300),
+      commsTimer: 90 + this.rng.range(0, 120), wreckTimer: 150 + this.rng.range(0, 180),
       pirateCheckTimer: this.rng.range(0, PIRATE_CHECK_S),
       extractAcc: 0, stats: shipStats(prof.hullId, prof.modules), rescueTimer: 0,
       cruiseRequested: false, flightAssist: true,
       forcefieldCooldown: 0, promptedDerelicts: new Set(),
+      turboCharge: 1, turboActive: false,
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
@@ -459,18 +463,48 @@ export class Sim {
     }
 
     // derelict encounters: rare distress beacons in deep space. Salvage pays —
-    // but sometimes the beacon is bait.
+    // but sometimes the beacon is bait. If conditions are wrong (near a
+    // station, at cruise) the roll is NOT consumed — retry shortly.
     meta.wreckTimer -= dt;
     if (meta.wreckTimer <= 0) {
-      meta.wreckTimer = 360 + this.rng.range(0, 360);
-      this.maybeSpawnWreck(meta, e);
+      if (this.maybeSpawnWreck(meta, e)) meta.wreckTimer = 300 + this.rng.range(0, 300);
+      else meta.wreckTimer = 25;
     }
 
     // flight
     if (e.cruise !== 'off') {
+      meta.turboActive = false;
       this.tickCruise(meta, e, dt);
     } else {
-      this.integrateShip(e, meta.input, meta.stats, dt, meta.flightAssist);
+      // turbo overburn: pinned throttle pushes past the speed cap — free when
+      // alone, burst-gauge-limited with hostiles in knife range
+      const wantsTurbo = meta.input.turbo && meta.input.thrustForward >= 0.99 && !meta.input.brake;
+      let turbo = false;
+      if (wantsTurbo) {
+        let hostileNear = false;
+        for (const h of this.entities.values()) {
+          if (h.kind === 'ship' && h.pirate && h.pirate !== 'turret' && !h.dead
+            && vdist(h.pos, e.pos) < TURBO_ENEMY_RADIUS) {
+            hostileNear = true;
+            break;
+          }
+        }
+        if (!hostileNear) {
+          turbo = true;
+        } else if (meta.turboCharge > 0) {
+          turbo = true;
+          meta.turboCharge = Math.max(0, meta.turboCharge - dt / TURBO_BURST_S);
+        }
+      }
+      // the gauge only recharges once you let go of the burn
+      if (!turbo && !wantsTurbo) {
+        meta.turboCharge = Math.min(1, meta.turboCharge + dt / TURBO_RECHARGE_S);
+      }
+      meta.turboActive = turbo;
+      const perf = turbo
+        ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate }
+        : meta.stats;
+      this.integrateShip(e, meta.input, perf, dt, meta.flightAssist);
       if (meta.cruiseRequested) this.tryStartCruise(meta, e);
     }
     const moved = vlen(e.vel) * dt;
@@ -685,7 +719,7 @@ export class Sim {
     if (meta.interdictCooldown <= 0) {
       const danger = dangerAt(this.system, e.pos);
       const cargoRisk = Math.min(0.03, this.cargoValue(prof) / 1e6 * 0.03);
-      const p = Math.min(0.06, 0.0008 + danger * 0.018 + cargoRisk) * dt;
+      const p = Math.min(0.06, 0.0015 + danger * 0.018 + cargoRisk) * dt;
       if (this.rng.chance(p)) {
         this.dropCruise(e, 'interdiction');
         meta.interdictCooldown = 90;
@@ -821,6 +855,7 @@ export class Sim {
     meta.input.yaw = n(input.yaw);
     meta.input.roll = n(input.roll);
     meta.input.brake = !!input.brake;
+    meta.input.turbo = !!input.turbo;
   }
 
   toggleFlightAssist(pid: number): boolean {
@@ -1244,12 +1279,12 @@ export class Sim {
   // Spawn a derelict wreck site a few km off the player's path: either loose
   // salvage containers (sometimes pirate bait) or a dead ship with a story —
   // breach its hold for coordinates to a cache… or for something worse.
-  private maybeSpawnWreck(meta: PlayerMeta, e: Entity): void {
+  private maybeSpawnWreck(meta: PlayerMeta, e: Entity): boolean {
     // deep space only: no station within 60 km, not inside a field
     for (const st of this.system.stations) {
-      if (vdist(e.pos, st.pos) < 60_000) return;
+      if (vdist(e.pos, st.pos) < 60_000) return false;
     }
-    if (e.cruise === 'cruise') return; // you blow past it at cruise speed
+    if (e.cruise === 'cruise') return false; // you blow past it at cruise speed
     const dir = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-0.3, 0.3), this.rng.range(-1, 1)));
     const sitePos = vadd(e.pos, vscale(dir, this.rng.range(3000, 6000)));
 
@@ -1272,7 +1307,7 @@ export class Sim {
         text: 'A dead transponder pings once, then nothing. There is a hull out there, running cold.',
       });
       this.events.push({ type: 'log', text: 'Cold hull detected — derelict signature marked on scanner.', color: '#7fb1c9', pid: meta.pid });
-      return;
+      return true;
     }
     const containers = this.rng.int(2, 3);
     for (let i = 0; i < containers; i++) {
@@ -1308,11 +1343,12 @@ export class Sim {
       ]),
     });
     this.events.push({ type: 'log', text: 'Distress beacon detected — salvage signature marked on scanner.', color: '#7fb1c9', pid: meta.pid });
+    return true;
   }
 
   private maybeSpawnPirates(meta: PlayerMeta, e: Entity): void {
     const danger = dangerAt(this.system, e.pos);
-    if (danger < 0.08) return;
+    if (danger < 0.055) return;
     for (const st of this.system.stations) {
       if (!st.blackMarket && vdist(e.pos, st.pos) < st.safeRadius) return;
     }
