@@ -1,7 +1,7 @@
 // Station service windows: market, contracts board + journal, shipyard,
 // refinery, cargo hold. All rebuilt from world state on refresh().
 
-import { GOODS, HULLS, MODULE_NAMES, MODULE_TIER_TAGS, REFINE_RECIPES, modulePrice, MODULE_SELL_FACTOR, shipStats, FUEL_PRICE, REPAIR_PRICE, MISSILE_PRICE } from '../sim/data';
+import { AMMO_PRICE, GOODS, HULLS, MODULE_NAMES, MODULE_TIER_TAGS, REFINE_RECIPES, modulePrice, MODULE_SELL_FACTOR, shipStats, FUEL_PRICE, REPAIR_PRICE, MISSILE_PRICE } from '../sim/data';
 import { ContractBoards } from '../sim/contracts';
 import type { Contract, HullId, ModuleSlot } from '../sim/types';
 import type { IWorld } from '../world_api';
@@ -75,6 +75,40 @@ export class StationUi {
   hideDockBar(): void {
     this.dockBar.style.display = 'none';
     clearChildren(this.dockBar);
+  }
+
+  // Resupply buttons shared by the shipyard and cargo windows.
+  private servicesRow(onDone: () => void): HTMLElement {
+    const services = el('div', 'vf-services');
+    const ship = this.world.player;
+    const st = this.world.dockedStation;
+    const prof = this.world.profile;
+    const stats = this.world.shipStats;
+    const act = (label: string, enabled: boolean, fn: () => void) => {
+      const b = button(label, 'vf-btn', () => {
+        this.audio.click();
+        fn();
+        setTimeout(onDone, 80);
+      });
+      if (!enabled) b.disabled = true;
+      services.appendChild(b);
+    };
+    if (ship) {
+      const missingHull = Math.ceil(ship.maxHull - ship.hull);
+      act(`REPAIR (${missingHull > 0 ? fmtCredits(Math.ceil(missingHull * REPAIR_PRICE)) : 'ok'})`, missingHull > 0, () => this.world.repairHull());
+      const missingFuel = Math.ceil(stats.fuelMax - prof.fuel);
+      const fuelOk = !!st?.services.includes('fuel');
+      act(`REFUEL (${missingFuel > 0 ? fmtCredits(missingFuel * FUEL_PRICE) : 'full'})`, fuelOk && missingFuel > 0, () => this.world.refuel());
+      if (stats.cannonAmmoMax > 0) {
+        const missingAmmo = stats.cannonAmmoMax - ship.cannonAmmo;
+        act(`CANNON AMMO (${missingAmmo > 0 ? fmtCredits(Math.ceil(missingAmmo * AMMO_PRICE)) : 'full'})`, missingAmmo > 0, () => this.world.restockCannonAmmo());
+      }
+      if (stats.missileAmmoMax > 0) {
+        const missingMsl = stats.missileAmmoMax - ship.missileAmmo;
+        act(`MISSILES (${missingMsl > 0 ? fmtCredits(missingMsl * MISSILE_PRICE) : 'full'})`, missingMsl > 0, () => this.world.restockMissiles());
+      }
+    }
+    return services;
   }
 
   // Shopkeeper header card: portrait + name + greeting, per station + role.
@@ -337,32 +371,7 @@ export class StationUi {
       win.body.appendChild(el('div', 'vf-credits', fmtCredits(prof.credits)));
 
       // services row
-      const ship = this.world.player;
-      const services = el('div', 'vf-services');
-      if (ship) {
-        const missingHull = Math.ceil(ship.maxHull - ship.hull);
-        const repairCost = Math.ceil(missingHull * REPAIR_PRICE);
-        services.appendChild(button(`REPAIR HULL (${missingHull > 0 ? fmtCredits(repairCost) : 'ok'})`, 'vf-btn', () => {
-          this.audio.click();
-          this.world.repairHull();
-          setTimeout(() => win.refresh(), 80);
-        }));
-      }
-      const missingFuel = Math.ceil(this.world.shipStats.fuelMax - prof.fuel);
-      services.appendChild(button(`REFUEL (${missingFuel > 0 ? fmtCredits(missingFuel * FUEL_PRICE) : 'full'})`, 'vf-btn', () => {
-        this.audio.click();
-        this.world.refuel();
-        setTimeout(() => win.refresh(), 80);
-      }));
-      if (this.world.shipStats.missileAmmoMax > 0 && ship) {
-        const missingMsl = this.world.shipStats.missileAmmoMax - ship.missileAmmo;
-        services.appendChild(button(`MISSILES (${missingMsl > 0 ? fmtCredits(missingMsl * MISSILE_PRICE) : 'full'})`, 'vf-btn', () => {
-          this.audio.click();
-          this.world.restockMissiles();
-          setTimeout(() => win.refresh(), 80);
-        }));
-      }
-      win.body.appendChild(services);
+      win.body.appendChild(this.servicesRow(() => win.refresh()));
 
       // hulls
       const hullsBox = el('div', 'vf-section');
@@ -517,6 +526,7 @@ export class StationUi {
       const prof = this.world.profile;
       const used = prof.cargo.reduce((s, c) => s + GOODS[c.good].volume * c.qty, 0);
       win.body.appendChild(el('div', 'vf-subline', `${used.toFixed(1)} / ${this.world.shipStats.cargoCapacity} m³ · fuel ${prof.fuel.toFixed(0)}/${this.world.shipStats.fuelMax}`));
+      if (this.world.dockedStation) win.body.appendChild(this.servicesRow(() => win.refresh()));
       if (prof.cargo.length === 0) {
         win.body.appendChild(el('div', 'vf-empty', 'Hold is empty.'));
       }

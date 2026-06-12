@@ -49,7 +49,9 @@ export interface WireShip {
   lk?: 1;
   lt?: number;
   ma?: number;
-  pl?: 1; // is a player
+  ca?: number; // cannon ammo (self only)
+  pl?: 1;  // is a player
+  dl?: 1;  // derelict hulk
 }
 
 export interface WireRock {
@@ -151,7 +153,9 @@ export function wireShip(e: Entity): WireShip {
   if (e.lockedOn) w.lk = 1;
   if (e.lockTimer > 0) w.lt = Math.round(e.lockTimer * 10) / 10;
   w.ma = e.missileAmmo;
+  w.ca = e.cannonAmmo;
   if (e.isPlayer) w.pl = 1;
+  if (e.derelict) w.dl = 1;
   return w;
 }
 

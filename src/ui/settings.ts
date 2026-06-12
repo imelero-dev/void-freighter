@@ -4,11 +4,12 @@ export interface GameSettings {
   sensitivity: number;  // mouse multiplier, 0.4–2.5
   invertY: boolean;
   volume: number;       // master, 0–1
+  aimAssist: boolean;   // gentle pull toward the locked target
 }
 
 const KEY = 'vf_settings_v1';
 
-const DEFAULTS: GameSettings = { sensitivity: 1, invertY: false, volume: 1 };
+const DEFAULTS: GameSettings = { sensitivity: 1, invertY: false, volume: 1, aimAssist: true };
 
 function load(): GameSettings {
   try {
@@ -19,6 +20,7 @@ function load(): GameSettings {
       sensitivity: clampNum(parsed.sensitivity, 0.4, 2.5, 1),
       invertY: !!parsed.invertY,
       volume: clampNum(parsed.volume, 0, 1, 1),
+      aimAssist: parsed.aimAssist !== false,
     };
   } catch {
     return { ...DEFAULTS };

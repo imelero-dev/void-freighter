@@ -19,13 +19,17 @@ export interface FlightPerf {
 }
 
 export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPerf, dt: number, assist: boolean): void {
+  // speed-dependent handling: nimble at low speed (dogfights), heavy at full
+  // burn — turn authority drops from 125% at standstill to 80% at max speed
+  const speedFrac = Math.min(1, vlen(b.vel) / Math.max(1, perf.maxSpeed));
+  const turnRate = perf.turnRate * (1.25 - 0.45 * speedFrac);
   // rotation: approach commanded angular velocity
   const targetAng = v3(
-    clamp(input.pitch, -1, 1) * perf.turnRate,
-    clamp(input.yaw, -1, 1) * perf.turnRate,
-    clamp(input.roll, -1, 1) * perf.turnRate,
+    clamp(input.pitch, -1, 1) * turnRate,
+    clamp(input.yaw, -1, 1) * turnRate,
+    clamp(input.roll, -1, 1) * turnRate,
   );
-  const angAccel = perf.turnRate * 10; // snappy rotation onset
+  const angAccel = turnRate * 10; // snappy rotation onset
   b.angVel.x += clamp(targetAng.x - b.angVel.x, -angAccel * dt, angAccel * dt);
   b.angVel.y += clamp(targetAng.y - b.angVel.y, -angAccel * dt, angAccel * dt);
   b.angVel.z += clamp(targetAng.z - b.angVel.z, -angAccel * dt, angAccel * dt);

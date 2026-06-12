@@ -141,18 +141,22 @@ export class Menu {
       () => settings.sensitivity, (v) => { settings.sensitivity = v; }, (v) => `${v.toFixed(1)}×`);
     slider('Volume', 0, 1, 0.05,
       () => settings.volume, (v) => { settings.volume = v; }, (v) => `${Math.round(v * 100)}%`);
-    const invRow = el('div', 'vf-set-row');
-    invRow.appendChild(el('span', 'vf-set-label', 'Invert mouse Y'));
-    const inv = document.createElement('input');
-    inv.type = 'checkbox';
-    inv.checked = settings.invertY;
-    inv.addEventListener('change', () => {
-      settings.invertY = inv.checked;
-      saveSettings();
-      this.cb.settingsChanged();
-    });
-    invRow.appendChild(inv);
-    setBox.appendChild(invRow);
+    const checkbox = (label: string, get: () => boolean, set: (v: boolean) => void) => {
+      const row = el('div', 'vf-set-row');
+      row.appendChild(el('span', 'vf-set-label', label));
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = get();
+      input.addEventListener('change', () => {
+        set(input.checked);
+        saveSettings();
+        this.cb.settingsChanged();
+      });
+      row.appendChild(input);
+      setBox.appendChild(row);
+    };
+    checkbox('Invert mouse Y', () => settings.invertY, (v) => { settings.invertY = v; });
+    checkbox('Aim assist (pull to target)', () => settings.aimAssist, (v) => { settings.aimAssist = v; });
     box.appendChild(setBox);
 
     box.appendChild(button('CONTROLS [F1]', 'vf-btn', () => this.toggleHelp()));
@@ -178,7 +182,10 @@ export class Menu {
     box.appendChild(grid);
     box.appendChild(el('div', 'vf-help-tip',
       'Haul cargo, watch the fuel gauge, and do not trust an unresolved contact. ' +
-      'If you run dry in the void, hail a rescue tow from the help menu… it will cost you.'));
+      'With a destination set, the cruise drive autopilots toward the marker when you let go of the stick. ' +
+      'Cannon rounds are finite — rearm at any station (cargo hold or shipyard). ' +
+      'The small circle near a hostile is the lead pip: put your shots there, not on the ship. ' +
+      'If you run dry in the void, press H for a rescue tow… it will cost you.'));
     box.appendChild(button('CLOSE', 'vf-btn', () => this.toggleHelp()));
     this.helpRoot.appendChild(box);
   }

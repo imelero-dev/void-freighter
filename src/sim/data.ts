@@ -69,31 +69,31 @@ export const HULLS: Record<HullId, HullDef> = {
   shuttle: {
     id: 'shuttle', name: 'CL-7 Vagrant', description: 'Surplus courier shuttle. It leaks, but it flies.',
     price: 0, baseCargo: 30, baseHull: 80, baseShield: 50,
-    accel: 36, maxSpeed: 190, turnRate: 1.7, cruiseMax: 220_000, massFactor: 1,
+    accel: 36, maxSpeed: 190, turnRate: 2.2, cruiseMax: 220_000, massFactor: 1,
     slots: slots({}),
   },
   hauler: {
     id: 'hauler', name: 'KM-300 Mule', description: 'Boxy mid-range hauler. The freight line workhorse.',
     price: 16_000, baseCargo: 140, baseHull: 150, baseShield: 80,
-    accel: 26, maxSpeed: 165, turnRate: 1.1, cruiseMax: 260_000, massFactor: 1.5,
+    accel: 26, maxSpeed: 165, turnRate: 1.5, cruiseMax: 260_000, massFactor: 1.5,
     slots: slots({ cargo: 5, weapon: 2, missile: 2, drill: 2, fueltank: 4, armor: 3 }),
   },
   prospector: {
     id: 'prospector', name: 'DV-9 Magpie', description: 'Mining frame with oversized drill mounts and ore scoops.',
     price: 34_000, baseCargo: 90, baseHull: 140, baseShield: 100,
-    accel: 31, maxSpeed: 180, turnRate: 1.3, cruiseMax: 250_000, massFactor: 1.3,
+    accel: 31, maxSpeed: 180, turnRate: 1.7, cruiseMax: 250_000, massFactor: 1.3,
     slots: slots({ drill: 5, collector: 5, scanner: 5, weapon: 2, missile: 1, cargo: 4 }),
   },
   interceptor: {
     id: 'interceptor', name: 'SX-4 Harrier', description: 'Ex-militia gunship. Fast, angry, and cramped.',
     price: 62_000, baseCargo: 45, baseHull: 190, baseShield: 170,
-    accel: 48, maxSpeed: 265, turnRate: 2.3, cruiseMax: 300_000, massFactor: 0.8,
+    accel: 48, maxSpeed: 265, turnRate: 2.9, cruiseMax: 300_000, massFactor: 0.8,
     slots: slots({ weapon: 5, missile: 5, shield: 5, armor: 4, engine: 5, gyro: 5, cargo: 2, drill: 1 }),
   },
   freighter: {
     id: 'freighter', name: 'TT-90 Leviathan', description: 'Heavy freight platform. A warehouse with engines.',
     price: 150_000, baseCargo: 420, baseHull: 340, baseShield: 200,
-    accel: 18, maxSpeed: 140, turnRate: 0.7, cruiseMax: 280_000, massFactor: 2.5,
+    accel: 18, maxSpeed: 140, turnRate: 1.0, cruiseMax: 280_000, massFactor: 2.5,
     slots: slots({ cargo: 5, armor: 5, shield: 4, weapon: 3, missile: 3, fueltank: 5, drill: 2 }),
   },
 };
@@ -139,6 +139,7 @@ export interface ShipStats {
   weaponDamage: number;   // per shot
   weaponRange: number;
   weaponInterval: number; // s between shots
+  cannonAmmoMax: number;  // rounds in the magazine
   missileAmmoMax: number;
   missileDamage: number;
   missileLockTime: number;
@@ -172,6 +173,7 @@ export function shipStats(hullId: HullId, modules: Partial<Record<ModuleSlot, nu
     weaponDamage: weapon === 0 ? 0 : 6 + 4 * weapon,
     weaponRange: 1000 + 120 * weapon,
     weaponInterval: 0.34 - 0.015 * weapon,
+    cannonAmmoMax: weapon === 0 ? 0 : 240 + 80 * weapon,
     missileAmmoMax: missile === 0 ? 0 : 2 + 2 * missile,
     missileDamage: 50 + 35 * missile,
     missileLockTime: Math.max(1.2, 3.0 - 0.3 * missile),
@@ -202,6 +204,7 @@ export function shipValue(hullId: HullId, modules: Partial<Record<ModuleSlot, nu
 export const FUEL_PRICE = 2;            // cr per unit
 export const REPAIR_PRICE = 2.5;        // cr per hull point
 export const MISSILE_PRICE = 30;        // cr per missile restock
+export const AMMO_PRICE = 0.6;          // cr per cannon round
 export const CRUISE_FUEL_PER_S = 0.25;  // at full cruise speed fraction
 export const INSURANCE_DEDUCTIBLE = 0.12; // fraction of ship value on death
 export const RESCUE_COST_FRACTION = 0.2;  // of credits, min below
@@ -240,28 +243,42 @@ export interface PirateDef {
 
 export const PIRATES: Record<PirateTier, PirateDef> = {
   scout: {
-    tier: 'scout', name: 'Scrapper Scout', hull: 40, shield: 25, maxSpeed: 175, accel: 30,
-    turnRate: 1.9, shotDamage: 8, shotInterval: 0.42, weaponRange: 1000, aimError: 0.05, missiles: 0,
+    tier: 'scout', name: 'Scrapper Scout', hull: 40, shield: 25, maxSpeed: 155, accel: 26,
+    turnRate: 1.5, shotDamage: 8, shotInterval: 0.42, weaponRange: 1000, aimError: 0.05, missiles: 0,
     missileDamage: 0, detectRange: 5200, creditsMin: 60, creditsMax: 180,
     moduleChance: 0.02, moduleTierMax: 1, bounty: 150,
   },
   fighter: {
-    tier: 'fighter', name: 'Scrapper Fighter', hull: 75, shield: 55, maxSpeed: 185, accel: 32,
-    turnRate: 2.0, shotDamage: 11, shotInterval: 0.38, weaponRange: 1100, aimError: 0.038, missiles: 0,
+    tier: 'fighter', name: 'Scrapper Fighter', hull: 75, shield: 55, maxSpeed: 165, accel: 28,
+    turnRate: 1.6, shotDamage: 11, shotInterval: 0.38, weaponRange: 1100, aimError: 0.038, missiles: 0,
     missileDamage: 0, detectRange: 5800, creditsMin: 150, creditsMax: 420,
     moduleChance: 0.05, moduleTierMax: 2, bounty: 260,
   },
   raider: {
-    tier: 'raider', name: 'Scrapper Raider', hull: 135, shield: 100, maxSpeed: 175, accel: 28,
-    turnRate: 1.7, shotDamage: 15, shotInterval: 0.36, weaponRange: 1200, aimError: 0.03, missiles: 2,
+    tier: 'raider', name: 'Scrapper Raider', hull: 135, shield: 100, maxSpeed: 155, accel: 25,
+    turnRate: 1.3, shotDamage: 15, shotInterval: 0.36, weaponRange: 1200, aimError: 0.03, missiles: 2,
     missileDamage: 90, detectRange: 6400, creditsMin: 380, creditsMax: 900,
     moduleChance: 0.12, moduleTierMax: 3, bounty: 480,
   },
   elite: {
-    tier: 'elite', name: 'Scrapper Warlord', hull: 280, shield: 220, maxSpeed: 195, accel: 34,
-    turnRate: 2.1, shotDamage: 22, shotInterval: 0.32, weaponRange: 1350, aimError: 0.02, missiles: 6,
+    tier: 'elite', name: 'Scrapper Warlord', hull: 280, shield: 220, maxSpeed: 175, accel: 30,
+    turnRate: 1.7, shotDamage: 22, shotInterval: 0.32, weaponRange: 1350, aimError: 0.02, missiles: 6,
     missileDamage: 110, detectRange: 7500, creditsMin: 1000, creditsMax: 2400,
     moduleChance: 0.35, moduleTierMax: 5, bounty: 1100,
+  },
+  // gun platform mini-boss: huge shield + hull, barely turns — its escort of
+  // destructible autocannon turrets is the real threat
+  corvette: {
+    tier: 'corvette', name: 'Scrapper Ironclad', hull: 850, shield: 600, maxSpeed: 85, accel: 10,
+    turnRate: 0.3, shotDamage: 34, shotInterval: 1.8, weaponRange: 1600, aimError: 0.03, missiles: 0,
+    missileDamage: 0, detectRange: 8000, creditsMin: 2400, creditsMax: 5200,
+    moduleChance: 0.7, moduleTierMax: 5, bounty: 2600,
+  },
+  turret: {
+    tier: 'turret', name: 'Ironclad Autocannon', hull: 55, shield: 35, maxSpeed: 0, accel: 0,
+    turnRate: 0, shotDamage: 5, shotInterval: 0.16, weaponRange: 1100, aimError: 0.055, missiles: 0,
+    missileDamage: 0, detectRange: 7000, creditsMin: 20, creditsMax: 70,
+    moduleChance: 0, moduleTierMax: 1, bounty: 150,
   },
 };
 

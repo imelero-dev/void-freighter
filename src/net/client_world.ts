@@ -388,6 +388,7 @@ export class ClientWorld implements IWorld {
           e.cruise = cruiseFromWire(w.cr);
           e.cruiseSpeed = w.cs;
           e.dockedAt = w.dk ?? null;
+          e.derelict = !!w.dl;
           break;
         }
         case 'f':
@@ -447,6 +448,7 @@ export class ClientWorld implements IWorld {
       e.cruiseSpeed = s.cs;
       e.dockedAt = s.dk ?? null;
       e.missileAmmo = s.ma ?? 0;
+      e.cannonAmmo = s.ca ?? 0;
       e.lockedOn = !!s.lk;
       e.lockTimer = s.lt ?? 0;
       e.throttle = s.th;
@@ -535,6 +537,8 @@ export class ClientWorld implements IWorld {
   refuel(): void { this.cmd({ cmd: 'refuel' }); }
   repairHull(): void { this.cmd({ cmd: 'repair' }); }
   restockMissiles(): void { this.cmd({ cmd: 'restock' }); }
+  restockCannonAmmo(): void { this.cmd({ cmd: 'ammo' }); }
+  openDerelict(entityId: number): void { this.cmd({ cmd: 'derelict', id: entityId }); }
   acceptContract(id: string): void { this.cmd({ cmd: 'accept', id }); }
   abandonContract(id: string): void { this.cmd({ cmd: 'abandon', id }); }
   deliverSupply(id: string): void { this.cmd({ cmd: 'deliver', id }); }

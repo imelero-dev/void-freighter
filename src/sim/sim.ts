@@ -2,7 +2,7 @@
 // authoritatively inside the Node server. No DOM, no Math.random.
 
 import {
-  ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
+  AMMO_PRICE, ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
   CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_MAX_SPEED, FUEL_PRICE,
   GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
   PIRATE_GOOD_DROPS, REFINE_RECIPES, REPAIR_PRICE, REP_DISCOUNT_MAX, REP_SMUGGLING_PENALTY,
@@ -46,6 +46,17 @@ const PICKUP_DIST = 55;
 const STAR_BURN_RADIUS_MULT = 1.6;
 const RESCUE_DELAY_S = 8;
 
+const DERELICT_NAMES = ['Pale Wager', 'Long Comedown', 'Saint Brassica', 'Iron Promise', 'Quiet Ledger', 'Last Shift', 'Glass Harvest', 'Hollow Crown'];
+
+const DERELICT_STORIES = [
+  'The cabin is dark. The logbook\'s last entry, forty days old: "The knocking from the hold has stopped. I find I miss it." The cargo door was welded shut — from the outside.',
+  'Life support died years ago, but the galley table is set for three. Two trays are untouched. The third has been licked clean. The crew manifest lists two names.',
+  'Every screen aboard shows the same coordinates, typed over and over. The pilot\'s chair is empty. The pilot\'s suit is still strapped into it.',
+  'A voice loop plays on the bridge: "...it followed us through the Veilshard. Do not open the hold. Do not open the—" The recording is older than the ship.',
+  'The hull is scorched in long parallel lines, like something held it. Inside, the cargo straps are all buckled — from whatever pushed its way out.',
+  'Someone scratched tally marks into the airlock wall. Three hundred and six. Beneath them, in steadier handwriting: "wrong about the rescue."',
+];
+
 const COMMS_LINES = [
   '…anyone on this band? I am reading two contacts where there should be none…',
   'Automated beacon VSP-9: do not approach. Do not approach. Do not approa—',
@@ -77,7 +88,8 @@ export function blankEntity(id: number, kind: EntityKind): Entity {
     targetId: null, firing: false, weaponCooldown: 0, dead: false,
     throttle: 0, cruise: 'off', cruiseSpeed: 0, dockedAt: null,
     aiState: 'patrol', aggroId: null, spawnPos: v3(), aiTimer: 0,
-    missileAmmo: 0, lockTimer: 0, lockedOn: false,
+    missileAmmo: 0, cannonAmmo: 0, lockTimer: 0, lockedOn: false,
+    parentId: 0, derelict: false, derelictOpened: false,
     rockType: null, rockHp: 0, rockMaxHp: 0, rockYield: null, fieldId: null, rockIndex: -1,
     radius: 10, goodId: null, qty: 0, lootCredits: 0, lootModule: null, ttl: 0,
     ownerId: 0, damage: 0,
@@ -100,6 +112,7 @@ export function defaultProfile(): PlayerProfile {
     knownStations: ['morrow_granary'],
     moduleStash: [],
     missileAmmo: 0,
+    cannonAmmo: 320, // full magazine for the starter Mk I cannon
     stats: {
       kills: 0, contractsDone: 0, unitsMined: 0, unitsTraded: 0,
       creditsEarned: 0, deaths: 0, distanceTravelled: 0,
@@ -126,6 +139,8 @@ export interface PlayerMeta {
   rescueTimer: number;     // >0: tow inbound
   cruiseRequested: boolean;
   flightAssist: boolean;
+  forcefieldCooldown: number;
+  promptedDerelicts: Set<number>;
 }
 
 interface RockState {
@@ -186,12 +201,14 @@ export class Sim {
       pirateCheckTimer: this.rng.range(0, PIRATE_CHECK_S),
       extractAcc: 0, stats: shipStats(prof.hullId, prof.modules), rescueTimer: 0,
       cruiseRequested: false, flightAssist: true,
+      forcefieldCooldown: 0, promptedDerelicts: new Set(),
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
     e.hull = clamp(prof.hullHp, 1, e.maxHull);
     e.shield = e.maxShield;
     e.missileAmmo = prof.missileAmmo;
+    e.cannonAmmo = Math.min(prof.cannonAmmo ?? 0, meta.stats.cannonAmmoMax);
     e.factionId = 'independent';
     if (prof.dockedAt && this.station(prof.dockedAt)) {
       e.dockedAt = prof.dockedAt;
@@ -223,6 +240,7 @@ export class Sim {
     meta.profile.hullHp = e.hull;
     meta.profile.dockedAt = e.dockedAt;
     meta.profile.missileAmmo = e.missileAmmo;
+    meta.profile.cannonAmmo = e.cannonAmmo;
     return meta.profile;
   }
 
@@ -241,6 +259,8 @@ export class Sim {
     e.maxShield = meta.stats.maxShield;
     e.hull = Math.min(e.hull, e.maxHull);
     e.shield = Math.min(e.shield, e.maxShield);
+    e.cannonAmmo = Math.min(e.cannonAmmo, meta.stats.cannonAmmoMax);
+    meta.profile.cannonAmmo = e.cannonAmmo;
     meta.profile.fuel = Math.min(meta.profile.fuel, meta.stats.fuelMax);
   }
 
@@ -348,7 +368,14 @@ export class Sim {
     for (const e of [...this.entities.values()]) {
       switch (e.kind) {
         case 'ship':
-          if (!e.isPlayer) this.tickPirate(e, dt);
+          if (e.derelict) {
+            // inert hulk: slow drift, eventually fades into the dark
+            e.ttl -= dt;
+            vaddTo(e.pos, vscale(e.vel, dt));
+            if (e.ttl <= 0) this.entities.delete(e.id);
+          } else if (!e.isPlayer) {
+            this.tickPirate(e, dt);
+          }
           break;
         case 'missile': this.tickMissile(e, dt); break;
         case 'bolt': this.tickBolt(e, dt); break;
@@ -474,6 +501,60 @@ export class Sim {
         meta.pirateCheckTimer = PIRATE_CHECK_S;
         this.maybeSpawnPirates(meta, e);
       }
+      // drifting close to a derelict triggers its story prompt (once)
+      for (const d of this.entities.values()) {
+        if (!d.derelict || d.derelictOpened || meta.promptedDerelicts.has(d.id)) continue;
+        if (vdist(d.pos, e.pos) > 450) continue;
+        meta.promptedDerelicts.add(d.id);
+        const story = DERELICT_STORIES[d.id % DERELICT_STORIES.length];
+        this.events.push({ type: 'derelict', pid: meta.pid, entityId: d.id, name: d.name, story });
+      }
+    }
+  }
+
+  // Player chose to breach a derelict's hold: coordinates to a salvage cache —
+  // or a very bad time.
+  openDerelict(pid: number, entityId: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    const d = this.entities.get(entityId);
+    if (!meta || !e || !d || !d.derelict || d.derelictOpened) return;
+    if (vdist(d.pos, e.pos) > 600) {
+      this.events.push({ type: 'log', text: 'Too far from the derelict to board it.', color: '#fa4', pid });
+      return;
+    }
+    d.derelictOpened = true;
+    if (this.rng.chance(0.55)) {
+      // coordinates to a salvage cache
+      const dir = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-0.3, 0.3), this.rng.range(-1, 1)));
+      const cachePos = vadd(d.pos, vscale(dir, this.rng.range(18_000, 35_000)));
+      const containers = this.rng.int(4, 6);
+      for (let i = 0; i < containers; i++) {
+        const loot = blankEntity(this.nextId++, 'loot');
+        loot.pos = vadd(cachePos, v3(this.rng.range(-260, 260), this.rng.range(-140, 140), this.rng.range(-260, 260)));
+        loot.ttl = 1500;
+        loot.radius = 4;
+        loot.name = 'cached salvage';
+        loot.lootCredits = this.rng.int(120, 420);
+        const drop = this.rng.pickWeighted(PIRATE_GOOD_DROPS, PIRATE_GOOD_DROPS.map((x) => x.weight));
+        loot.goodId = drop.good;
+        loot.qty = this.rng.int(drop.min, drop.max + 2);
+        if (this.rng.chance(0.12)) {
+          loot.lootModule = { slot: this.rng.pick(['shield', 'scanner', 'collector', 'armor', 'weapon'] as ModuleSlot[]), tier: this.rng.int(1, 3) };
+        }
+        this.entities.set(loot.id, loot);
+      }
+      this.setDestination(pid, { kind: 'point', id: '', name: 'Salvage Cache', pos: cachePos });
+      this.events.push({ type: 'log', text: 'Nav coordinates recovered from the wreck. Destination set: salvage cache.', color: '#7fc97f', pid });
+      this.events.push({ type: 'comms', pid, text: 'The manifest checks out. Whoever stashed this never came back for it.' });
+    } else {
+      // it went badly: whatever happened in there collapses the shield
+      // outright and tears into the hull on the way out
+      e.shield = 0;
+      const dmg = e.maxHull * this.rng.range(0.12, 0.22);
+      this.applyDamage(e, dmg, -1, true);
+      this.events.push({ type: 'log', text: 'Hull breach — you got out, but the ship took a beating escaping the wreck.', color: '#f44', pid });
+      this.events.push({ type: 'comms', pid, text: 'You do not talk about what was in the hold. Nobody would believe you anyway.' });
     }
   }
 
@@ -548,6 +629,14 @@ export class Sim {
     e.angVel.y += clamp(targetAng.y - e.angVel.y, -angAccel * dt, angAccel * dt);
     e.angVel.z += clamp(targetAng.z - e.angVel.z, -angAccel * dt, angAccel * dt);
     e.orient = qIntegrate(e.orient, e.angVel, dt);
+
+    // autopilot: with a destination set and hands off the stick, cruise homes
+    // toward the marker on its own
+    const handsOff = Math.abs(meta.input.pitch) < 0.05 && Math.abs(meta.input.yaw) < 0.05;
+    if (meta.destination && handsOff && e.cruise === 'cruise') {
+      const want = qLookAt(vnorm(vsub(meta.destination.pos, e.pos)));
+      e.orient = rotateTowards(e.orient, want, stats.turnRate * 0.35 * dt);
+    }
 
     if (e.cruise === 'charging') {
       e.cruiseSpeed += dt;
@@ -631,6 +720,9 @@ export class Sim {
     for (const p of this.system.planets) {
       edge = Math.min(edge, vdist(pos, p.pos) - p.radius * 1.5);
     }
+    for (const m of this.system.moons) {
+      edge = Math.min(edge, vdist(pos, m.pos) - m.radius * 1.6);
+    }
     for (const s of this.system.stations) {
       edge = Math.min(edge, vdist(pos, s.pos) - 1500);
     }
@@ -656,18 +748,31 @@ export class Sim {
         this.events.push({ type: 'log', text: 'WARNING: hull temperature critical.', color: '#f44', pid: meta.pid });
       }
     }
-    // planets: hard clamp + damage
-    for (const p of this.system.planets) {
-      const d = vdist(e.pos, p.pos);
-      if (d < p.radius + e.radius) {
-        const n = vnorm(vsub(e.pos, p.pos));
-        e.pos = vadd(p.pos, vscale(n, p.radius + e.radius + 5));
-        const impact = vlen(e.vel);
-        e.vel = vscale(n, Math.max(30, impact * 0.2));
-        if (impact > COLLISION_DAMAGE_SPEED) {
-          this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.4, -1, true);
-        }
+    // planets & moons: planetary exclusion field well above the surface —
+    // an invisible wall that shoves you back out (no more clipping through)
+    meta.forcefieldCooldown = Math.max(0, meta.forcefieldCooldown - dt);
+    const bounce = (center: Vec3, shellRadius: number, label: string) => {
+      const d = vdist(e.pos, center);
+      if (d >= shellRadius) return;
+      const n = vnorm(vsub(e.pos, center));
+      e.pos = vadd(center, vscale(n, shellRadius + 5));
+      // reflect velocity off the shell, heavily damped
+      const vn = vdot(e.vel, n);
+      if (vn < 0) {
+        e.vel = vsub(e.vel, vscale(n, vn * 1.6));
+        e.vel = vscale(e.vel, 0.45);
       }
+      this.dropCruise(e, 'forcefield');
+      if (meta.forcefieldCooldown <= 0) {
+        meta.forcefieldCooldown = 3;
+        this.events.push({ type: 'forcefield', pid: meta.pid, body: label });
+      }
+    };
+    for (const p of this.system.planets) {
+      bounce(p.pos, p.radius * 1.15, p.name);
+    }
+    for (const m of this.system.moons) {
+      bounce(m.pos, m.radius * 1.3, 'moon');
     }
     // stations: bounce
     for (const s of this.system.stations) {
@@ -806,9 +911,15 @@ export class Sim {
       if (!target || target.dead) return;
       const aim = leadPoint(e.pos, e.vel, target.pos, target.vel, BOLT_SPEED);
       dir = vnorm(vsub(aim, e.pos));
-      if (angleBetween(qForward(e.orient), dir) > 0.25) return; // nose not on it yet
+      // turrets swivel freely; hull guns need the nose on target
+      if (e.pirate !== 'turret' && angleBetween(qForward(e.orient), dir) > 0.25) return;
       dir = jitterDir(dir, pdef.aimError, this.rng);
     } else {
+      if (e.cannonAmmo <= 0) {
+        e.weaponCooldown = 0.5;
+        return;
+      }
+      e.cannonAmmo--;
       dir = jitterDir(qForward(e.orient), PLAYER_AIM_SPREAD, this.rng);
     }
     e.weaponCooldown = interval;
@@ -863,7 +974,7 @@ export class Sim {
       return;
     }
     const t = this.entities.get(e.targetId);
-    if (!t || t.dead || t.kind !== 'ship') {
+    if (!t || t.dead || t.kind !== 'ship' || t.derelict) {
       e.lockTimer = 0;
       e.lockedOn = false;
       return;
@@ -948,6 +1059,7 @@ export class Sim {
   // Apply damage with all protection rules. sourceId -1 = environment.
   applyDamage(target: Entity, amount: number, sourceId: number, environmental: boolean): void {
     if (target.dead || target.dockedAt) return;
+    if (target.derelict && !environmental) return; // hulks just soak fire
     const meta = target.isPlayer ? this.players.get(target.id) : undefined;
     if (meta && (meta.undockInvuln > 0 || meta.docking || meta.rescueTimer > 0)) return;
 
@@ -994,12 +1106,22 @@ export class Sim {
 
     if (e.pirate) {
       this.dropPirateLoot(e);
+      // a dying carrier takes its remaining turrets with it
+      if (e.pirate === 'corvette') {
+        for (const t of [...this.entities.values()]) {
+          if (t.parentId === e.id) {
+            this.events.push({ type: 'explosion', entityId: t.id, big: false, x: t.pos.x, y: t.pos.y, z: t.pos.z });
+            this.entities.delete(t.id);
+          }
+        }
+      }
       const killer = this.entities.get(killerId);
       if (killer?.isPlayer) {
         const kmeta = this.players.get(killerId)!;
         kmeta.profile.stats.kills++;
-        // bounty contract progress
+        // bounty contract progress (turrets are parts, not kills)
         for (const c of kmeta.profile.contracts) {
+          if (e.pirate === 'turret') break;
           if (c.type !== 'bounty' || c.killsDone >= c.killsRequired || !c.pirateZone) continue;
           const zone = this.fieldById(c.pirateZone);
           if (zone && vdist(e.pos, zone.pos) < 45_000) {
@@ -1090,7 +1212,7 @@ export class Sim {
     e.name = def.name;
     e.factionId = 'scrappers';
     e.hullId = 'pirate';
-    e.radius = SHIP_RADIUS.pirate * (tier === 'elite' ? 1.6 : tier === 'raider' ? 1.3 : 1);
+    e.radius = SHIP_RADIUS.pirate * (tier === 'corvette' ? 4 : tier === 'elite' ? 1.6 : tier === 'raider' ? 1.3 : tier === 'turret' ? 0.5 : 1);
     e.maxHull = def.hull;
     e.hull = def.hull;
     e.maxShield = def.shield;
@@ -1106,8 +1228,22 @@ export class Sim {
     return e;
   }
 
-  // Spawn a derelict wreck site a few km off the player's path: salvage
-  // containers + a distress beacon comms line. ~1 in 3 are pirate bait.
+  // Mini-boss: an Ironclad gun platform with four destructible autocannon
+  // turrets riding on its hull. Kill the guns, then grind the shield down.
+  spawnCorvette(pos: Vec3, aggroPid: number | null = null): Entity {
+    const corvette = this.spawnPirate('corvette', pos, aggroPid);
+    const offsets = [v3(22, 9, -18), v3(-22, 9, -18), v3(22, -9, 20), v3(-22, -9, 20)];
+    for (const off of offsets) {
+      const turret = this.spawnPirate('turret', vadd(pos, off));
+      turret.parentId = corvette.id;
+      turret.spawnPos = vclone(off); // local mount offset on the carrier
+    }
+    return corvette;
+  }
+
+  // Spawn a derelict wreck site a few km off the player's path: either loose
+  // salvage containers (sometimes pirate bait) or a dead ship with a story —
+  // breach its hold for coordinates to a cache… or for something worse.
   private maybeSpawnWreck(meta: PlayerMeta, e: Entity): void {
     // deep space only: no station within 60 km, not inside a field
     for (const st of this.system.stations) {
@@ -1116,6 +1252,28 @@ export class Sim {
     if (e.cruise === 'cruise') return; // you blow past it at cruise speed
     const dir = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-0.3, 0.3), this.rng.range(-1, 1)));
     const sitePos = vadd(e.pos, vscale(dir, this.rng.range(3000, 6000)));
+
+    if (this.rng.chance(0.5)) {
+      // story derelict: an inert hulk, prompts when you fly close
+      const hulk = blankEntity(this.nextId++, 'ship');
+      hulk.derelict = true;
+      hulk.name = `Derelict — "${this.rng.pick(DERELICT_NAMES)}"`;
+      hulk.hullId = this.rng.chance(0.6) ? 'hauler' : 'shuttle';
+      hulk.radius = SHIP_RADIUS[hulk.hullId] * 1.2;
+      hulk.maxHull = 400;
+      hulk.hull = 400;
+      hulk.pos = vclone(sitePos);
+      hulk.vel = v3(this.rng.range(-1.5, 1.5), this.rng.range(-1, 1), this.rng.range(-1.5, 1.5));
+      hulk.orient = qLookAt(vnorm(v3(this.rng.range(-1, 1), this.rng.range(-1, 1), this.rng.range(-1, 1))));
+      hulk.ttl = 1200;
+      this.entities.set(hulk.id, hulk);
+      this.events.push({
+        type: 'comms', pid: meta.pid,
+        text: 'A dead transponder pings once, then nothing. There is a hull out there, running cold.',
+      });
+      this.events.push({ type: 'log', text: 'Cold hull detected — derelict signature marked on scanner.', color: '#7fb1c9', pid: meta.pid });
+      return;
+    }
     const containers = this.rng.int(2, 3);
     for (let i = 0; i < containers; i++) {
       const loot = blankEntity(this.nextId++, 'loot');
@@ -1158,16 +1316,25 @@ export class Sim {
     for (const st of this.system.stations) {
       if (!st.blackMarket && vdist(e.pos, st.pos) < st.safeRadius) return;
     }
-    // count pirates already harassing this player area
+    // count pirates already harassing this player area (turrets are parts)
     let nearby = 0;
+    let corvetteNear = false;
     for (const p of this.entities.values()) {
-      if (p.kind === 'ship' && p.pirate && vdist(p.pos, e.pos) < 15_000) {
-        nearby += p.pirate === 'elite' ? 2 : 1;
-      }
+      if (p.kind !== 'ship' || !p.pirate || p.pirate === 'turret') continue;
+      const d = vdist(p.pos, e.pos);
+      if (p.pirate === 'corvette' && d < 30_000) corvetteNear = true;
+      if (d < 15_000) nearby += p.pirate === 'elite' || p.pirate === 'corvette' ? 2 : 1;
     }
     const cap = danger < 0.3 ? 2 : danger < 0.6 ? 3 : 4;
     if (nearby >= cap) return;
     if (!this.rng.chance(Math.min(0.5, danger * 0.55))) return;
+
+    // deep red space occasionally fields an Ironclad gun platform
+    if (danger > 0.55 && !corvetteNear && this.rng.chance(0.16)) {
+      const dir = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-0.2, 0.2), this.rng.range(-1, 1)));
+      this.spawnCorvette(vadd(e.pos, vscale(dir, this.rng.range(5500, 7500))));
+      return;
+    }
 
     const groupSize = danger > 0.6 ? this.rng.int(2, 3) : this.rng.int(1, 2);
     for (let i = 0; i < groupSize && nearby < cap; i++) {
@@ -1191,6 +1358,29 @@ export class Sim {
     if (!e.pirate || e.dead) return;
     const def = PIRATES[e.pirate];
     e.aiTimer -= dt;
+
+    // turrets ride their carrier and swivel freely at whatever it hates
+    if (e.pirate === 'turret') {
+      const parent = e.parentId ? this.entities.get(e.parentId) : undefined;
+      if (!parent || parent.dead) {
+        // carrier gone: dead weight
+        this.events.push({ type: 'explosion', entityId: e.id, big: false, x: e.pos.x, y: e.pos.y, z: e.pos.z });
+        this.entities.delete(e.id);
+        return;
+      }
+      e.pos = vadd(parent.pos, qrot(parent.orient, e.spawnPos));
+      e.vel = vclone(parent.vel);
+      e.orient = parent.orient;
+      const target = parent.aggroId !== null ? this.entities.get(parent.aggroId) : null;
+      if (target && !target.dead && !target.dockedAt && vdist(target.pos, e.pos) < def.weaponRange) {
+        e.aggroId = target.id;
+        e.firing = true;
+      } else {
+        e.aggroId = null;
+        e.firing = false;
+      }
+      return;
+    }
 
     // despawn when far from every player
     let nearestPlayer: Entity | null = null;
@@ -1279,8 +1469,8 @@ export class Sim {
           }
           if (target!.isPlayer) this.events.push({ type: 'lockWarning', pid: target!.id });
         }
-        if (e.hull < e.maxHull * 0.22) {
-          e.aiState = 'flee';
+        if (e.hull < e.maxHull * 0.22 && e.pirate !== 'corvette') {
+          e.aiState = 'flee'; // the Ironclad never runs
           e.firing = false;
           e.aiTimer = 30;
         }
@@ -1767,6 +1957,28 @@ export class Sim {
     e.missileAmmo = meta.stats.missileAmmoMax;
     meta.profile.missileAmmo = e.missileAmmo;
     this.events.push({ type: 'log', text: `Missiles restocked (${cost} cr).`, color: '#8fb', pid });
+  }
+
+  restockCannonAmmo(pid: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || !e.dockedAt) return;
+    const missing = meta.stats.cannonAmmoMax - e.cannonAmmo;
+    if (missing <= 0) return;
+    const cost = Math.ceil(missing * AMMO_PRICE);
+    if (meta.profile.credits < cost) {
+      const rounds = Math.floor(meta.profile.credits / AMMO_PRICE);
+      if (rounds <= 0) return;
+      meta.profile.credits -= Math.ceil(rounds * AMMO_PRICE);
+      e.cannonAmmo += rounds;
+      meta.profile.cannonAmmo = e.cannonAmmo;
+      this.events.push({ type: 'log', text: `Partial rearm: +${rounds} rounds.`, color: '#fa4', pid });
+      return;
+    }
+    meta.profile.credits -= cost;
+    e.cannonAmmo = meta.stats.cannonAmmoMax;
+    meta.profile.cannonAmmo = e.cannonAmmo;
+    this.events.push({ type: 'log', text: `Cannon rearmed (${cost} cr).`, color: '#8fb', pid });
   }
 
   useFuelCells(pid: number, qty: number): void {

@@ -183,9 +183,16 @@ export class Hud {
     ctx.textAlign = 'center';
     ctx.fillStyle = AMBER_DIM;
     ctx.fillText(`SHD ${Math.round(ship.shield)}/${ship.maxShield}   HUL ${Math.round(ship.hull)}/${ship.maxHull}`, cx, by + 30);
-    if (stats.missileAmmoMax > 0) {
-      ctx.fillText(`MSL ${ship.missileAmmo}/${stats.missileAmmoMax}`, cx, by + 44);
+    const ammoBits: string[] = [];
+    if (stats.cannonAmmoMax > 0) ammoBits.push(`AMM ${ship.cannonAmmo}/${stats.cannonAmmoMax}`);
+    if (stats.missileAmmoMax > 0) ammoBits.push(`MSL ${ship.missileAmmo}/${stats.missileAmmoMax}`);
+    if (ammoBits.length > 0) {
+      ctx.fillStyle = stats.cannonAmmoMax > 0 && ship.cannonAmmo <= 0 ? RED : AMBER_DIM;
+      ctx.fillText(ammoBits.join('   '), cx, by + 44);
     }
+
+    // ---- compass tape (top) ----
+    this.drawCompass(world, ship, cx, W);
 
     // ---- target panel (right) ----
     const target = ship.targetId !== null ? world.entities.get(ship.targetId) : null;
@@ -338,6 +345,96 @@ export class Hud {
     }
 
     this.drawLog(now, W, H);
+  }
+
+  // Scrolling heading tape with destination/target markers: tells you which
+  // way to turn without hunting for the off-screen arrow.
+  private drawCompass(world: IWorld, ship: Entity, cx: number, W: number): void {
+    const ctx = this.ctx;
+    const y = 26;
+    const barW = Math.min(440, W * 0.42);
+    const SPAN = 120; // degrees visible
+    const pxPerDeg = barW / SPAN;
+    const fwd = qForward(ship.orient);
+    const heading = (Math.atan2(fwd.x, -fwd.z) * 180 / Math.PI + 360) % 360;
+
+    ctx.strokeStyle = AMBER_DIM;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx - barW / 2, y);
+    ctx.lineTo(cx + barW / 2, y);
+    ctx.stroke();
+    // graduations every 15°, labels every 45°
+    ctx.font = '9px "Lucida Console", monospace';
+    ctx.textAlign = 'center';
+    for (let deg = 0; deg < 360; deg += 15) {
+      let rel = deg - heading;
+      while (rel > 180) rel -= 360;
+      while (rel < -180) rel += 360;
+      if (Math.abs(rel) > SPAN / 2) continue;
+      const x = cx + rel * pxPerDeg;
+      const major = deg % 45 === 0;
+      ctx.strokeStyle = AMBER_DIM;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x, y - (major ? 7 : 4));
+      ctx.stroke();
+      if (major) {
+        ctx.fillStyle = AMBER_DIM;
+        ctx.fillText(String(deg).padStart(3, '0'), x, y + 9);
+      }
+    }
+    // nose notch
+    ctx.strokeStyle = AMBER;
+    ctx.beginPath();
+    ctx.moveTo(cx, y + 2);
+    ctx.lineTo(cx - 4, y + 8);
+    ctx.moveTo(cx, y + 2);
+    ctx.lineTo(cx + 4, y + 8);
+    ctx.stroke();
+
+    // marker helper: world pos -> bearing offset + elevation arrow
+    const marker = (pos: { x: number; y: number; z: number }, color: string, diamond: boolean) => {
+      const local = new THREE.Vector3(pos.x - ship.pos.x, pos.y - ship.pos.y, pos.z - ship.pos.z)
+        .applyQuaternion(this.camera.quaternion.clone().invert());
+      const bearing = Math.atan2(local.x, -local.z) * 180 / Math.PI;
+      const clamped = Math.max(-SPAN / 2, Math.min(SPAN / 2, bearing));
+      const x = cx + clamped * pxPerDeg;
+      ctx.fillStyle = color;
+      if (Math.abs(bearing) > SPAN / 2) {
+        // off-tape: edge arrow
+        const dirSign = Math.sign(bearing);
+        ctx.beginPath();
+        ctx.moveTo(x + dirSign * 6, y - 5);
+        ctx.lineTo(x, y - 9);
+        ctx.lineTo(x, y - 1);
+        ctx.closePath();
+        ctx.fill();
+      } else if (diamond) {
+        ctx.beginPath();
+        ctx.moveTo(x, y - 11);
+        ctx.lineTo(x + 5, y - 6);
+        ctx.lineTo(x, y - 1);
+        ctx.lineTo(x - 5, y - 6);
+        ctx.closePath();
+        ctx.fill();
+        // pitch hint: chevron above/below when the marker needs vertical correction
+        const elev = Math.atan2(local.y, Math.hypot(local.x, local.z)) * 180 / Math.PI;
+        if (Math.abs(elev) > 8) {
+          ctx.fillText(elev > 0 ? '▲' : '▼', x, elev > 0 ? y - 18 : y + 18);
+        }
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(x, y - 10);
+        ctx.lineTo(x + 4, y - 2);
+        ctx.lineTo(x - 4, y - 2);
+        ctx.closePath();
+        ctx.fill();
+      }
+    };
+    if (world.destination) marker(world.destination.pos, AMBER, true);
+    const target = ship.targetId !== null ? world.entities.get(ship.targetId) : null;
+    if (target && !target.dead && target.kind === 'ship') marker(target.pos, target.pirate ? RED : CYAN, false);
   }
 
   private drawDestination(world: IWorld, ship: Entity, origin: { x: number; y: number; z: number }, cx: number, cy: number, W: number, H: number): void {

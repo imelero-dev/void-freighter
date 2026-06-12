@@ -145,7 +145,7 @@ export interface FactionDef {
 
 export type EntityKind = 'ship' | 'asteroid' | 'fragment' | 'loot' | 'missile' | 'bolt';
 
-export type PirateTier = 'scout' | 'fighter' | 'raider' | 'elite';
+export type PirateTier = 'scout' | 'fighter' | 'raider' | 'elite' | 'corvette' | 'turret';
 export type AiState = 'patrol' | 'approach' | 'attack' | 'flee';
 
 export interface Entity {
@@ -184,8 +184,12 @@ export interface Entity {
   spawnPos: Vec3;
   aiTimer: number;
   missileAmmo: number;
+  cannonAmmo: number;
   lockTimer: number;         // missile lock progress on current target
   lockedOn: boolean;
+  parentId: number;          // turrets: id of the carrier ship (0 = none)
+  derelict: boolean;         // inert story wreck
+  derelictOpened: boolean;
 
   // asteroid
   rockType: RockType | null;
@@ -255,6 +259,7 @@ export interface PlayerProfile {
   knownStations: string[];   // visited: market data unlocked
   moduleStash: Array<{ slot: ModuleSlot; tier: number }>; // looted modules, install/sell at shipyard
   missileAmmo: number;
+  cannonAmmo: number;
   stats: {
     kills: number;
     contractsDone: number;
@@ -346,6 +351,8 @@ export type SimEvent =
   | { type: 'econ'; headline: string }
   | { type: 'rescue'; pid: number; cost: number }
   | { type: 'fine'; pid: number; amount: number; desc: string }
+  | { type: 'forcefield'; pid: number; body: string }
+  | { type: 'derelict'; pid: number; entityId: number; name: string; story: string }
   | { type: 'cruiseChange'; entityId: number; state: CruiseState }
   | { type: 'refined'; pid: number; goodIn: string; qtyIn: number; goodOut: string; qtyOut: number };
 

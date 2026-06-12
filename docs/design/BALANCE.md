@@ -48,6 +48,20 @@ this file documents the *why*.
 
 ## Combat
 
+- Weapons fire **projectiles**: 1100 m/s bolts with swept collision, ±0.4°
+  player muzzle spread. Pirates aim at the intercept point with per-tier error
+  (scout 0.05 rad → warlord 0.02). The HUD lead pip and optional aim assist
+  (settings) use the same intercept math.
+- **Cannon ammo**: magazine 240+80×tier rounds, 0.6 cr/round to rearm at any
+  station. Missiles 30 cr each.
+- Handling is speed-dependent: turn authority 125% at standstill → 80% at max
+  speed — dogfight slow, cruise straight.
+- **Ironclad corvette** (danger > 0.55, ~16% of spawn rolls, max 1 nearby):
+  850 hull / 600 shield gun platform with 4 destructible autocannon turrets
+  (55/35 each, 31 dps combined). Bounty 2600 + fat loot (70% module drop).
+- Player hulls out-turn same-class pirates (2.2 rad/s shuttle vs 1.5-1.7
+  pirate line ships) — mobility is the player's edge.
+
 - Damage: shield first (regen 2+1.5×tier hp/s after 6 s quiet), then hull.
   Hull only repairs at stations (2.5 cr/pt).
 - Player cannon: 6+4×tier dmg per shot, ~3 shots/s. Missiles: 50+35×tier,

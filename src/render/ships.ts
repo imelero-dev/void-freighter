@@ -142,7 +142,56 @@ function buildFreighter(): ShipView {
   return { group: g, thrusters: ts, kind: 'freighter' };
 }
 
+function buildCorvette(): ShipView {
+  const g = new THREE.Group();
+  const rust = mat(0x5a4438, 0.95, 0.4);
+  const dark = mat(0x3a3632, 0.9, 0.5);
+  // long armored hull
+  const hull = new THREE.Mesh(new THREE.BoxGeometry(26, 14, 96), dark);
+  const prow = new THREE.Mesh(new THREE.ConeGeometry(10, 22, 4), rust);
+  prow.rotation.x = -Math.PI / 2;
+  prow.rotation.y = Math.PI / 4;
+  prow.position.z = -58;
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(14, 8, 16), rust);
+  bridge.position.set(0, 11, -20);
+  for (const side of [-1, 1]) {
+    const pod = new THREE.Mesh(new THREE.CylinderGeometry(5, 5, 60, 6), rust);
+    pod.rotation.x = Math.PI / 2;
+    pod.position.set(side * 17, 0, 8);
+    g.add(pod);
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(16, 2, 22), dark);
+    fin.position.set(side * 22, -4, 30);
+    g.add(fin);
+  }
+  const ts: THREE.Mesh[] = [];
+  for (const x of [-8, 0, 8]) {
+    const t = thruster(3);
+    t.position.set(x, 0, 52);
+    ts.push(t);
+    g.add(t);
+  }
+  g.add(hull, prow, bridge);
+  return { group: g, thrusters: ts, kind: 'pirate_corvette' };
+}
+
+function buildTurret(): ShipView {
+  const g = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 4, 2.6, 8), mat(0x4a443c, 0.9, 0.5));
+  const head = new THREE.Mesh(new THREE.BoxGeometry(4, 2.4, 4.4), mat(0x6e3326, 0.85, 0.5));
+  head.position.y = 2.4;
+  for (const side of [-1, 1]) {
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 6.5, 6), mat(0x303336, 0.5, 0.8));
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(side * 1.1, 2.4, -4);
+    g.add(barrel);
+  }
+  g.add(base, head);
+  return { group: g, thrusters: [], kind: 'pirate_turret' };
+}
+
 function buildPirate(tier: PirateTier): ShipView {
+  if (tier === 'corvette') return buildCorvette();
+  if (tier === 'turret') return buildTurret();
   const scale = tier === 'elite' ? 1.7 : tier === 'raider' ? 1.35 : tier === 'fighter' ? 1.1 : 0.9;
   const g = new THREE.Group();
   const accent = tier === 'elite' ? 0x8a2a2a : 0x6e3326;

@@ -174,6 +174,8 @@ export class GameServer {
       case 'refuel': sim.refuel(pid); break;
       case 'repair': sim.repairHull(pid); break;
       case 'restock': sim.restockMissiles(pid); break;
+      case 'ammo': sim.restockCannonAmmo(pid); break;
+      case 'derelict': sim.openDerelict(pid, int(msg.id)); break;
       case 'accept': if (typeof msg.id === 'string') sim.acceptContract(pid, msg.id); break;
       case 'abandon': if (typeof msg.id === 'string') sim.abandonContract(pid, msg.id); break;
       case 'deliver': if (typeof msg.id === 'string') sim.deliverSupply(pid, msg.id); break;

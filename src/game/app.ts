@@ -9,8 +9,9 @@ import { FxLayer } from '../render/fx';
 import { PostPipeline } from '../render/post';
 import { SceneManager } from '../render/scene';
 import { buildStarfield } from '../render/starfield';
-import { GOODS } from '../sim/data';
-import { vdist } from '../sim/vec';
+import { BOLT_SPEED, GOODS } from '../sim/data';
+import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
+import { settings } from '../ui/settings';
 import type { IWorld } from '../world_api';
 import { ChatUi } from '../ui/chat';
 import { el, fmtCredits, fmtDistance } from '../ui/dom';
@@ -173,9 +174,61 @@ export class GameApp {
     this.audio.applyVolume();
   }
 
+  // Optional aim assist: a gentle steering pull toward the locked hostile's
+  // intercept point when it's already near your nose. Helps mouse aiming feel
+  // planted without flying the ship for you.
+  private applyAimAssist(w: IWorld, dt: number): void {
+    if (!settings.aimAssist || this.input.uiMode) return;
+    const ship = w.player;
+    if (!ship || ship.dockedAt || ship.cruise !== 'off') return;
+    const target = ship.targetId !== null ? w.entities.get(ship.targetId) : null;
+    if (!target || target.dead || target.kind !== 'ship' || !target.pirate) return;
+    const d = vdist(ship.pos, target.pos);
+    if (d > w.shipStats.weaponRange * 1.3) return;
+    const aim = leadPoint(ship.pos, ship.vel, target.pos, target.vel, BOLT_SPEED);
+    // intercept direction in ship-local frame
+    const qc = { x: -ship.orient.x, y: -ship.orient.y, z: -ship.orient.z, w: ship.orient.w };
+    const local = qrot(qc, vnorm(vsub(aim, ship.pos)));
+    const yawErr = Math.atan2(-local.x, -local.z);
+    const pitchErr = Math.atan2(local.y, -local.z);
+    const ang = Math.hypot(yawErr, pitchErr);
+    if (ang > 0.35) return; // only assists once you're roughly on it
+    const strength = 0.5 * (1 - ang / 0.35); // fades out at the cone edge
+    w.input.yaw = clampInput(w.input.yaw + yawErr * strength);
+    w.input.pitch = clampInput(w.input.pitch + pitchErr * strength);
+  }
+
   private toggleWindow(id: string): void {
     this.audio.click();
     this.wm.toggle(id);
+  }
+
+  // Derelict story prompt: short creepy log + breach-or-leave choice.
+  private openDerelictWindow(entityId: number, name: string, story: string): void {
+    const win = this.wm.register(`derelict_${entityId}`, name.toUpperCase());
+    win.body.appendChild(el('div', 'vf-derelict-story', story));
+    win.body.appendChild(el('div', 'vf-subline', 'The cargo hold is still sealed. The cutting torch is in the locker.'));
+    const row = el('div', 'vf-menu-row');
+    const breach = el('button', 'vf-btn big danger');
+    breach.textContent = 'BREACH THE HOLD';
+    breach.addEventListener('click', () => {
+      this.audio.click();
+      this.world.openDerelict(entityId);
+      this.wm.close(`derelict_${entityId}`);
+    });
+    const leave = el('button', 'vf-btn big');
+    leave.textContent = 'LEAVE IT BE';
+    leave.addEventListener('click', () => {
+      this.audio.click();
+      this.wm.close(`derelict_${entityId}`);
+      this.hud.pushLog('Some doors are better left shut.', '#8a8d90');
+    });
+    row.appendChild(breach);
+    row.appendChild(leave);
+    win.body.appendChild(row);
+    win.refresh = () => {};
+    this.wm.show(`derelict_${entityId}`);
+    this.input.releasePointer();
   }
 
   private buildContactsWindow(): void {
@@ -230,6 +283,7 @@ export class GameApp {
     // the InputManager for w.input
     const botInput = (window as any).VF?.botInput;
     if (botInput) Object.assign(w.input, botInput);
+    this.applyAimAssist(w, dt);
     w.update(dt);
 
     // events
@@ -429,6 +483,19 @@ export class GameApp {
           this.hud.pushLog('Cruise drive engaged.', '#8fb');
         }
         break;
+      case 'forcefield':
+        this.audio.deny();
+        this.audio.alarmFuel();
+        this.hud.flashAlert(`PLANETARY EXCLUSION FIELD — ${ev.body.toUpperCase()} — TURN BACK`, '#e8402a', 3000);
+        break;
+      case 'derelict':
+        this.audio.commsStatic();
+        this.openDerelictWindow(ev.entityId, ev.name, ev.story);
+        break;
     }
   }
+}
+
+function clampInput(v: number): number {
+  return v < -1 ? -1 : v > 1 ? 1 : v;
 }

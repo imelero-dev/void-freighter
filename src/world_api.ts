@@ -60,6 +60,8 @@ export interface IWorld {
   refuel(): void;
   repairHull(): void;
   restockMissiles(): void;
+  restockCannonAmmo(): void;
+  openDerelict(entityId: number): void;
   acceptContract(contractId: string): void;
   abandonContract(contractId: string): void;
   deliverSupply(contractId: string): void;

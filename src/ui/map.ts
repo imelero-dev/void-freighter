@@ -109,7 +109,7 @@ export class SystemMap {
       out.push({ kind: 'planet', id: p.id, name: p.name, x: p.pos.x, z: p.pos.z, pos: p.pos, known: true });
     }
     for (const st of this.world.system.stations) {
-      out.push({ kind: 'station', id: st.id, name: known.has(st.id) ? st.name : 'Unknown signal', x: st.pos.x, z: st.pos.z, pos: st.pos, known: known.has(st.id) });
+      out.push({ kind: 'station', id: st.id, name: st.name, x: st.pos.x, z: st.pos.z, pos: st.pos, known: known.has(st.id) });
     }
     for (const b of this.world.system.belts) {
       for (const f of b.fields) {
@@ -222,21 +222,16 @@ export class SystemMap {
       ctx.fillText(p.name.toUpperCase(), px, py - 10);
     }
 
-    // stations
+    // stations: always named; unvisited ones are dimmed until you dock once
     for (const st of this.world.system.stations) {
       const [sx, sy] = this.toScreen(st.pos.x, st.pos.z);
       const isKnown = known.has(st.id);
-      ctx.strokeStyle = isKnown ? (st.blackMarket ? '#cc5544' : '#7fb1c9') : 'rgba(130, 140, 150, 0.5)';
+      const color = st.blackMarket ? '220, 110, 90' : '127, 177, 201';
+      ctx.strokeStyle = `rgba(${color}, ${isKnown ? 0.95 : 0.45})`;
       ctx.strokeRect(sx - 4, sy - 4, 8, 8);
-      if (isKnown) {
-        ctx.fillStyle = st.blackMarket ? 'rgba(220, 110, 90, 0.9)' : 'rgba(127, 177, 201, 0.9)';
-        ctx.font = '10px monospace';
-        ctx.fillText(st.name, sx, sy + 17);
-      } else {
-        ctx.fillStyle = 'rgba(130, 140, 150, 0.45)';
-        ctx.font = '10px monospace';
-        ctx.fillText('?', sx, sy + 17);
-      }
+      ctx.fillStyle = `rgba(${color}, ${isKnown ? 0.9 : 0.5})`;
+      ctx.font = '10px monospace';
+      ctx.fillText(isKnown ? st.name : `${st.name} (unvisited)`, sx, sy + 17);
     }
 
     // destination
