@@ -1,0 +1,35 @@
+{
+  "name": "void-freighter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Void Freighter — gritty multiplayer space hauling sim: trade, contracts, mining, pirate dogfights. 100% procedural.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "build:server": "esbuild server/main.ts --bundle --platform=node --format=cjs --external:pg-native --external:bufferutil --external:utf-8-validate --outfile=dist-server/server.cjs",
+    "server": "npm run build:server && node dist-server/server.cjs"
+  },
+  "dependencies": {
+    "pg": "^8.21.0",
+    "three": "^0.170.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.20.0",
+    "@types/three": "^0.170.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.1",
+    "puppeteer-core": "^25.1.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.8"
+  }
+}
