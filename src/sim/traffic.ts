@@ -30,7 +30,7 @@ const STATION_NEAR = 60_000;
 const ARRIVE_DIST = 2_600;
 const STOCK_TRANSFER_MIN = 4;
 const STOCK_TRANSFER_MAX = 10;
-const MERCHANT_TIMER_S: [number, number] = [200, 380];
+const MERCHANT_TIMER_S: [number, number] = [140, 300];
 const DISTRESS_TIMER_S: [number, number] = [260, 460];
 const PATROL_SCAN_RANGE = 8_000;
 const PATROL_LEASH = 14_000;
@@ -101,14 +101,14 @@ export class TrafficSystem {
           this.spawnAcc.set(meta.pid, acc);
         }
         // deep-space specials
-        const mAcc = (this.merchantAcc.get(meta.pid) ?? sim.rng.range(...MERCHANT_TIMER_S)) - 1;
+        const mAcc = (this.merchantAcc.get(meta.pid) ?? sim.rng.range(60, 160)) - 1;
         if (mAcc <= 0) {
           this.merchantAcc.set(meta.pid, sim.rng.range(...MERCHANT_TIMER_S));
           this.maybeSpawnMerchant(e);
         } else {
           this.merchantAcc.set(meta.pid, mAcc);
         }
-        const dAcc = (this.distressAcc.get(meta.pid) ?? sim.rng.range(...DISTRESS_TIMER_S)) - 1;
+        const dAcc = (this.distressAcc.get(meta.pid) ?? sim.rng.range(120, 240)) - 1;
         if (dAcc <= 0) {
           this.distressAcc.set(meta.pid, sim.rng.range(...DISTRESS_TIMER_S));
           if (sim.rng.chance(0.55)) this.spawnDistress(e, meta.pid);
@@ -172,7 +172,13 @@ export class TrafficSystem {
       const target = dest ? dest.pos : vadd(e.pos, vscale(qForward(e.orient), 10_000));
       const dir = vnorm(vsub(target, e.pos));
       e.orient = qLookAt(dir);
-      e.vel = vscale(dir, def.laneSpeed);
+      // approach braking: lane speed in the open, engine speed near the port
+      let speed = def.laneSpeed;
+      if (dest) {
+        const d = vdist(e.pos, dest.pos);
+        if (d < 12_000) speed = Math.max(def.maxSpeed, d / 18);
+      }
+      e.vel = vscale(dir, speed);
       if (dest && vdist(e.pos, dest.pos) < ARRIVE_DIST + dest.radius) {
         this.completeRoute(e);
         this.cleanup(e.id);
@@ -274,43 +280,60 @@ export class TrafficSystem {
 
   private maybeSpawnTraffic(player: Entity): void {
     const sim = this.sim;
-    if (this.bubbleCount(player.pos) >= TRAFFIC_CAP_NEAR_PLAYER) return;
+    const population = this.bubbleCount(player.pos);
+    if (population >= TRAFFIC_CAP_NEAR_PLAYER) return;
 
     // context: near a station? near a lane?
     const nearStation = sim.system.stations.find((s) => vdist(s.pos, player.pos) < STATION_NEAR);
     const lane = this.laneNear(player.pos);
     if (!nearStation && !lane) return;
-    if (!sim.rng.chance(0.55)) return;
+    if (!sim.rng.chance(0.8)) return;
 
-    if (nearStation) {
-      // local port traffic: couriers and freighters arriving/leaving, the
-      // occasional patrol on its beat
-      const roll = sim.rng.next();
-      if (roll < 0.25) {
-        this.spawnPatrol(vadd(nearStation.pos, randOffset(sim, 6000, 12_000)), nearStation.factionId);
-      } else {
-        const kind: NpcKind = roll < 0.6 ? 'courier' : 'freighter';
-        const outbound = sim.rng.chance(0.5);
-        const other = sim.rng.pick(sim.system.stations.filter((s) => s.id !== nearStation.id));
-        const from = outbound ? nearStation : other;
-        const to = outbound ? other : nearStation;
-        const pos = outbound
-          ? vadd(nearStation.pos, randOffset(sim, 4000, 9000))
-          : vadd(player.pos, randOffset(sim, 7000, 13_000));
-        this.spawnHauler(kind, pos, from, to);
+    // first impression: an empty port fills up fast
+    const burst = population === 0 && nearStation ? 3 : 1;
+    for (let i = 0; i < burst; i++) {
+      if (nearStation) {
+        // local port traffic: couriers and freighters arriving/leaving, the
+        // occasional patrol on its beat
+        const roll = sim.rng.next();
+        if (roll < 0.22) {
+          this.spawnPatrol(vadd(nearStation.pos, randOffset(sim, 3000, 7000)), nearStation.factionId);
+        } else {
+          const kind: NpcKind = roll < 0.6 ? 'courier' : 'freighter';
+          const outbound = sim.rng.chance(0.5);
+          const other = sim.rng.pick(sim.system.stations.filter((s) => s.id !== nearStation.id));
+          const from = outbound ? nearStation : other;
+          const to = outbound ? other : nearStation;
+          const pos = outbound
+            ? vadd(nearStation.pos, randOffset(sim, 2500, 5500))
+            : vadd(player.pos, randOffset(sim, 4000, 8000));
+          const h = this.spawnHauler(kind, pos, from, to);
+          // port chatter: traffic you can hear, not just see
+          if (sim.rng.chance(0.35)) {
+            for (const meta of sim.players.values()) {
+              const p = sim.entities.get(meta.pid);
+              if (p && !p.dockedAt && vdist(p.pos, h.pos) < 15_000) {
+                sim.emit({
+                  type: 'comms', pid: meta.pid,
+                  text: outbound
+                    ? `${h.name}: ${nearStation.name} control, requesting departure corridor. Hold is full, mood is better.`
+                    : `${h.name}: ${nearStation.name} control, inbound on final. Try not to scratch the paint this time.`,
+                });
+                break;
+              }
+            }
+          }
+        }
+      } else if (lane) {
+        // lane traffic passing through the bubble
+        const kind: NpcKind = sim.rng.chance(0.12) ? 'superfreighter' : sim.rng.chance(0.55) ? 'freighter' : 'courier';
+        const dir = vnorm(vsub(lane.to.pos, lane.from.pos));
+        // drop it upstream of the player so it sails past, close enough to see
+        const behind = sim.rng.range(4000, 9000);
+        const lateral = randOffset(sim, 500, 1600);
+        const pos = vadd(vadd(player.pos, vscale(dir, -behind)), lateral);
+        this.spawnHauler(kind, pos, lane.from, lane.to, lane.good);
       }
-      return;
-    }
-
-    // lane traffic passing through the bubble
-    if (lane) {
-      const kind: NpcKind = sim.rng.chance(0.12) ? 'superfreighter' : sim.rng.chance(0.55) ? 'freighter' : 'courier';
-      const dir = vnorm(vsub(lane.to.pos, lane.from.pos));
-      // drop it upstream of the player so it sails past
-      const behind = sim.rng.range(8000, 16_000);
-      const lateral = randOffset(sim, 800, 2400);
-      const pos = vadd(vadd(player.pos, vscale(dir, -behind)), lateral);
-      this.spawnHauler(kind, pos, lane.from, lane.to, lane.good);
     }
   }
 

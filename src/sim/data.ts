@@ -347,23 +347,23 @@ export interface NpcDef {
 export const NPC_DEFS: Record<import('./types').NpcKind, NpcDef> = {
   superfreighter: {
     kind: 'superfreighter', hull: 4000, shield: 1500, maxSpeed: 70, accel: 6, turnRate: 0.12,
-    laneSpeed: 900, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 110,
+    laneSpeed: 300, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 110,
   },
   freighter: {
     kind: 'freighter', hull: 320, shield: 160, maxSpeed: 115, accel: 14, turnRate: 0.7,
-    laneSpeed: 1400, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 26,
+    laneSpeed: 460, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 26,
   },
   courier: {
     kind: 'courier', hull: 90, shield: 60, maxSpeed: 200, accel: 34, turnRate: 1.8,
-    laneSpeed: 2100, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 10,
+    laneSpeed: 640, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 10,
   },
   patrol: {
     kind: 'patrol', hull: 220, shield: 200, maxSpeed: 230, accel: 42, turnRate: 2.2,
-    laneSpeed: 1800, shotDamage: 16, shotInterval: 0.3, weaponRange: 1300, aimError: 0.025, radius: 12,
+    laneSpeed: 600, shotDamage: 16, shotInterval: 0.3, weaponRange: 1300, aimError: 0.025, radius: 12,
   },
   merchant: {
     kind: 'merchant', hull: 260, shield: 220, maxSpeed: 120, accel: 16, turnRate: 0.9,
-    laneSpeed: 1000, shotDamage: 12, shotInterval: 0.5, weaponRange: 1000, aimError: 0.04, radius: 16,
+    laneSpeed: 380, shotDamage: 12, shotInterval: 0.5, weaponRange: 1000, aimError: 0.04, radius: 16,
   },
 };
 
