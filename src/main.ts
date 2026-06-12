@@ -26,6 +26,7 @@ const menu = new Menu({
 
 function startGame(w: IWorld): void {
   world = w;
+  (window as any).VF = { world: w }; // exposed for E2E scripts/bots
   app = new GameApp(w, canvas);
   app.menuHelp = () => menu.toggleHelp();
   app.onExit = () => {

@@ -11,6 +11,7 @@ import {
   shipValue, type ShipStats,
 } from './data';
 import { MODULE_NAMES } from './data';
+import { integrateFlight } from './flight';
 import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
@@ -476,50 +477,7 @@ export class Sim {
     dt: number,
     assist: boolean,
   ): void {
-    // rotation: approach target angular velocity
-    const targetAng = v3(
-      clamp(input.pitch, -1, 1) * perf.turnRate,
-      clamp(input.yaw, -1, 1) * perf.turnRate,
-      clamp(input.roll, -1, 1) * perf.turnRate,
-    );
-    const angAccel = perf.turnRate * 5;
-    e.angVel.x += clamp(targetAng.x - e.angVel.x, -angAccel * dt, angAccel * dt);
-    e.angVel.y += clamp(targetAng.y - e.angVel.y, -angAccel * dt, angAccel * dt);
-    e.angVel.z += clamp(targetAng.z - e.angVel.z, -angAccel * dt, angAccel * dt);
-    e.orient = qIntegrate(e.orient, e.angVel, dt);
-
-    e.throttle = clamp(input.thrustForward, -0.3, 1);
-    if (assist && !input.brake) {
-      // flight assist: velocity converges on commanded vector
-      const desiredLocal = v3(
-        clamp(input.thrustRight, -1, 1) * 0.6,
-        clamp(input.thrustUp, -1, 1) * 0.6,
-        -e.throttle,
-      );
-      const desired = vscale(qrot(e.orient, desiredLocal), perf.maxSpeed);
-      const delta = vsub(desired, e.vel);
-      const dl = vlen(delta);
-      const maxDelta = perf.accel * dt;
-      if (dl > 1e-6) vaddTo(e.vel, vscale(delta, Math.min(1, maxDelta / dl)));
-    } else if (input.brake) {
-      const dl = vlen(e.vel);
-      if (dl > 1e-6) {
-        const dec = Math.min(dl, perf.accel * 1.2 * dt);
-        vaddTo(e.vel, vscale(e.vel, -dec / dl));
-      }
-    } else {
-      // raw newtonian
-      const thrustLocal = v3(
-        clamp(input.thrustRight, -1, 1),
-        clamp(input.thrustUp, -1, 1),
-        -clamp(input.thrustForward, -1, 1),
-      );
-      vaddTo(e.vel, vscale(qrot(e.orient, thrustLocal), perf.accel * dt));
-      const sp = vlen(e.vel);
-      const cap = perf.maxSpeed * 1.6;
-      if (sp > cap) e.vel = vscale(e.vel, cap / sp);
-    }
-    vaddTo(e.pos, vscale(e.vel, dt));
+    integrateFlight(e, input, perf, dt, assist);
   }
 
   // -------------------------------------------------------------------------
@@ -1999,6 +1957,24 @@ export class Sim {
 
   dangerAt(pos: Vec3): number {
     return dangerAt(this.system, pos);
+  }
+
+  // All rocks whose state differs from pristine (being mined or destroyed),
+  // for network sync — clients generate pristine rocks deterministically.
+  touchedRocks(): Array<{ fieldId: string; index: number; hp: number }> {
+    const out: Array<{ fieldId: string; index: number; hp: number }> = [];
+    for (const [key, st] of this.rocks) {
+      const sep = key.lastIndexOf(':');
+      const fieldId = key.slice(0, sep);
+      const index = Number(key.slice(sep + 1));
+      const field = this.fieldById(fieldId);
+      if (!field) continue;
+      const belt = this.system.belts.find((b) => b.id === field.beltId)!;
+      const spawn = rockSpawn(field, belt, index);
+      const maxHp = spawn.radius * ROCK_TYPES[spawn.type].hpPerRadius;
+      if (st.hp < maxHp) out.push({ fieldId, index, hp: Math.max(0, Math.round(st.hp)) });
+    }
+    return out;
   }
 }
 

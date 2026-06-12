@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: voidfreighter-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: voidfreighter
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env. See .env.example.}
+      POSTGRES_DB: voidfreighter
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - voidfreighter_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voidfreighter -d voidfreighter"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The full game server (client + API + world). `docker compose up -d --build`
+  # then open http://localhost:8788 — or put a TLS reverse proxy in front for
+  # remote hosting (see README).
+  game:
+    build: .
+    container_name: voidfreighter-game
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://voidfreighter:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env. See .env.example.}@postgres:5432/voidfreighter
+      PORT: "8788"
+    # loopback-only: a TLS reverse proxy (Caddy/nginx) is the public entrance
+    ports:
+      - "127.0.0.1:8788:8788"
+
+volumes:
+  voidfreighter_pgdata:
