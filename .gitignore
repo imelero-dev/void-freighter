@@ -3,5 +3,4 @@ dist/
 dist-server/
 .env
 *.log
-screenshots/
 .DS_Store

@@ -119,6 +119,7 @@ export interface PlayerMeta {
   undockInvuln: number;
   interdictCooldown: number;
   commsTimer: number;
+  wreckTimer: number;
   pirateCheckTimer: number;
   extractAcc: number;
   stats: ShipStats;
@@ -181,7 +182,8 @@ export class Sim {
     const meta: PlayerMeta = {
       pid, name, profile: prof, input: emptyShipInput(), firing: false, drillOn: false,
       destination: null, docking: null, undockInvuln: 0, interdictCooldown: 0,
-      commsTimer: 90 + this.rng.range(0, 120), pirateCheckTimer: this.rng.range(0, PIRATE_CHECK_S),
+      commsTimer: 90 + this.rng.range(0, 120), wreckTimer: 240 + this.rng.range(0, 300),
+      pirateCheckTimer: this.rng.range(0, PIRATE_CHECK_S),
       extractAcc: 0, stats: shipStats(prof.hullId, prof.modules), rescueTimer: 0,
       cruiseRequested: false, flightAssist: true,
     };
@@ -426,6 +428,14 @@ export class Sim {
     if (meta.commsTimer <= 0) {
       meta.commsTimer = 110 + this.rng.range(0, 160);
       this.events.push({ type: 'comms', pid: meta.pid, text: this.rng.pick(COMMS_LINES) });
+    }
+
+    // derelict encounters: rare distress beacons in deep space. Salvage pays —
+    // but sometimes the beacon is bait.
+    meta.wreckTimer -= dt;
+    if (meta.wreckTimer <= 0) {
+      meta.wreckTimer = 360 + this.rng.range(0, 360);
+      this.maybeSpawnWreck(meta, e);
     }
 
     // flight
@@ -1063,6 +1073,52 @@ export class Sim {
     this.entities.set(e.id, e);
     if (aggroPid !== null) this.events.push({ type: 'hostileDetected', pid: aggroPid });
     return e;
+  }
+
+  // Spawn a derelict wreck site a few km off the player's path: salvage
+  // containers + a distress beacon comms line. ~1 in 3 are pirate bait.
+  private maybeSpawnWreck(meta: PlayerMeta, e: Entity): void {
+    // deep space only: no station within 60 km, not inside a field
+    for (const st of this.system.stations) {
+      if (vdist(e.pos, st.pos) < 60_000) return;
+    }
+    if (e.cruise === 'cruise') return; // you blow past it at cruise speed
+    const dir = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-0.3, 0.3), this.rng.range(-1, 1)));
+    const sitePos = vadd(e.pos, vscale(dir, this.rng.range(3000, 6000)));
+    const containers = this.rng.int(2, 3);
+    for (let i = 0; i < containers; i++) {
+      const loot = blankEntity(this.nextId++, 'loot');
+      loot.pos = vadd(sitePos, v3(this.rng.range(-220, 220), this.rng.range(-120, 120), this.rng.range(-220, 220)));
+      loot.vel = v3(this.rng.range(-2, 2), this.rng.range(-1, 1), this.rng.range(-2, 2));
+      loot.ttl = 600;
+      loot.radius = 4;
+      loot.name = 'wreckage';
+      loot.lootCredits = this.rng.int(40, 260);
+      const drop = this.rng.pickWeighted(PIRATE_GOOD_DROPS, PIRATE_GOOD_DROPS.map((d) => d.weight));
+      loot.goodId = drop.good;
+      loot.qty = this.rng.int(drop.min, drop.max);
+      if (this.rng.chance(0.06)) {
+        loot.lootModule = { slot: this.rng.pick(['shield', 'scanner', 'collector', 'armor'] as ModuleSlot[]), tier: this.rng.int(1, 3) };
+      }
+      this.entities.set(loot.id, loot);
+    }
+    // bait: lurking pirates wake when you come close (they patrol the site)
+    if (this.rng.chance(0.35)) {
+      const n = this.rng.int(1, 2);
+      for (let i = 0; i < n; i++) {
+        this.spawnPirate(this.rollPirateTier(Math.max(0.3, dangerAt(this.system, sitePos))),
+          vadd(sitePos, v3(this.rng.range(-1500, 1500), this.rng.range(-400, 400), this.rng.range(-1500, 1500))));
+      }
+    }
+    this.events.push({
+      type: 'comms', pid: meta.pid,
+      text: this.rng.pick([
+        'Automated distress beacon, repeating. No flight plan on record. Source: close.',
+        '…hull breach… all hands… (the rest is static). The beacon is still transmitting, nearby.',
+        'A weak salvage transponder pings on your scanner. Somebody had a worse day than you.',
+      ]),
+    });
+    this.events.push({ type: 'log', text: 'Distress beacon detected — salvage signature marked on scanner.', color: '#7fb1c9', pid: meta.pid });
   }
 
   private maybeSpawnPirates(meta: PlayerMeta, e: Entity): void {
