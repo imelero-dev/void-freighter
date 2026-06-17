@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/sim';
-import { qLookAt, vnorm, vsub, v3 } from '../src/sim/vec';
+import { qLookAt, vadd, vscale, v3 } from '../src/sim/vec';
 
 function runTicks(sim: Sim, n: number) {
   const events = [];
@@ -61,14 +61,17 @@ describe('transport contract lifecycle', () => {
     sim.sellGood(pid, c.good!, c.qty);
     expect(meta.profile.cargo.find((ci) => ci.contractId === c.id)).toBeTruthy();
 
-    // teleport to destination and dock
+    // teleport to the destination's dock port and fly it in
     const dest = sim.station(c.dest)!;
     sim.undock(pid);
-    e.pos = { x: dest.pos.x + 1200, y: dest.pos.y, z: dest.pos.z };
+    sim.meta(pid)!.undockInvuln = 0;
+    sim.meta(pid)!.gearDown = true;
+    sim.meta(pid)!.vtol = true;
+    const along = dest.dockType === 'bay' ? dest.radius * 0.6 : dest.radius + 40;
+    e.pos = vadd(dest.pos, vscale(dest.dockPort, along));
     e.vel = v3();
-    e.orient = qLookAt(vnorm(vsub(dest.pos, e.pos))); // line up on the dock
+    e.orient = qLookAt(vscale(dest.dockPort, -1));
     const creditsBefore = meta.profile.credits;
-    sim.requestDock(pid);
     runTicks(sim, 20 * 6);
     expect(e.dockedAt).toBe(dest.id);
     expect(meta.profile.contracts.length).toBe(0);
@@ -180,11 +183,15 @@ describe('smuggling', () => {
       const meta = sim.meta(pid)!;
       const e = sim.entities.get(pid)!;
       sim.undock(pid);
+      meta.undockInvuln = 0;
+      meta.gearDown = true;
+      meta.vtol = true;
       sim.addCargo(meta.profile, 'stims', 10);
       const st = sim.station('bren_yards')!;
-      e.pos = { x: st.pos.x + 1200, y: st.pos.y, z: st.pos.z };
+      const along = st.dockType === 'bay' ? st.radius * 0.6 : st.radius + 40;
+      e.pos = vadd(st.pos, vscale(st.dockPort, along));
       e.vel = v3();
-      sim.requestDock(pid);
+      e.orient = qLookAt(vscale(st.dockPort, -1));
       for (let i = 0; i < 20 * 6; i++) sim.tick();
       if (sim.freeQty(meta.profile, 'stims') === 0) confiscated = true;
     }

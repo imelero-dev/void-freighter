@@ -3,10 +3,11 @@
 
 import * as THREE from 'three';
 import { isMobile } from '../game/touch';
-import { BOLT_SPEED, DOCK_ALIGN, DOCK_MAX_SPEED, GOODS } from '../sim/data';
+import { BOLT_SPEED, GOODS } from '../sim/data';
 import type { Entity } from '../sim/types';
 import { leadPoint, qForward, qRight, qUp, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
 import { atmosphereAt, SOFT_LAND_SPEED } from '../sim/system';
+import { dockCheck, stationPort } from '../sim/docking';
 import type { IWorld } from '../world_api';
 import { fmtDistance, fmtTime } from './dom';
 
@@ -690,31 +691,42 @@ export class Hud {
     const st = world.system.stations.find((s) => vdist(s.pos, ship.pos) < s.dockRadius * 1.25);
     if (!st || ship.dockedAt || ship.cruise !== 'off') return;
 
-    const d = vdist(st.pos, ship.pos);
     const speed = vlen(ship.vel);
-    const toSt = vnorm(vsub(st.pos, ship.pos));
-    const align = vdot(qForward(ship.orient), toSt); // 1 = nose on the dock collar
-    const inRange = d < st.dockRadius;
-    const slow = speed <= DOCK_MAX_SPEED;
+    const port = stationPort(st);
+    const dPort = vdist(port.point, ship.pos);
+    // authoritative type-specific readiness — the same check the sim docks on,
+    // so the instrument never lies (clamp / bay / pad)
+    const res = dockCheck(st, ship.pos, ship.vel, ship.orient, world.gearDown, world.vtolMode);
+    const level = res.level;
+    const cue = res.ok ? `${st.dockType.toUpperCase()} — holding` : res.cue;
 
-    let level: 0 | 1 | 2;
-    let cue: string;
-    // green exactly matches the dock gate (slow, in range, aligned) so the
-    // [SPACE] DOCK prompt never lies
-    if (inRange && slow && align >= DOCK_ALIGN) { level = 2; cue = '[SPACE] DOCK'; }
-    else if (inRange && (slow || align > DOCK_ALIGN - 0.1) && speed <= DOCK_MAX_SPEED * 2) { level = 1; cue = !slow ? 'REDUCE SPEED' : 'ALIGN ON DOCK'; }
-    else { level = 0; cue = speed > DOCK_MAX_SPEED * 2 ? 'EXCESSIVE CLOSURE' : 'GO AROUND — REALIGN'; }
-
-    const prox = Math.max(0, 1 - d / st.dockRadius);
+    const prox = Math.max(0, 1 - dPort / st.dockRadius);
     const beep = level === 2 ? 2 + prox * 6 : level === 1 ? 1 + prox * 2 : 0.4;
     this.approach = { active: true, level, beep };
+
+    // direction marker toward the dock port (so you know which face to use)
+    const ps = this.toScreen(this.tmpLocal.set(port.point.x - origin.x, port.point.y - origin.y, port.point.z - origin.z));
+    if (!ps.behind) {
+      ctx.strokeStyle = level === 2 ? GREEN : level === 1 ? '#e0902a' : RED;
+      ctx.lineWidth = 1.4;
+      const r = 11;
+      ctx.beginPath(); // diamond on the dock feature
+      ctx.moveTo(ps.x, ps.y - r); ctx.lineTo(ps.x + r, ps.y);
+      ctx.lineTo(ps.x, ps.y + r); ctx.lineTo(ps.x - r, ps.y);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = AMBER_DIM;
+      ctx.font = '9px "Lucida Console", monospace';
+      ctx.fillText(`${st.dockType.toUpperCase()} ${fmtDistance(dPort)}`, ps.x, ps.y + r + 11);
+    }
 
     // instrument: label, three lights, cue, and the gauges
     const y = H * 0.17;
     ctx.textAlign = 'center';
     ctx.font = '10px "Lucida Console", monospace';
     ctx.fillStyle = AMBER_DIM;
-    ctx.fillText(`APPROACH — ${st.name.toUpperCase()}`, cx, y - 16);
+    ctx.fillText(`APPROACH — ${st.name.toUpperCase()} · ${st.dockType.toUpperCase()}`, cx, y - 16);
 
     const colours = ['rgba(232,64,42,', 'rgba(224,144,42,', 'rgba(127,201,127,'];
     const labels = ['R', 'A', 'G'];
@@ -736,10 +748,10 @@ export class Hud {
     ctx.fillStyle = cueCol;
     ctx.font = '13px "Lucida Console", monospace';
     ctx.fillText(cue, cx, y + 22);
-    // small align / speed sub-cues
+    // sub-cue: speed + range to the dock feature
     ctx.font = '9px "Lucida Console", monospace';
     ctx.fillStyle = AMBER_DIM;
-    ctx.fillText(`ALIGN ${Math.max(0, Math.round(align * 100))}%   ${Math.round(speed)} m/s   ${fmtDistance(d)}`, cx, y + 36);
+    ctx.fillText(`${Math.round(speed)} m/s   ${fmtDistance(dPort)} to ${st.dockType}`, cx, y + 36);
   }
 
   // Big combat readout: shield + hull as thick segmented gauges with large

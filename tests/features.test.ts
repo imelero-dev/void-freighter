@@ -313,19 +313,24 @@ describe('station info intel', () => {
   });
 });
 
-describe('planetary exclusion field', () => {
-  it('bounces ships off and raises a warning event', () => {
+describe('planetary landing', () => {
+  it('lets a ship descend to the surface instead of bouncing off a field', () => {
     const sim = new Sim();
     const { pid, e } = deepSpacePlayer(sim);
-    const planet = sim.system.planets[0];
-    // drop the ship just inside the shell, flying inward
-    const shell = planet.radius * 1.15;
-    e.pos = vadd(planet.pos, v3(shell - 2000, 0, 0));
-    e.vel = v3(-300, 0, 0);
-    const events = runTicks(sim, 10);
-    expect(events.some((ev) => ev.type === 'forcefield' && ev.pid === pid)).toBe(true);
-    expect(vdist(e.pos, planet.pos)).toBeGreaterThanOrEqual(shell);
-    expect(e.hull).toBe(e.maxHull); // the wall shoves, it doesn't wreck you
+    const meta = sim.meta(pid)!;
+    meta.flightAssist = false;
+    meta.gearDown = true;
+    // a non-lava world (lava cooks the hull on the way down — by design)
+    const planet = sim.system.planets.find((p) => p.kind !== 'lava')!;
+    // approach the surface gently from straight above
+    e.pos = vadd(planet.pos, v3(0, planet.radius + e.radius + 40, 0));
+    e.vel = v3(0, -25, 0);
+    const events = runTicks(sim, 50);
+    // no exclusion field, and the ship comes to rest ON the surface (no clip)
+    expect(events.some((ev) => ev.type === 'forcefield')).toBe(false);
+    const alt = vdist(e.pos, planet.pos) - planet.radius;
+    expect(alt).toBeGreaterThan(-2);              // didn't clip through
+    expect(alt).toBeLessThan(e.radius + 60);      // actually reached the ground
   });
 });
 

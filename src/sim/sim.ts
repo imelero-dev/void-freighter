@@ -3,7 +3,7 @@
 
 import {
   AMMO_PRICE, ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
-  CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_ALIGN, DOCK_MAX_SPEED, FUEL_PRICE,
+  CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_MAX_SPEED, FUEL_PRICE,
   COMBAT_LOCKOUT_S, CRAFT_RECIPES, craftMaterials, GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
   DRILL_COOL_PER_S, DRILL_HEAT_PER_S, DRILL_OVERHEAT_RESUME, HOTSPOT_CONE, MINING_RATE_FACTOR,
   NPC_DEFS, ORE_CHANCE_BASE, ORE_CHANCE_HOTSPOT, REPAIR_KIT_FRACTION, REPAIR_KIT_RECIPE, WAREHOUSE_PLOT_M3, WORKSHOP_RENT_PRICE, WORKSHOP_RENT_S, warehousePlotPrice,
@@ -18,7 +18,8 @@ import { integrateFlight } from './flight';
 import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
-import { ATMO_DRAG, atmosphereAt, dangerAt, generateSystem, isLandable, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
+import { ATMO_DRAG, atmosphereAt, dangerAt, generateSystem, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
+import { BAY_DEPTH_FRAC, BAY_MOUTH_FRAC, dockCheck } from './docking';
 import { TrafficSystem } from './traffic';
 import {
   DT, emptyShipInput, type CargoItem, type Contract, type Destination, type Entity,
@@ -38,6 +39,8 @@ const FRAGMENT_CHUNK = 3;        // mined units per fragment entity
 const FRAGMENT_TTL = 150;
 const VTOL_SPEED_FACTOR = 0.22;  // forward-speed envelope in VTOL hover mode
 const ZERO_VEL: Vec3 = { x: 0, y: 0, z: 0 }; // stationary collider reference
+const LAVA_HEAT_DPS = 55;        // hull heat per second in a lava world's air
+const DOCK_VERB: Record<string, string> = { clamp: 'Clamp lock', bay: 'Bay approach', pad: 'Pad landing' };
 const LOOT_TTL = 240;
 const MISSILE_SPEED = 700;
 const MISSILE_TURN = 2.8;        // rad/s
@@ -563,6 +566,13 @@ export class Sim {
       if (atmo.density > 0) {
         const f = Math.max(0, 1 - ATMO_DRAG * atmo.density * dt);
         e.vel = vscale(e.vel, f);
+        // a lava world's air cooks the hull — landing there is a fire dare
+        if (atmo.planet?.kind === 'lava') {
+          this.applyDamage(e, LAVA_HEAT_DPS * atmo.density * dt, -1, true);
+          if (this.tickCount % 20 === 0) {
+            this.events.push({ type: 'log', text: `WARNING: ${atmo.planet.name} surface heat — hull cooking.`, color: '#f44', pid: meta.pid });
+          }
+        }
       }
     }
 
@@ -572,8 +582,10 @@ export class Sim {
     // collisions & hazards
     this.tickCollisions(meta, e, dt);
 
-    // ATC: announce approach clearance on entering a station's approach range
+    // ATC: announce approach clearance, then auto-dock once the type's approach
+    // is flown correctly (clamp aligned / inside the bay / settled on the pad)
     this.tickApproach(meta, e);
+    this.tickDockingDetect(meta, e);
 
     // mining
     this.tickMining(meta, e, dt);
@@ -846,45 +858,26 @@ export class Sim {
         this.events.push({ type: 'log', text: 'WARNING: hull temperature critical.', color: '#f44', pid: meta.pid });
       }
     }
-    // planets & moons: planetary exclusion field well above the surface —
-    // an invisible wall that shoves you back out (no more clipping through)
-    meta.forcefieldCooldown = Math.max(0, meta.forcefieldCooldown - dt);
-    const bounce = (center: Vec3, shellRadius: number, label: string) => {
-      const d = vdist(e.pos, center);
-      if (d >= shellRadius) return;
-      const n = vnorm(vsub(e.pos, center));
-      e.pos = vadd(center, vscale(n, shellRadius + 5));
-      // reflect velocity off the shell, heavily damped
-      const vn = vdot(e.vel, n);
-      if (vn < 0) {
-        e.vel = vsub(e.vel, vscale(n, vn * 1.6));
-        e.vel = vscale(e.vel, 0.45);
-      }
-      this.dropCruise(e, 'forcefield');
-      if (meta.forcefieldCooldown <= 0) {
-        meta.forcefieldCooldown = 3;
-        this.events.push({ type: 'forcefield', pid: meta.pid, body: label });
-      }
-    };
-    // onSurface is a single flag across all bodies, so snapshot the previous
-    // state and clear it BEFORE testing any body this tick — each planetSurface
-    // call re-asserts it only if actually in contact. This makes the touchdown
-    // cue a true rising edge and stops the other (far) bodies clobbering it.
+    // Every planet and moon is landable now (#16): the old exclusion field is
+    // gone. Gas giants present a solid cloud deck, lava worlds a scorching
+    // surface — you can set down on any of them. onSurface is a single flag
+    // across all bodies, so snapshot the previous state and clear it BEFORE
+    // testing any body this tick — each planetSurface re-asserts it only on real
+    // contact, making the touchdown cue a true rising edge.
     const wasResting = meta.onSurface;
     meta.onSurface = false;
     for (const p of this.system.planets) {
-      // solid worlds can be set down on; gas giants and lava worlds keep their
-      // hard exclusion field (no surface to land on)
-      if (isLandable(p.kind)) this.planetSurface(meta, e, p.pos, p.radius, p.name, wasResting);
-      else bounce(p.pos, p.radius * 1.15, p.name);
+      this.planetSurface(meta, e, p.pos, p.radius, p.name, wasResting);
     }
     for (const m of this.system.moons) {
       this.planetSurface(meta, e, m.pos, m.radius, 'the moon', wasResting);
     }
-    // stations: a solid hull you can scrape along, not a trampoline
+    // stations: a solid hull you can scrape along, not a trampoline. Bay
+    // stations carve an open mouth you can fly into (#17).
     for (const s of this.system.stations) {
       if (e.dockedAt) break;
-      this.solidCollision(meta, e, s.pos, s.radius, ZERO_VEL, 0.3);
+      if (s.dockType === 'bay') this.bayCollision(meta, e, s);
+      else this.solidCollision(meta, e, s.pos, s.radius, ZERO_VEL, 0.3);
     }
     // asteroids (active entities only)
     for (const a of this.entities.values()) {
@@ -926,6 +919,35 @@ export class Sim {
       }
       if (e.cruise !== 'off' && impact > 40) this.dropCruise(e, 'collision');
     }
+  }
+
+  // Bay-station collision (#17): the hull is solid everywhere except an open
+  // mouth along the dock-port axis. Inside the mouth tube you fly free until the
+  // solid back wall stops you; stray off-axis and you scrape the solid bay wall.
+  private bayCollision(meta: PlayerMeta, e: Entity, st: StationDef): void {
+    const rx = e.pos.x - st.pos.x, ry = e.pos.y - st.pos.y, rz = e.pos.z - st.pos.z;
+    const along = rx * st.dockPort.x + ry * st.dockPort.y + rz * st.dockPort.z;
+    const px = rx - st.dockPort.x * along, py = ry - st.dockPort.y * along, pz = rz - st.dockPort.z * along;
+    const lateral = Math.hypot(px, py, pz);
+    const inTube = along > 0 && lateral < st.radius * BAY_MOUTH_FRAC;
+    if (inTube) {
+      // solid back wall deep inside the bay
+      const backAlong = st.radius * (1 - BAY_DEPTH_FRAC) + e.radius;
+      if (along < backAlong) {
+        e.pos = vadd(e.pos, vscale(st.dockPort, backAlong - along));
+        const vn = vdot(e.vel, st.dockPort); // inbound is negative
+        if (vn < 0) {
+          e.vel = vsub(e.vel, vscale(st.dockPort, vn * 1.04));
+          const impact = -vn;
+          if (impact > COLLISION_DAMAGE_SPEED) {
+            this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.3 * meta.stats.massFactor, -1, true);
+          }
+        }
+      }
+      return;
+    }
+    // anywhere outside the mouth the hull (and bay walls) are solid
+    this.solidCollision(meta, e, st.pos, st.radius, ZERO_VEL, 0.3);
   }
 
   // Seamless planetary touchdown (#16/#18): the same mass-based contact as a
@@ -2086,9 +2108,12 @@ export class Sim {
     const near = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
     if (near && meta.approachStation !== near.id) {
       meta.approachStation = near.id;
+      const how = near.dockType === 'clamp' ? 'nose up to the clamp collar'
+        : near.dockType === 'bay' ? 'fly into the open bay'
+          : 'set down on the pad — VTOL and gear';
       this.events.push({
         type: 'comms', pid: meta.pid, from: `${near.name} ATC`,
-        text: `${this.callsign(meta)}, cleared approach. Reduce to docking speed, under ${DOCK_MAX_SPEED}, and line up on the dock.`,
+        text: `${this.callsign(meta)}, cleared approach. Under ${DOCK_MAX_SPEED} and ${how}.`,
       });
     }
     // hysteresis: only forget the clearance once you're well clear, so jockeying
@@ -2119,14 +2144,25 @@ export class Sim {
       this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: 'Excessive closure rate. Go around — reduce to docking speed.' });
       return;
     }
-    // nose alignment on the dock collar (shared with the approach-aid green light)
-    const align = vdot(qForward(e.orient), vnorm(vsub(st.pos, e.pos)));
-    if (align < DOCK_ALIGN) {
-      this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: 'Approach angle off. Line up with the dock and try again. [Y] for autodock.' });
+    // type-specific docking readiness (clamp / bay / pad)
+    const res = dockCheck(st, e.pos, e.vel, e.orient, meta.gearDown, meta.vtol);
+    if (!res.ok) {
+      this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `Not cleared to dock — ${res.cue}. [Y] for autodock.` });
       return;
     }
     meta.docking = { stationId: st.id, t: 0, from: vclone(e.pos) };
-    this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `Alignment good. Bay assigned, ${this.callsign(meta)}. Bringing you in.` });
+    this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `${DOCK_VERB[st.dockType]} confirmed, ${this.callsign(meta)}. Bringing you in.` });
+  }
+
+  // Passive docking: you earn the dock by flying the type's approach correctly;
+  // when the conditions hold we bring you in without needing the dock key (#17).
+  private tickDockingDetect(meta: PlayerMeta, e: Entity): void {
+    if (e.dead || e.dockedAt || meta.docking || e.cruise !== 'off') return;
+    const st = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
+    if (!st) return;
+    if (!dockCheck(st, e.pos, e.vel, e.orient, meta.gearDown, meta.vtol).ok) return;
+    meta.docking = { stationId: st.id, t: 0, from: vclone(e.pos) };
+    this.events.push({ type: 'comms', pid: meta.pid, from: `${st.name} ATC`, text: `${DOCK_VERB[st.dockType]} confirmed, ${this.callsign(meta)}. We have you.` });
   }
 
   // Autodock convenience service (#17): a paid hands-off final approach for

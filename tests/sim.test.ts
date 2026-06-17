@@ -215,48 +215,72 @@ describe('solid collision (#21)', () => {
 });
 
 describe('docking', () => {
-  it('docks when close and slow, undocks cleanly', () => {
+  // place the ship correctly for a station's dock type, ready to be brought in
+  const stageAtPort = (sim: Sim, pid: number, st: { pos: any; radius: number; dockType: string; dockPort: any }) => {
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.undockInvuln = 0;
+    meta.gearDown = true; // satisfies the pad type
+    meta.vtol = true;
+    const along = st.dockType === 'bay' ? st.radius * 0.6 : st.radius + 40;
+    e.pos = vadd(st.pos, vscale(st.dockPort, along));
+    e.vel = v3();
+    e.orient = qLookAt(vscale(st.dockPort, -1)); // nose toward the station
+  };
+
+  it('all three dock types (clamp / bay / pad) can be flown and docked (#17)', () => {
+    for (const type of ['clamp', 'bay', 'pad'] as const) {
+      const sim = makeSim();
+      const st = sim.system.stations.find((s) => s.dockType === type);
+      expect(st, `a ${type} station exists`).toBeTruthy();
+      const pid = sim.addPlayer('tester');
+      sim.undock(pid);
+      stageAtPort(sim, pid, st!);
+      runTicks(sim, 20 * 5); // passive auto-dock + bring-in lerp
+      expect(sim.entities.get(pid)!.dockedAt, `dock type ${type}`).toBe(st!.id);
+    }
+  });
+
+  it('undocks cleanly', () => {
     const sim = makeSim();
     const pid = sim.addPlayer('tester');
     const e = sim.entities.get(pid)!;
     expect(e.dockedAt).toBe('morrow_granary'); // starts docked
     sim.undock(pid);
     expect(e.dockedAt).toBeNull();
-    // come back, lined up on the dock collar
-    const st = sim.station('morrow_granary')!;
-    e.pos = { x: st.pos.x + 1500, y: st.pos.y, z: st.pos.z };
-    e.vel = v3();
-    e.orient = qLookAt(vnorm(vsub(st.pos, e.pos)));
-    sim.requestDock(pid);
-    runTicks(sim, 20 * 5);
-    expect(e.dockedAt).toBe('morrow_granary');
   });
 
-  it('refuses a misaligned approach — docking is earned (#17)', () => {
-    const sim = makeSim();
-    const pid = sim.addPlayer('tester');
-    sim.undock(pid);
-    const e = sim.entities.get(pid)!;
-    const st = sim.station('morrow_granary')!;
-    e.pos = { x: st.pos.x + 1500, y: st.pos.y, z: st.pos.z };
-    e.vel = v3();
-    e.orient = qLookAt(v3(0, 0, 1)); // nose pointed away from the dock
-    sim.requestDock(pid);
-    runTicks(sim, 20);
-    expect(e.dockedAt).toBeNull();
-  });
-
-  it('autodock brings a misaligned ship in for a fee (#17)', () => {
+  it('refuses an off-axis / unaligned approach — docking is earned (#17)', () => {
     const sim = makeSim();
     const pid = sim.addPlayer('tester');
     sim.undock(pid);
     const e = sim.entities.get(pid)!;
     const meta = sim.meta(pid)!;
+    const st = sim.station('morrow_granary')!;
+    meta.undockInvuln = 0;
+    // sit beside the station, well off the dock-port axis, pointed nowhere useful
+    const off = vnorm(v3(st.dockPort.z, st.dockPort.x, -st.dockPort.y)); // perpendicular-ish
+    e.pos = vadd(st.pos, vscale(off, st.radius + 800));
+    e.vel = v3();
+    e.orient = qLookAt(off);
+    sim.requestDock(pid);
+    runTicks(sim, 20);
+    expect(e.dockedAt).toBeNull();
+  });
+
+  it('autodock brings an unaligned ship in for a fee (#17)', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.undockInvuln = 0;
     meta.profile.credits = 1000;
     const st = sim.station('morrow_granary')!;
-    e.pos = { x: st.pos.x + 1500, y: st.pos.y, z: st.pos.z };
+    const off = vnorm(v3(st.dockPort.z, st.dockPort.x, -st.dockPort.y));
+    e.pos = vadd(st.pos, vscale(off, st.radius + 800)); // off-axis — manual would refuse
     e.vel = v3();
-    e.orient = qLookAt(v3(0, 0, 1)); // misaligned — manual docking would refuse
+    e.orient = qLookAt(off);
     sim.autodock(pid);
     runTicks(sim, 20 * 5);
     expect(e.dockedAt).toBe('morrow_granary');
@@ -268,16 +292,18 @@ describe('docking', () => {
     const pid = sim.addPlayer('tester');
     sim.undock(pid);
     const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.undockInvuln = 0;
     const st = sim.station('morrow_granary')!;
-    e.pos = { x: st.pos.x + 1500, y: st.pos.y, z: st.pos.z };
-    e.vel = v3(200, 0, 0);
+    stageAtPort(sim, pid, st);
+    e.vel = vscale(st.dockPort, 200); // way over docking speed
     sim.requestDock(pid);
-    runTicks(sim, 20);
+    runTicks(sim, 2);
     expect(e.dockedAt).toBeNull();
     e.vel = v3();
-    e.pos = { x: st.pos.x + 50_000, y: st.pos.y, z: st.pos.z };
+    e.pos = vadd(st.pos, vscale(st.dockPort, 50_000)); // out of range
     sim.requestDock(pid);
-    runTicks(sim, 20);
+    runTicks(sim, 2);
     expect(e.dockedAt).toBeNull();
   });
 });

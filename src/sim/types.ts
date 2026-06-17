@@ -80,6 +80,10 @@ export interface MoonDef {
 
 export type StationService = 'market' | 'contracts' | 'shipyard' | 'refinery' | 'fuel';
 
+// How you physically dock here: an external clamp/hatch you nose up to, an open
+// bay you fly through and into, or an exterior pad you set down on (#17).
+export type DockType = 'clamp' | 'bay' | 'pad';
+
 export interface StationDef {
   id: string;
   name: string;
@@ -88,6 +92,8 @@ export interface StationDef {
   radius: number;       // physical size for render/collision
   dockRadius: number;   // request docking within this range
   safeRadius: number;   // station police zone: no PvP, turrets kill pirates
+  dockType: DockType;   // the docking mechanic this station uses
+  dockPort: Vec3;       // unit world direction from centre to the dock feature
   services: StationService[];
   // economy profile: goods this station produces (cheap) / consumes (expensive)
   produces: Record<string, number>;  // goodId -> units per economy tick

@@ -178,6 +178,10 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
     ), rng.int(1, 1e9)));
   }
 
+  // guarantee all three docking styles appear in the system, deterministically
+  const DOCK_TYPES = ['clamp', 'bay', 'pad'] as const;
+  stations.forEach((st, i) => { st.dockType = DOCK_TYPES[i % 3]; });
+
   const belts: BeltDef[] = BELTS.map((spec) => {
     const fields: FieldDef[] = [];
     const baseAngle = rng.range(0, Math.PI * 2);
@@ -208,9 +212,15 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
 }
 
 function makeStation(spec: StationSpec, pos: Vec3, seed: number): StationDef {
+  // deterministic dock type + a fixed port direction on the hull
+  const rng = new Rng((seed ^ 0x90c5) >>> 0);
+  const dockType = (['clamp', 'bay', 'pad'] as const)[rng.int(0, 2)];
+  const dx = rng.range(-1, 1), dy = rng.range(-0.35, 0.35), dz = rng.range(-1, 1);
+  const dl = Math.hypot(dx, dy, dz) || 1;
   return {
     id: spec.id, name: spec.name, factionId: spec.faction, pos,
     radius: 900, dockRadius: 2200, safeRadius: 14_000,
+    dockType, dockPort: v3(dx / dl, dy / dl, dz / dl),
     services: spec.services,
     produces: { ...spec.produces },
     consumes: { ...spec.consumes },
@@ -269,7 +279,7 @@ export function stationInfoCost(from: Vec3, st: StationDef): number {
 // Atmospheric shell thickness as a fraction of planet radius. Drag ramps from
 // zero at the top of the shell to peak at the surface.
 export const ATMO_THICKNESS = 0.28;
-export const ATMO_DRAG = 1.1;          // peak per-second velocity drag coefficient
+export const ATMO_DRAG = 0.3;          // peak per-second drag: felt, but you can still reach the ground
 export const SOFT_LAND_SPEED = 35;     // m/s closing speed for a clean touchdown
 
 // Gas giants and lava worlds have no surface you can set down on.
