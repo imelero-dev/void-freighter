@@ -97,7 +97,8 @@ export class TouchControls {
       ['MAP', 'map'], ['CARGO', 'cargo'], ['SHIP', 'ship'], ['JRNL', 'journal'],
     ]));
     menus.appendChild(this.menuButton('SYS ▾', [
-      ['CRUISE', 'toggleCruise'], ['DOCK', 'dock'], ['DRILL', 'toggleDrill'],
+      ['CRUISE', 'toggleCruise'], ['VTOL', 'toggleVtol'], ['GEAR', 'toggleGear'],
+      ['DOCK', 'dock'], ['AUTODOCK', 'autodock'], ['DRILL', 'toggleDrill'],
       ['ASSIST', 'toggleAssist'], ['LIGHTS', 'lights'], ['CAM', 'toggleCamera'],
     ]));
     root.appendChild(menus);
