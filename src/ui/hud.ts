@@ -57,6 +57,11 @@ export class Hud {
   private fpsFrames = 0;
   private fpsText = '';
   private mobile = isMobile();
+  // combat-vitals damage flash tracking (big readouts pop when they drop)
+  private lastHull = -1;
+  private lastShield = -1;
+  private hullFlashAt = -1;
+  private shieldFlashAt = -1;
 
   constructor(private camera: THREE.PerspectiveCamera) {
     this.canvas = document.createElement('canvas');
@@ -610,48 +615,8 @@ export class Hud {
       ctx.fillText(world.drillOverheated ? 'DRILL VENTING' : 'DRILL — hold RMB to mine', gx + 30, gy - 88);
     }
 
-    // ---- shield arcs + hull (right of scanner) ----
-    const sx = cx + rx + 92;
-    const sy = scY + 4;
-    const shieldFrac = ship.maxShield > 0 ? ship.shield / ship.maxShield : 0;
-    // ship silhouette
-    ctx.strokeStyle = AMBER;
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(sx, sy - 9);
-    ctx.lineTo(sx + 7, sy + 7);
-    ctx.lineTo(sx, sy + 3);
-    ctx.lineTo(sx - 7, sy + 7);
-    ctx.closePath();
-    ctx.stroke();
-    // three concentric shield arcs, lit by charge level (front + rear)
-    for (let i = 0; i < 3; i++) {
-      const lit = shieldFrac > (i + 0.34) / 3;
-      ctx.strokeStyle = lit ? CYAN : 'rgba(127, 177, 201, 0.18)';
-      ctx.lineWidth = 2;
-      const r = 15 + i * 5.5;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, -Math.PI * 0.82, -Math.PI * 0.18);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, Math.PI * 0.18, Math.PI * 0.82);
-      ctx.stroke();
-    }
-    // hull bar + readouts
-    const hullFrac = ship.hull / ship.maxHull;
-    this.hbar(sx - 34, sy + 36, 68, 6, hullFrac, hullFrac < 0.25 ? RED : AMBER);
-    ctx.textAlign = 'center';
-    ctx.font = '9px "Lucida Console", monospace';
-    ctx.fillStyle = AMBER_DIM;
-    ctx.fillText(`HUL ${Math.round(ship.hull)}`, sx, sy + 50);
-    ctx.fillText(`SHD ${Math.round(ship.shield)}`, sx, sy - 38);
-    const ammoBits: string[] = [];
-    if (stats.cannonAmmoMax > 0) ammoBits.push(`AMM ${ship.cannonAmmo}`);
-    if (stats.missileAmmoMax > 0) ammoBits.push(`MSL ${ship.missileAmmo}`);
-    if (ammoBits.length > 0) {
-      ctx.fillStyle = stats.cannonAmmoMax > 0 && ship.cannonAmmo <= 0 ? RED : AMBER_DIM;
-      ctx.fillText(ammoBits.join(' '), sx, sy + 62);
-    }
+    // ---- combat vitals (right of scanner): big, glanceable shield/hull/ammo ----
+    this.drawVitals(world, ship, cx + rx + 78, scY - 26);
 
     // ---- corner holo panels ----
     const pw = Math.min(252, Math.max(200, W * 0.19));
@@ -669,6 +634,116 @@ export class Hud {
       this.drawTargetPanel(world, ship, 14, H - ph - 12, pw, ph);
       this.drawStatusPanel(world, ship, W - pw - 14, H - ph - 12, pw, ph);
     }
+  }
+
+  // Big combat readout: shield + hull as thick segmented gauges with large
+  // numerals, ammo as bold icon counts. Colours pulse on low/critical state
+  // and the bars flash when they take a hit, so health/ammo read instantly
+  // mid-dogfight without hunting for small text (#13).
+  private drawVitals(world: IWorld, ship: Entity, ax: number, ay: number): void {
+    const ctx = this.ctx;
+    const now = performance.now();
+    const stats = world.shipStats;
+
+    // detect drops to trigger the damage flash
+    if (this.lastShield >= 0 && ship.shield < this.lastShield - 0.5) this.shieldFlashAt = now;
+    if (this.lastHull >= 0 && ship.hull < this.lastHull - 0.5) this.hullFlashAt = now;
+    this.lastShield = ship.shield;
+    this.lastHull = ship.hull;
+    const shieldFlash = Math.max(0, 1 - (now - this.shieldFlashAt) / 280);
+    const hullFlash = Math.max(0, 1 - (now - this.hullFlashAt) / 280);
+
+    const barW = Math.max(118, Math.min(150, this.canvas.width * 0.1));
+    const barH = 14;
+    const segs = 16;
+    const shieldFrac = ship.maxShield > 0 ? ship.shield / ship.maxShield : 0;
+    const hullFrac = ship.hull / ship.maxHull;
+    const slowPulse = 0.5 + 0.5 * Math.sin(now / 200);
+    const fastPulse = 0.5 + 0.5 * Math.sin(now / 90);
+
+    ctx.textBaseline = 'middle';
+
+    // ---- shield gauge ----
+    let sy = ay;
+    const shieldDown = ship.maxShield > 0 && shieldFrac <= 0.001;
+    let shieldCol = CYAN;
+    if (shieldDown) shieldCol = `rgba(232, 64, 42, ${0.5 + 0.5 * fastPulse})`;
+    else if (shieldFrac < 0.34) shieldCol = `rgba(127, 177, 201, ${0.55 + 0.45 * slowPulse})`;
+    if (ship.maxShield > 0) {
+      ctx.textAlign = 'left';
+      ctx.font = '10px "Lucida Console", monospace';
+      ctx.fillStyle = AMBER_DIM;
+      ctx.fillText('SHD', ax, sy - 9);
+      this.segBar(ax, sy, barW, barH, shieldFrac, shieldCol, segs, shieldFlash);
+      ctx.textAlign = 'right';
+      ctx.font = 'bold 17px "Lucida Console", monospace';
+      ctx.fillStyle = shieldDown ? RED : CYAN;
+      ctx.fillText(shieldDown ? 'DOWN' : String(Math.round(ship.shield)), ax + barW, sy - 11);
+      sy += barH + 16;
+    }
+
+    // ---- hull gauge ----
+    const hullCrit = hullFrac < 0.25;
+    const hullCol = hullCrit ? `rgba(232, 64, 42, ${0.55 + 0.45 * fastPulse})` : hullFrac < 0.5 ? '#e0902a' : AMBER;
+    ctx.textAlign = 'left';
+    ctx.font = '10px "Lucida Console", monospace';
+    ctx.fillStyle = hullCrit ? RED : AMBER_DIM;
+    ctx.fillText('HULL', ax, sy - 9);
+    this.segBar(ax, sy, barW, barH, hullFrac, hullCol, segs, hullFlash);
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 17px "Lucida Console", monospace';
+    ctx.fillStyle = hullCrit ? RED : AMBER;
+    ctx.fillText(String(Math.round(ship.hull)), ax + barW, sy - 11);
+    sy += barH + 14;
+
+    // ---- ammo: bold icon counts ----
+    ctx.font = 'bold 13px "Lucida Console", monospace';
+    ctx.textAlign = 'left';
+    let axx = ax;
+    if (stats.cannonAmmoMax > 0) {
+      const empty = ship.cannonAmmo <= 0;
+      const low = ship.cannonAmmo <= stats.cannonAmmoMax * 0.2;
+      ctx.fillStyle = empty ? `rgba(232,64,42,${0.5 + 0.5 * fastPulse})` : low ? '#e0902a' : AMBER;
+      ctx.fillText(`◈ ${ship.cannonAmmo}`, axx, sy);
+      axx += ctx.measureText(`◈ ${ship.cannonAmmo}`).width + 18;
+    }
+    if (stats.missileAmmoMax > 0) {
+      const empty = ship.missileAmmo <= 0;
+      ctx.fillStyle = empty ? AMBER_DIM : ship.lockedOn ? RED : CYAN;
+      ctx.fillText(`▲ ${ship.missileAmmo}`, axx, sy);
+    }
+  }
+
+  // segmented bar with an optional white flash overlay (0..1)
+  private segBar(x: number, y: number, w: number, h: number, frac: number, color: string, segs: number, flash = 0): void {
+    const ctx = this.ctx;
+    frac = Math.max(0, Math.min(1, frac));
+    const gap = 2;
+    const segW = (w - gap * (segs - 1)) / segs;
+    const lit = frac * segs;
+    ctx.save();
+    for (let i = 0; i < segs; i++) {
+      const sx = x + i * (segW + gap);
+      const on = i < Math.floor(lit);
+      const partial = !on && i < lit;
+      ctx.fillStyle = 'rgba(255,255,255,0.07)';
+      ctx.fillRect(sx, y, segW, h);
+      if (on || partial) {
+        ctx.fillStyle = color;
+        ctx.globalAlpha = partial ? (lit - i) : 1;
+        ctx.fillRect(sx, y, segW, h);
+        ctx.globalAlpha = 1;
+      }
+    }
+    if (flash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${flash * 0.5})`;
+      ctx.fillRect(x, y, w, h);
+    }
+    // frame
+    ctx.strokeStyle = 'rgba(217,164,65,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x - 0.5, y - 0.5, w + 1, h + 1);
+    ctx.restore();
   }
 
   // ED-style scanner: perspective ellipse, contacts as stalked blips showing
