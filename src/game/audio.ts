@@ -243,8 +243,10 @@ export class AudioEngine {
   }
 
   miningTick(): void {
-    // handled by the continuous drone; occasional crackle
-    if (Math.random() < 0.1) this.noiseBurst('bandpass', 700, 300, 0.06, 0.03);
+    // the continuous drone carries the beam; layer in frequent crackle so the
+    // cut sounds like it's biting rock rather than humming in a vacuum
+    if (Math.random() < 0.22) this.noiseBurst('bandpass', 700, 300, 0.06, 0.035);
+    if (Math.random() < 0.12) this.noiseBurst('highpass', 2200, 1400, 0.04, 0.02);
   }
 
   hitShield(): void {

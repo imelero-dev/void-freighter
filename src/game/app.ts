@@ -729,10 +729,16 @@ export class GameApp {
         break;
       case 'pickup': {
         this.audio.pickup();
-        const bits: string[] = [];
-        if (ev.credits > 0) bits.push(fmtCredits(ev.credits));
-        if (ev.good && ev.qty > 0) bits.push(`${ev.qty}× ${GOODS[ev.good]?.name ?? ev.good}`);
-        if (bits.length) this.hud.pushLog(`Recovered: ${bits.join(' + ')}`, '#7fc97f');
+        // a mined-ore stash (no credits, just goods) gets a crisp "→ hold"
+        // confirmation; recovered salvage/credits keep the "Recovered" wording
+        if (ev.credits <= 0 && ev.good && ev.qty > 0) {
+          this.hud.pushLog(`+${ev.qty} ${GOODS[ev.good]?.name ?? ev.good} → hold`, '#7fc97f');
+        } else {
+          const bits: string[] = [];
+          if (ev.credits > 0) bits.push(fmtCredits(ev.credits));
+          if (ev.good && ev.qty > 0) bits.push(`${ev.qty}× ${GOODS[ev.good]?.name ?? ev.good}`);
+          if (bits.length) this.hud.pushLog(`Recovered: ${bits.join(' + ')}`, '#7fc97f');
+        }
         break;
       }
       case 'docked': {

@@ -32,6 +32,17 @@ export class FxLayer {
   private effects: Effect[] = [];
   private beamGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 5, 1, true);
 
+  // persistent player mining beam: driven every frame from the latest aimed
+  // rock so it reads as one continuous cutting beam, not a stutter of flashes
+  private miningBeam: THREE.Mesh | null = null;
+  private miningGlow: THREE.Sprite | null = null;
+  private miningTarget = new THREE.Vector3();
+  private miningHit = false;
+  private miningAt = -1;       // perf.now() of the last player mining tick
+  private sparkAcc = 0;
+  private tmpFrom = new THREE.Vector3();
+  private tmpTo = new THREE.Vector3();
+
   constructor(private sm: SceneManager, private world: IWorld, private entities: EntitiesLayer) {
     if (!glowTex) glowTex = glowTexture();
   }
@@ -40,6 +51,15 @@ export class FxLayer {
     for (const ev of events) {
       switch (ev.type) {
         case 'laser': {
+          // the local player's mining beam is rendered as a persistent object
+          // updated per frame (see updateMiningBeam) — record the contact and
+          // skip the transient flash-beam so the two don't fight
+          if (ev.mining && ev.fromId === this.world.playerId) {
+            this.miningTarget.set(ev.toX, ev.toY, ev.toZ);
+            this.miningHit = ev.hit;
+            this.miningAt = performance.now();
+            break;
+          }
           const from = this.entities.objectFor(ev.fromId);
           let fromPos: THREE.Vector3 | null = null;
           if (from && from.visible) {
@@ -131,7 +151,97 @@ export class FxLayer {
     this.effects.push({ obj: points, ttl, life: ttl, kind: 'sparks' });
   }
 
+  // Continuous mining beam: a fat, gently pulsing additive cylinder from the
+  // ship's emitter to the rock, a bright contact glow, and a steady shower of
+  // sparks at the impact point. Rebuilt every frame so it stays glued to the
+  // moving floating origin.
+  private updateMiningBeam(dt: number): void {
+    const active = this.world.miningBeamOn && this.miningHit
+      && performance.now() - this.miningAt < 200;
+    if (!active) {
+      if (this.miningBeam) this.miningBeam.visible = false;
+      if (this.miningGlow) this.miningGlow.visible = false;
+      return;
+    }
+    // lazy-build the persistent objects on first use
+    if (!this.miningBeam) {
+      this.miningBeam = new THREE.Mesh(this.beamGeo, new THREE.MeshBasicMaterial({
+        color: 0xffb347, transparent: true, opacity: 0.8,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      this.sm.near.add(this.miningBeam);
+    }
+    if (!this.miningGlow) {
+      this.miningGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: glowTex!, color: 0xffd27a, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      this.sm.near.add(this.miningGlow);
+    }
+    // emitter: the visible hull in chase view, else a fixed point under the
+    // cockpit so the beam doesn't degenerate to a dot along the view axis
+    const fromObj = this.entities.objectFor(this.world.playerId);
+    if (fromObj && fromObj.visible) {
+      this.tmpFrom.copy(fromObj.position);
+    } else {
+      this.tmpFrom.set(0, -1.8, -1).applyQuaternion(this.sm.camera.quaternion);
+    }
+    this.tmpTo.set(
+      this.miningTarget.x - this.sm.origin.x,
+      this.miningTarget.y - this.sm.origin.y,
+      this.miningTarget.z - this.sm.origin.z,
+    );
+    const len = this.tmpFrom.distanceTo(this.tmpTo);
+    if (len < 1 || len > 80_000) {
+      this.miningBeam.visible = false;
+      this.miningGlow.visible = false;
+      return;
+    }
+    const pulse = 0.85 + Math.sin(performance.now() / 45) * 0.15;
+    this.miningBeam.visible = true;
+    this.miningBeam.scale.set(1.6 * pulse, len, 1.6 * pulse);
+    this.miningBeam.position.copy(this.tmpFrom).lerp(this.tmpTo, 0.5);
+    this.miningBeam.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0), this.tmpTo.clone().sub(this.tmpFrom).normalize());
+    (this.miningBeam.material as THREE.MeshBasicMaterial).opacity = 0.55 + 0.25 * pulse;
+    this.miningGlow.visible = true;
+    this.miningGlow.position.copy(this.tmpTo);
+    this.miningGlow.scale.setScalar(7 + Math.sin(performance.now() / 60) * 1.5);
+
+    // continuous spark shower at the contact point (throttled, capped count)
+    this.sparkAcc += dt;
+    if (this.sparkAcc >= 0.045) {
+      this.sparkAcc = 0;
+      this.spawnMiningSparks(this.tmpTo);
+    }
+  }
+
+  private spawnMiningSparks(p: THREE.Vector3): void {
+    const count = 6;
+    const positions = new Float32Array(count * 3);
+    const velocities: THREE.Vector3[] = [];
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = p.x;
+      positions[i * 3 + 1] = p.y;
+      positions[i * 3 + 2] = p.z;
+      velocities.push(new THREE.Vector3(
+        Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5,
+      ).normalize().multiplyScalar(8 + Math.random() * 26));
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      color: 0xffc04a, size: 1.7, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+    });
+    const points = new THREE.Points(geo, mat);
+    points.userData.velocities = velocities;
+    this.sm.near.add(points);
+    this.effects.push({ obj: points, ttl: 0.32, life: 0.32, kind: 'sparks' });
+  }
+
   update(dt: number): void {
+    this.updateMiningBeam(dt);
     for (let i = this.effects.length - 1; i >= 0; i--) {
       const fx = this.effects[i];
       fx.ttl -= dt;
