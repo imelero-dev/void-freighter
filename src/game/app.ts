@@ -602,14 +602,20 @@ export class GameApp {
       this.entities.showPlayer = this.camera.mode === 'chase';
       this.cockpit.visible = this.camera.mode === 'cockpit' && !ship.dockedAt;
       this.headlight.visible = this.headlightOn && !ship.dockedAt;
-      // auto-dim the headlight against a station hull at point-blank, so the
-      // dock isn't washed out in bloom during the final approach
-      let nearStDist = Infinity;
+      // auto-dim the headlight against a big surface at point-blank (station
+      // hull while docking, asteroid while mining) so the view isn't blown out
+      // in bloom — the inverse-distance falloff makes close surfaces searing
+      let nearSurf = Infinity;
       for (const s of w.system.stations) {
         const sd = vdist(s.pos, ship.pos) - s.radius;
-        if (sd < nearStDist) nearStDist = sd;
+        if (sd < nearSurf) nearSurf = sd;
       }
-      const dim = nearStDist < 700 ? Math.max(0.1, nearStDist / 700) : 1;
+      for (const en of w.entities.values()) {
+        if (en.kind !== 'asteroid') continue;
+        const sd = vdist(en.pos, ship.pos) - en.radius;
+        if (sd < nearSurf) nearSurf = sd;
+      }
+      const dim = nearSurf < 700 ? Math.max(0.1, nearSurf / 700) : 1;
       this.headlight.intensity = 2200 * dim;
       // speed-based FOV: subtle at maneuver, pronounced under cruise
       const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
