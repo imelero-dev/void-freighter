@@ -539,7 +539,7 @@ export class Sim {
       }
       meta.turboActive = turbo;
       const perf = turbo
-        ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate }
+        ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate, massFactor: meta.stats.massFactor }
         : meta.stats;
       this.integrateShip(e, meta.input, perf, dt, meta.flightAssist);
       if (meta.cruiseRequested) this.tryStartCruise(meta, e);
@@ -636,7 +636,7 @@ export class Sim {
   private integrateShip(
     e: Entity,
     input: ShipInput,
-    perf: { maxSpeed: number; accel: number; turnRate: number },
+    perf: { maxSpeed: number; accel: number; turnRate: number; massFactor?: number },
     dt: number,
     assist: boolean,
   ): void {

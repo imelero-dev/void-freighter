@@ -16,6 +16,7 @@ export interface FlightPerf {
   maxSpeed: number;
   accel: number;
   turnRate: number;
+  massFactor?: number; // inertia multiplier; heavier hulls ramp/settle slower
 }
 
 export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPerf, dt: number, assist: boolean): void {
@@ -23,16 +24,32 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
   // burn — turn authority drops from 125% at standstill to 80% at max speed
   const speedFrac = Math.min(1, vlen(b.vel) / Math.max(1, perf.maxSpeed));
   const turnRate = perf.turnRate * (1.25 - 0.45 * speedFrac);
-  // rotation: approach commanded angular velocity
-  const targetAng = v3(
-    clamp(input.pitch, -1, 1) * turnRate,
-    clamp(input.yaw, -1, 1) * turnRate,
-    clamp(input.roll, -1, 1) * turnRate,
-  );
-  const angAccel = turnRate * 10; // snappy rotation onset
-  b.angVel.x += clamp(targetAng.x - b.angVel.x, -angAccel * dt, angAccel * dt);
-  b.angVel.y += clamp(targetAng.y - b.angVel.y, -angAccel * dt, angAccel * dt);
-  b.angVel.z += clamp(targetAng.z - b.angVel.z, -angAccel * dt, angAccel * dt);
+  // rotational inertia: a heavy freighter is slow to start AND stop turning;
+  // a light scout snaps. This is what makes mass perceptible at the stick.
+  const mass = perf.massFactor ?? 1;
+  const angAccel = (turnRate * 10) / Math.sqrt(mass);
+  const pitch = clamp(input.pitch, -1, 1);
+  const yaw = clamp(input.yaw, -1, 1);
+  const roll = clamp(input.roll, -1, 1);
+  if (assist) {
+    // FA on: active gyros drive angular velocity toward the commanded rate, so
+    // releasing the stick bleeds the spin back to zero
+    const targetAng = v3(pitch * turnRate, yaw * turnRate, roll * turnRate);
+    b.angVel.x += clamp(targetAng.x - b.angVel.x, -angAccel * dt, angAccel * dt);
+    b.angVel.y += clamp(targetAng.y - b.angVel.y, -angAccel * dt, angAccel * dt);
+    b.angVel.z += clamp(targetAng.z - b.angVel.z, -angAccel * dt, angAccel * dt);
+  } else {
+    // FA off: pure Newtonian rotation — input applies torque (adds angular
+    // momentum), nothing damps it. To stop spinning you counter-rotate. A spin
+    // cap keeps a twitchy stick from winding up to nonsense rates.
+    b.angVel.x += pitch * angAccel * dt;
+    b.angVel.y += yaw * angAccel * dt;
+    b.angVel.z += roll * angAccel * dt;
+    const maxSpin = turnRate * 1.8;
+    b.angVel.x = clamp(b.angVel.x, -maxSpin, maxSpin);
+    b.angVel.y = clamp(b.angVel.y, -maxSpin, maxSpin);
+    b.angVel.z = clamp(b.angVel.z, -maxSpin, maxSpin);
+  }
   b.orient = qIntegrate(b.orient, b.angVel, dt);
 
   b.throttle = clamp(input.thrustForward, -0.3, 1);

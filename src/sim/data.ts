@@ -134,6 +134,7 @@ export interface ShipStats {
   maxSpeed: number;       // m/s maneuver
   accel: number;          // m/s²
   turnRate: number;       // rad/s
+  massFactor: number;     // rotational/linear inertia: heavy hulls feel sluggish
   cruiseMax: number;      // m/s
   maxHull: number;
   maxShield: number;
@@ -168,6 +169,7 @@ export function shipStats(hullId: HullId, modules: Partial<Record<ModuleSlot, nu
     maxSpeed: h.maxSpeed * (1 + 0.15 * (eng - 1)),
     accel: h.accel * (1 + 0.20 * (eng - 1)),
     turnRate: h.turnRate * (1 + 0.16 * (gyro - 1)),
+    massFactor: h.massFactor,
     cruiseMax: h.cruiseMax * (1 + 0.28 * (eng - 1)),
     maxHull: Math.round(h.baseHull * (1 + 0.25 * armor)),
     maxShield: shield === 0 ? 0 : Math.round(h.baseShield * (1 + 0.35 * (shield - 1))),

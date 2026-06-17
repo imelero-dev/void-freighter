@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/sim';
-import { DT } from '../src/sim/types';
+import { DT, emptyShipInput } from '../src/sim/types';
+import { integrateFlight } from '../src/sim/flight';
 import { qLookAt, vdist, vlen, vnorm, vsub, v3 } from '../src/sim/vec';
 
 function makeSim(): Sim {
@@ -76,6 +77,58 @@ describe('flight physics', () => {
     meta.input.brake = true;
     runTicks(sim, 20 * 20);
     expect(vlen(e.vel)).toBeLessThan(5);
+  });
+});
+
+// Simulator flight model acceptance (#15): inertia, decoupled velocity/
+// orientation, Flight Assist on vs off. Exercises the shared integrator
+// directly so the behaviour is pinned independent of sim plumbing.
+describe('flight model: inertia & flight assist', () => {
+  const body = () => ({
+    pos: v3(), vel: v3(), orient: { x: 0, y: 0, z: 0, w: 1 }, angVel: v3(), throttle: 0,
+  });
+  const perf = (massFactor = 1) => ({ maxSpeed: 200, accel: 30, turnRate: 2, massFactor });
+
+  it('FA off: rotation persists after the stick is released (angular momentum)', () => {
+    const b = body();
+    const i = emptyShipInput(); i.yaw = 1;
+    for (let k = 0; k < 10; k++) integrateFlight(b, i, perf(), DT, false);
+    const spin = b.angVel.y;
+    expect(Math.abs(spin)).toBeGreaterThan(0.1);
+    const idle = emptyShipInput();
+    for (let k = 0; k < 60; k++) integrateFlight(b, idle, perf(), DT, false);
+    expect(b.angVel.y).toBeCloseTo(spin, 6); // nothing damps it
+  });
+
+  it('FA on: rotation bleeds back to zero after release', () => {
+    const b = body();
+    const i = emptyShipInput(); i.yaw = 1;
+    for (let k = 0; k < 10; k++) integrateFlight(b, i, perf(), DT, true);
+    expect(Math.abs(b.angVel.y)).toBeGreaterThan(0.1);
+    const idle = emptyShipInput();
+    for (let k = 0; k < 40; k++) integrateFlight(b, idle, perf(), DT, true);
+    expect(Math.abs(b.angVel.y)).toBeLessThan(0.05);
+  });
+
+  it('FA off: velocity drifts indefinitely with no input (pure Newtonian)', () => {
+    const b = body();
+    const i = emptyShipInput(); i.thrustForward = 1;
+    for (let k = 0; k < 20; k++) integrateFlight(b, i, perf(), DT, false);
+    const v = vlen(b.vel);
+    expect(v).toBeGreaterThan(10);
+    const idle = emptyShipInput();
+    for (let k = 0; k < 120; k++) integrateFlight(b, idle, perf(), DT, false);
+    expect(vlen(b.vel)).toBeCloseTo(v, 6); // coasts on, never self-corrects
+  });
+
+  it('heavy hulls resist direction changes more than light ones (mass is felt)', () => {
+    const light = body(), heavy = body();
+    const i = emptyShipInput(); i.pitch = 1;
+    for (let k = 0; k < 3; k++) {
+      integrateFlight(light, i, perf(1), DT, true);
+      integrateFlight(heavy, i, perf(2.5), DT, true);
+    }
+    expect(Math.abs(heavy.angVel.x)).toBeLessThan(Math.abs(light.angVel.x));
   });
 });
 

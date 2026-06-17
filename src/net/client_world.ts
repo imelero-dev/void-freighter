@@ -220,7 +220,7 @@ export class ClientWorld implements IWorld {
         // mirroring the server's perf calculation)
         const stats = this.shipStats;
         const perf = this.turboActive
-          ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate }
+          ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate, massFactor: stats.massFactor }
           : stats;
         integrateFlight(e, this.input, perf, dt, this.flightAssist);
         // reconcile against extrapolated server state
