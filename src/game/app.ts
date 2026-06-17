@@ -76,8 +76,12 @@ export class GameApp {
     this.cockpit.scale.setScalar(2.2); // keeps geometry past the near plane
     this.cockpit.position.y = 0.28;    // dashboard peeks into the lower view
     this.sm.camera.add(this.cockpit);
-    // headlights: a warm spot punching into the dark ([I] to toggle)
-    this.headlight = new THREE.SpotLight(0xfff0d6, 4, 1500, 0.38, 0.55, 1.1);
+    // headlights: a warm spot punching into the dark ([I] to toggle).
+    // Lights are physically based (candela), so intensity must scale with the
+    // distance we want lit: with decay 1 the illuminance is intensity/d, so
+    // ~2200 keeps an asteroid readable out to ~700 m. A wide-ish cone reads as
+    // a usable beam rather than a pencil dot.
+    this.headlight = new THREE.SpotLight(0xfff0d6, 2200, 3000, 0.55, 0.5, 1.0);
     this.headlight.position.set(0, -0.2, 0);
     this.headlight.target.position.set(0, 0, -100);
     this.sm.camera.add(this.headlight);

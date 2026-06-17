@@ -208,7 +208,7 @@ export class EntitiesLayer {
           }
         });
         if (e.derelict) {
-          // cold hull: darken everything, kill thruster glow
+          // cold hull: darken everything, kill thruster glow + running lights
           ship.group.traverse((node) => {
             const mesh = node as THREE.Mesh;
             if (mesh.isMesh) {
@@ -217,9 +217,11 @@ export class EntitiesLayer {
               if ('emissive' in m && m.emissive) m.emissive.setHex(0x000000);
               m.opacity = 1;
             }
+            if ((node as THREE.Sprite).isSprite) node.visible = false; // nav lights + engine bloom
           });
           for (const t of ship.thrusters) t.visible = false;
           ship.thrusters.length = 0;
+          ship.glows.length = 0;
         }
         view = { obj: ship.group, ship, kindKey };
         break;
@@ -299,6 +301,10 @@ export class EntitiesLayer {
           const mat = mesh.material as THREE.Material | THREE.Material[];
           if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
           else mat?.dispose();
+        } else if ((node as THREE.Sprite).isSprite) {
+          // nav-light / engine-glow sprites own their material (the glow
+          // texture is shared and must survive)
+          (node as THREE.Sprite).material?.dispose();
         }
       });
     }
