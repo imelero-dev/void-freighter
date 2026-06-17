@@ -324,6 +324,24 @@ describe('planetary atmosphere & landing (#16)', () => {
     expect(soft.alt).toBeGreaterThan(-1);  // rests on the surface, no clipping
     expect(land(false, 200).dmg).toBeGreaterThan(0); // gear up + fast = hull damage
   });
+
+  it('touchdown is announced once, not every tick (onSurface rising edge)', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.flightAssist = false;
+    meta.undockInvuln = 0;
+    meta.gearDown = true;
+    const p = landablePlanet(sim);
+    e.pos = vadd(p.pos, vscale(v3(0, 1, 0), p.radius + e.radius + 3));
+    e.vel = vscale(v3(0, 1, 0), -10);
+    const events: any[] = [];
+    for (let i = 0; i < 40; i++) events.push(...sim.tick());
+    const touchdowns = events.filter((ev) => ev.type === 'log' && typeof ev.text === 'string' && ev.text.includes('Touchdown'));
+    expect(touchdowns.length).toBe(1);
+  });
 });
 
 describe('cruise drive', () => {

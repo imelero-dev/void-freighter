@@ -45,7 +45,10 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
     b.angVel.x += pitch * angAccel * dt;
     b.angVel.y += yaw * angAccel * dt;
     b.angVel.z += roll * angAccel * dt;
-    const maxSpin = turnRate * 1.8;
+    // cap off the BASE turn rate, not the speed-adjusted one — otherwise
+    // accelerating would retroactively clamp an existing spin, which is exactly
+    // the damping FA-off promises never happens
+    const maxSpin = perf.turnRate * 1.8;
     b.angVel.x = clamp(b.angVel.x, -maxSpin, maxSpin);
     b.angVel.y = clamp(b.angVel.y, -maxSpin, maxSpin);
     b.angVel.z = clamp(b.angVel.z, -maxSpin, maxSpin);

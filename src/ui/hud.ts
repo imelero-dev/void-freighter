@@ -3,10 +3,10 @@
 
 import * as THREE from 'three';
 import { isMobile } from '../game/touch';
-import { BOLT_SPEED, DOCK_MAX_SPEED, GOODS } from '../sim/data';
+import { BOLT_SPEED, DOCK_ALIGN, DOCK_MAX_SPEED, GOODS } from '../sim/data';
 import type { Entity } from '../sim/types';
 import { leadPoint, qForward, qRight, qUp, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
-import { atmosphereAt } from '../sim/system';
+import { atmosphereAt, SOFT_LAND_SPEED } from '../sim/system';
 import type { IWorld } from '../world_api';
 import { fmtDistance, fmtTime } from './dom';
 
@@ -663,12 +663,13 @@ export class Hud {
     ctx.fillStyle = atmo.density > 0 ? CIV_TEAL : AMBER_DIM;
     ctx.fillText(`${atmo.planet.name.toUpperCase()}  ·  ALT ${fmtDistance(Math.max(0, atmo.altitude))}`, cx, y);
 
-    // descent-rate cue: green when gentle, red when you'd slam in
+    // descent-rate cue: green when gentle, red when you'd slam in. The safe
+    // closing speed depends on the gear (35 down vs 12 up), matching the sim.
     const descending = vs > 1;
-    const safe = vs < 35;
+    const safe = vs < (world.gearDown ? SOFT_LAND_SPEED : 12);
     ctx.font = '10px "Lucida Console", monospace';
     ctx.fillStyle = !descending ? AMBER_DIM : safe ? GREEN : RED;
-    ctx.fillText(descending ? `VS ▼ ${Math.round(vs)} m/s${!world.gearDown && atmo.altitude < atmo.planet.radius * 0.06 ? '  ⚠ GEAR UP' : ''}` : 'VS  level', cx, y + 14);
+    ctx.fillText(descending ? `VS ▼ ${Math.round(vs)} m/s${!world.gearDown ? '  ⚠ GEAR UP' : ''}` : 'VS  level', cx, y + 14);
 
     if (atmo.density > 0) {
       const bw = 90;
@@ -698,8 +699,10 @@ export class Hud {
 
     let level: 0 | 1 | 2;
     let cue: string;
-    if (inRange && slow && align > 0.82) { level = 2; cue = '[SPACE] DOCK'; }
-    else if (inRange && (slow || align > 0.6) && speed <= DOCK_MAX_SPEED * 2) { level = 1; cue = !slow ? 'REDUCE SPEED' : 'ALIGN ON DOCK'; }
+    // green exactly matches the dock gate (slow, in range, aligned) so the
+    // [SPACE] DOCK prompt never lies
+    if (inRange && slow && align >= DOCK_ALIGN) { level = 2; cue = '[SPACE] DOCK'; }
+    else if (inRange && (slow || align > DOCK_ALIGN - 0.1) && speed <= DOCK_MAX_SPEED * 2) { level = 1; cue = !slow ? 'REDUCE SPEED' : 'ALIGN ON DOCK'; }
     else { level = 0; cue = speed > DOCK_MAX_SPEED * 2 ? 'EXCESSIVE CLOSURE' : 'GO AROUND — REALIGN'; }
 
     const prox = Math.max(0, 1 - d / st.dockRadius);

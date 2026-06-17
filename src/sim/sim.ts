@@ -3,7 +3,7 @@
 
 import {
   AMMO_PRICE, ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
-  CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_MAX_SPEED, FUEL_PRICE,
+  CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_ALIGN, DOCK_MAX_SPEED, FUEL_PRICE,
   COMBAT_LOCKOUT_S, CRAFT_RECIPES, craftMaterials, GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
   DRILL_COOL_PER_S, DRILL_HEAT_PER_S, DRILL_OVERHEAT_RESUME, HOTSPOT_CONE, MINING_RATE_FACTOR,
   NPC_DEFS, ORE_CHANCE_BASE, ORE_CHANCE_HOTSPOT, REPAIR_KIT_FRACTION, REPAIR_KIT_RECIPE, WAREHOUSE_PLOT_M3, WORKSHOP_RENT_PRICE, WORKSHOP_RENT_S, warehousePlotPrice,
@@ -866,14 +866,20 @@ export class Sim {
         this.events.push({ type: 'forcefield', pid: meta.pid, body: label });
       }
     };
+    // onSurface is a single flag across all bodies, so snapshot the previous
+    // state and clear it BEFORE testing any body this tick — each planetSurface
+    // call re-asserts it only if actually in contact. This makes the touchdown
+    // cue a true rising edge and stops the other (far) bodies clobbering it.
+    const wasResting = meta.onSurface;
+    meta.onSurface = false;
     for (const p of this.system.planets) {
       // solid worlds can be set down on; gas giants and lava worlds keep their
       // hard exclusion field (no surface to land on)
-      if (isLandable(p.kind)) this.planetSurface(meta, e, p.pos, p.radius, p.name);
+      if (isLandable(p.kind)) this.planetSurface(meta, e, p.pos, p.radius, p.name, wasResting);
       else bounce(p.pos, p.radius * 1.15, p.name);
     }
     for (const m of this.system.moons) {
-      this.planetSurface(meta, e, m.pos, m.radius, 'the moon');
+      this.planetSurface(meta, e, m.pos, m.radius, 'the moon', wasResting);
     }
     // stations: a solid hull you can scrape along, not a trampoline
     for (const s of this.system.stations) {
@@ -926,16 +932,14 @@ export class Sim {
   // solid body, but landing quality depends on closing speed and the gear. A
   // slow approach with gear down is a clean touchdown; fast or gear-up bites
   // hull. Resting is just the surface stopping you — thrust away to take off.
-  private planetSurface(meta: PlayerMeta, e: Entity, center: Vec3, radius: number, name: string): void {
+  private planetSurface(meta: PlayerMeta, e: Entity, center: Vec3, radius: number, name: string, wasResting: boolean): void {
     const rx = e.pos.x - center.x, ry = e.pos.y - center.y, rz = e.pos.z - center.z;
     const d = Math.hypot(rx, ry, rz);
     const minD = radius + e.radius;
-    if (d >= minD) {
-      if (meta.onSurface && d > minD + 50) meta.onSurface = false; // lifted off
-      return;
-    }
+    if (d >= minD) return; // not in contact with this body (onSurface already cleared)
     const n = d > 1e-6 ? v3(rx / d, ry / d, rz / d) : v3(0, 1, 0);
     e.pos = vadd(center, vscale(n, minD + 0.5));
+    meta.onSurface = true; // in contact with the surface this tick
     const vn = vdot(e.vel, n); // <0 descending into the surface
     if (vn < 0) {
       e.vel = vsub(e.vel, vscale(n, vn * 1.04)); // cancel inbound, keep tangential
@@ -944,17 +948,16 @@ export class Sim {
       if (impact > softLimit) {
         const penalty = meta.gearDown ? 0.4 : 1.4; // gear-up slams the hull
         this.applyDamage(e, (impact - softLimit) * penalty * meta.stats.massFactor, -1, true);
-        if (!meta.onSurface) {
+        if (!wasResting) {
           this.events.push({
             type: 'log',
             text: meta.gearDown ? `Hard landing on ${name} — hull stressed.` : 'CRASH LANDING — deploy landing gear [P] before touchdown!',
             color: '#f66', pid: meta.pid,
           });
         }
-      } else if (!meta.onSurface) {
+      } else if (!wasResting) {
         this.events.push({ type: 'log', text: `Touchdown on ${name}. Gear holding — thrust up to lift off.`, color: '#8fb', pid: meta.pid });
       }
-      meta.onSurface = true;
       if (e.cruise !== 'off') this.dropCruise(e, 'landing');
     }
   }
@@ -2081,16 +2084,18 @@ export class Sim {
   private tickApproach(meta: PlayerMeta, e: Entity): void {
     if (e.dockedAt || meta.docking || e.cruise !== 'off') return;
     const near = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
-    if (near) {
-      if (meta.approachStation !== near.id) {
-        meta.approachStation = near.id;
-        this.events.push({
-          type: 'comms', pid: meta.pid, from: `${near.name} ATC`,
-          text: `${this.callsign(meta)}, cleared approach. Reduce to docking speed, under ${DOCK_MAX_SPEED}, and line up on the dock.`,
-        });
-      }
-    } else if (meta.approachStation) {
-      meta.approachStation = null;
+    if (near && meta.approachStation !== near.id) {
+      meta.approachStation = near.id;
+      this.events.push({
+        type: 'comms', pid: meta.pid, from: `${near.name} ATC`,
+        text: `${this.callsign(meta)}, cleared approach. Reduce to docking speed, under ${DOCK_MAX_SPEED}, and line up on the dock.`,
+      });
+    }
+    // hysteresis: only forget the clearance once you're well clear, so jockeying
+    // back and forth across the dock-range boundary doesn't replay the call
+    if (meta.approachStation) {
+      const cur = this.station(meta.approachStation);
+      if (!cur || vdist(cur.pos, e.pos) > cur.dockRadius * 1.4) meta.approachStation = null;
     }
   }
 
@@ -2114,9 +2119,9 @@ export class Sim {
       this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: 'Excessive closure rate. Go around — reduce to docking speed.' });
       return;
     }
-    // nose alignment on the dock collar: < ~50° off
+    // nose alignment on the dock collar (shared with the approach-aid green light)
     const align = vdot(qForward(e.orient), vnorm(vsub(st.pos, e.pos)));
-    if (align < 0.64) {
+    if (align < DOCK_ALIGN) {
       this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: 'Approach angle off. Line up with the dock and try again. [Y] for autodock.' });
       return;
     }

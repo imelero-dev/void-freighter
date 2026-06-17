@@ -443,6 +443,7 @@ export const SMUGGLING_INSPECTION_CHANCE = 0.3;
 // ---------------------------------------------------------------------------
 
 export const DOCK_MAX_SPEED = 60;       // m/s relative to station for docking
+export const DOCK_ALIGN = 0.7;          // min nose·bearing alignment to dock (~45°)
 export const STATION_TURRET_DPS = 45;   // applied to hostiles inside safeRadius
 export const SHIELD_REGEN_DELAY = 6;    // s without damage before regen
 export const CRUISE_CHARGE_S = 3;       // spool-up time

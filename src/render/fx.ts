@@ -226,6 +226,7 @@ export class FxLayer {
   // sparks at the impact point. Rebuilt every frame so it stays glued to the
   // moving floating origin.
   private updateMiningBeam(dt: number): void {
+    if (!this.world.miningBeamOn) this.miningHit = false; // don't carry a stale hit between bursts
     const active = this.world.miningBeamOn && this.miningHit
       && performance.now() - this.miningAt < 200;
     if (!active) {
