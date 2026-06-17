@@ -1448,8 +1448,9 @@ export class Sim {
     if (nearby >= cap) return;
     if (!this.rng.chance(Math.min(0.5, danger * 0.55))) return;
 
-    // deep red space occasionally fields an Ironclad gun platform
-    if (danger > 0.55 && !corvetteNear && this.rng.chance(0.16)) {
+    // red space regularly fields an Ironclad gun platform — a turreted capital
+    // should be a memorable encounter on a dangerous run, not a rumour (#11)
+    if (danger > 0.5 && !corvetteNear && this.rng.chance(0.22)) {
       const dir = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-0.2, 0.2), this.rng.range(-1, 1)));
       this.spawnCorvette(vadd(e.pos, vscale(dir, this.rng.range(5500, 7500))));
       return;

@@ -52,6 +52,21 @@ describe('ambient traffic spawning', () => {
     expect(sawTraffic).toBe(true);
   });
 
+  it('a capital ship (bulk carrier or gun platform) reliably appears', () => {
+    const sim = new Sim();
+    const { e, meta } = deepSpacePlayer(sim);
+    meta.undockInvuln = 1e9;
+    let sawCapital = false;
+    for (let i = 0; i < 20 * 220 && !sawCapital; i++) {
+      sim.tick();
+      e.vel = v3();
+      for (const x of sim.entities.values()) {
+        if (x.npc === 'superfreighter' || x.pirate === 'corvette') sawCapital = true;
+      }
+    }
+    expect(sawCapital).toBe(true);
+  });
+
   it('traffic despawns once the player leaves the bubble', () => {
     const sim = new Sim();
     const { pid, e } = deepSpacePlayer(sim);

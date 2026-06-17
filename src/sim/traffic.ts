@@ -20,6 +20,7 @@ import {
   type Vec3,
 } from './vec';
 import { BOLT_SPEED } from './data';
+import { dangerAt } from './system';
 
 const BUBBLE_RADIUS = 30_000;       // npcs counted "near" a player
 const DESPAWN_RADIUS = 42_000;
@@ -32,6 +33,9 @@ const STOCK_TRANSFER_MIN = 4;
 const STOCK_TRANSFER_MAX = 10;
 const MERCHANT_TIMER_S: [number, number] = [140, 300];
 const DISTRESS_TIMER_S: [number, number] = [260, 460];
+// capital sightings are a regular, memorable event: a bulk carrier sliding
+// through calm space, or an Ironclad gun platform looming out of the red
+const CAPITAL_TIMER_S: [number, number] = [90, 170];
 const PATROL_SCAN_RANGE = 8_000;
 const PATROL_LEASH = 14_000;
 
@@ -67,6 +71,7 @@ export class TrafficSystem {
   private spawnAcc = new Map<number, number>();      // pid -> seconds to next check
   private merchantAcc = new Map<number, number>();   // pid -> deep-space merchant timer
   private distressAcc = new Map<number, number>();
+  private capitalAcc = new Map<number, number>();    // pid -> next capital sighting
   private merchants = new Map<number, MerchantStock>();
   private distress = new Map<number, { pirates: Set<number>; pid: number }>();
 
@@ -114,6 +119,14 @@ export class TrafficSystem {
           if (sim.rng.chance(0.55)) this.spawnDistress(e, meta.pid);
         } else {
           this.distressAcc.set(meta.pid, dAcc);
+        }
+        // first capital sighting comes within the first couple of minutes
+        const cAcc = (this.capitalAcc.get(meta.pid) ?? sim.rng.range(45, 110)) - 1;
+        if (cAcc <= 0) {
+          this.capitalAcc.set(meta.pid, sim.rng.range(...CAPITAL_TIMER_S));
+          this.maybeSpawnCapital(e);
+        } else {
+          this.capitalAcc.set(meta.pid, cAcc);
         }
       }
     }
@@ -326,13 +339,66 @@ export class TrafficSystem {
         }
       } else if (lane) {
         // lane traffic passing through the bubble
-        const kind: NpcKind = sim.rng.chance(0.12) ? 'superfreighter' : sim.rng.chance(0.55) ? 'freighter' : 'courier';
+        const kind: NpcKind = sim.rng.chance(0.3) ? 'superfreighter' : sim.rng.chance(0.55) ? 'freighter' : 'courier';
         const dir = vnorm(vsub(lane.to.pos, lane.from.pos));
         // drop it upstream of the player so it sails past, close enough to see
         const behind = sim.rng.range(4000, 9000);
         const lateral = randOffset(sim, 500, 1600);
         const pos = vadd(vadd(player.pos, vscale(dir, -behind)), lateral);
         this.spawnHauler(kind, pos, lane.from, lane.to, lane.good);
+      }
+    }
+  }
+
+  // A guaranteed-regular capital encounter so the big ships are part of the
+  // world, not a rumour (#11): an Ironclad gun platform in dangerous space,
+  // otherwise a bulk carrier sliding across the lanes — placed inside the
+  // bubble so it is seen long before it would despawn.
+  private maybeSpawnCapital(player: Entity): void {
+    const sim = this.sim;
+    if (player.cruise === 'cruise') return; // moving too fast to stage one
+
+    const danger = dangerAt(sim.system, player.pos);
+    // never inside a friendly safe zone
+    for (const st of sim.system.stations) {
+      if (vdist(player.pos, st.pos) < st.safeRadius * 1.3) return;
+    }
+
+    // count capitals already in play near the player so we never stack them
+    let corvetteNear = false;
+    let superNear = false;
+    for (const e of sim.entities.values()) {
+      if (e.kind !== 'ship' || e.dead) continue;
+      const d = vdist(e.pos, player.pos);
+      if (d > BUBBLE_RADIUS) continue;
+      if (e.pirate === 'corvette') corvetteNear = true;
+      if (e.npc === 'superfreighter') superNear = true;
+    }
+
+    if (danger > 0.45 && !corvetteNear) {
+      // an armed cargo capital looms out of the red
+      const dir = vnorm(v3(sim.rng.range(-1, 1), sim.rng.range(-0.2, 0.2), sim.rng.range(-1, 1)));
+      sim.spawnCorvette(vadd(player.pos, vscale(dir, sim.rng.range(6000, 8500))));
+      sim.emit({ type: 'log', text: 'Massive contact — capital signature on an intercept bearing.', color: '#e8402a', pid: player.id });
+      return;
+    }
+
+    if (superNear) return;
+    // a bulk carrier crossing the player's patch of sky on a real run
+    const stations = sim.system.stations;
+    if (stations.length < 2) return;
+    const from = sim.rng.pick(stations);
+    const to = sim.rng.pick(stations.filter((s) => s.id !== from.id));
+    const dir = vnorm(vsub(to.pos, from.pos));
+    const lateral = randOffset(sim, 1200, 3200);
+    // drop it upstream so it sails past the player, close enough to read its scale
+    const pos = vadd(vadd(player.pos, vscale(dir, -sim.rng.range(7000, 11000))), lateral);
+    const h = this.spawnHauler('superfreighter', pos, from, to, Object.keys(from.produces)[0]);
+    for (const meta of sim.players.values()) {
+      const p = sim.entities.get(meta.pid);
+      if (p && !p.dockedAt && vdist(p.pos, h.pos) < 25_000) {
+        sim.emit({ type: 'comms', pid: meta.pid, from: h.name, text: 'Bulk carrier on the lane — mind your spacing, little ship.' });
+        break;
       }
     }
   }
