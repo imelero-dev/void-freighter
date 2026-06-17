@@ -2,6 +2,7 @@
 // Set Destination. Unvisited stations are unlabeled hollow marks — the
 // frontier stays dark until you fly it.
 
+import { isMobile } from '../game/touch';
 import { stationInfoCost } from '../sim/system';
 import type { Destination, StationDef } from '../sim/types';
 import type { IWorld } from '../world_api';
@@ -29,6 +30,9 @@ export class SystemMap {
   private panY = 0;
   private selected: Pickable | null = null;
   private dragging = false;
+  // touch gesture state: one finger pans, two pinch-zoom, a still tap picks
+  private touchPan: { id: number; x: number; y: number; moved: boolean } | null = null;
+  private pinchDist = 0;
 
   private sidebar: HTMLElement;
 
@@ -61,6 +65,11 @@ export class SystemMap {
       this.world.setDestination(null);
     });
     bar.appendChild(this.info);
+    if (isMobile()) {
+      // pinch works too, but dedicated buttons are friendlier on small maps
+      bar.appendChild(button('−', 'vf-mini', () => this.zoomAtCenter(1 / 1.3)));
+      bar.appendChild(button('+', 'vf-mini', () => this.zoomAtCenter(1.3)));
+    }
     bar.appendChild(this.setBtn);
     bar.appendChild(clearBtn);
     win.body.appendChild(bar);
@@ -75,9 +84,7 @@ export class SystemMap {
 
     this.canvas.addEventListener('wheel', (ev) => {
       ev.preventDefault();
-      const f = ev.deltaY < 0 ? 1.2 : 1 / 1.2;
-      this.zoom = Math.min(40, Math.max(0.25, this.zoom * f));
-      this.draw();
+      this.zoomAtClient(ev.clientX, ev.clientY, ev.deltaY < 0 ? 1.2 : 1 / 1.2);
     });
     this.canvas.addEventListener('mousedown', () => {
       this.dragging = false;
@@ -95,11 +102,85 @@ export class SystemMap {
         this.dragging = false;
         return;
       }
-      const rect = this.canvas.getBoundingClientRect();
-      const mx = (ev.clientX - rect.left) * (this.canvas.width / rect.width);
-      const my = (ev.clientY - rect.top) * (this.canvas.height / rect.height);
-      this.pick(mx, my);
+      const [mx, my] = this.toCanvas(ev.clientX, ev.clientY);
+      this.pick(mx, my, 18);
     });
+
+    // touch: one-finger pan (a still tap picks), two-finger pinch zoom
+    this.canvas.addEventListener('touchstart', (ev) => {
+      ev.preventDefault();
+      if (ev.touches.length === 1) {
+        const t = ev.touches[0];
+        this.touchPan = { id: t.identifier, x: t.clientX, y: t.clientY, moved: false };
+        this.pinchDist = 0;
+      } else if (ev.touches.length >= 2) {
+        this.touchPan = null;
+        this.pinchDist = touchDist(ev.touches);
+      }
+    }, { passive: false });
+    this.canvas.addEventListener('touchmove', (ev) => {
+      ev.preventDefault();
+      if (ev.touches.length >= 2 && this.pinchDist > 0) {
+        const d = touchDist(ev.touches);
+        const cx = (ev.touches[0].clientX + ev.touches[1].clientX) / 2;
+        const cy = (ev.touches[0].clientY + ev.touches[1].clientY) / 2;
+        this.zoomAtClient(cx, cy, d / this.pinchDist);
+        this.pinchDist = d;
+        return;
+      }
+      const t = this.touchPan && findTouchIn(ev.touches, this.touchPan.id);
+      if (!t || !this.touchPan) return;
+      const dx = t.clientX - this.touchPan.x;
+      const dy = t.clientY - this.touchPan.y;
+      if (Math.hypot(dx, dy) > 8) this.touchPan.moved = true;
+      // pan in canvas pixels so the chart follows the finger 1:1
+      const rect = this.canvas.getBoundingClientRect();
+      const k = this.canvas.width / rect.width;
+      this.panX += dx * k;
+      this.panY += dy * k;
+      this.touchPan.x = t.clientX;
+      this.touchPan.y = t.clientY;
+      this.draw();
+    }, { passive: false });
+    const touchEnd = (ev: TouchEvent) => {
+      ev.preventDefault();
+      const tp = this.touchPan;
+      if (tp && findTouchIn(ev.changedTouches, tp.id)) {
+        this.touchPan = null;
+        if (!tp.moved) {
+          // ~44px CSS hit area: tap radius widened in canvas pixels
+          const [mx, my] = this.toCanvas(tp.x, tp.y);
+          this.pick(mx, my, 40);
+        }
+      }
+      if (ev.touches.length < 2) this.pinchDist = 0;
+    };
+    this.canvas.addEventListener('touchend', touchEnd);
+    this.canvas.addEventListener('touchcancel', touchEnd);
+  }
+
+  private toCanvas(clientX: number, clientY: number): [number, number] {
+    const rect = this.canvas.getBoundingClientRect();
+    return [
+      (clientX - rect.left) * (this.canvas.width / rect.width),
+      (clientY - rect.top) * (this.canvas.height / rect.height),
+    ];
+  }
+
+  // zoom keeping the given client-space point fixed on screen
+  private zoomAtClient(clientX: number, clientY: number, f: number): void {
+    const [mx, my] = this.toCanvas(clientX, clientY);
+    const z = Math.min(40, Math.max(0.25, this.zoom * f));
+    const realF = z / this.zoom;
+    this.panX = (mx - this.canvas.width / 2) - (mx - this.canvas.width / 2 - this.panX) * realF;
+    this.panY = (my - this.canvas.height / 2) - (my - this.canvas.height / 2 - this.panY) * realF;
+    this.zoom = z;
+    this.draw();
+  }
+
+  private zoomAtCenter(f: number): void {
+    const rect = this.canvas.getBoundingClientRect();
+    this.zoomAtClient(rect.left + rect.width / 2, rect.top + rect.height / 2, f);
   }
 
   // Sidebar: every station with its services (if known) or a BUY INFO offer
@@ -182,9 +263,9 @@ export class SystemMap {
     return out;
   }
 
-  private pick(mx: number, my: number): void {
+  private pick(mx: number, my: number, radius: number): void {
     let best: Pickable | null = null;
-    let bestD = 18;
+    let bestD = radius;
     for (const p of this.pickables()) {
       const [sx, sy] = this.toScreen(p.x, p.z);
       const d = Math.hypot(sx - mx, sy - my);
@@ -351,10 +432,21 @@ export class SystemMap {
     ctx.fillStyle = 'rgba(150, 160, 170, 0.5)';
     ctx.textAlign = 'left';
     ctx.font = '10px monospace';
-    ctx.fillText('wheel: zoom · drag: pan · click: select', 10, H - 10);
+    ctx.fillText(isMobile() ? 'pinch: zoom · drag: pan · tap: select' : 'wheel: zoom · drag: pan · click: select', 10, H - 10);
   }
 }
 
 function distTo(pos: { x: number; y: number; z: number }, st: StationDef): number {
   return Math.hypot(st.pos.x - pos.x, st.pos.y - pos.y, st.pos.z - pos.z);
+}
+
+function touchDist(list: TouchList): number {
+  return Math.hypot(list[0].clientX - list[1].clientX, list[0].clientY - list[1].clientY);
+}
+
+function findTouchIn(list: TouchList, id: number): Touch | null {
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].identifier === id) return list[i];
+  }
+  return null;
 }

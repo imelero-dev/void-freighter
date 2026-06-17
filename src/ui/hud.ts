@@ -2,6 +2,7 @@
 // instrument look, deliberately analog and a little dirty.
 
 import * as THREE from 'three';
+import { isMobile } from '../game/touch';
 import { BOLT_SPEED, GOODS } from '../sim/data';
 import type { Entity } from '../sim/types';
 import { leadPoint, qForward, qRight, qUp, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
@@ -55,6 +56,7 @@ export class Hud {
   private fpsTimeAcc = 0;
   private fpsFrames = 0;
   private fpsText = '';
+  private mobile = isMobile();
 
   constructor(private camera: THREE.PerspectiveCamera) {
     this.canvas = document.createElement('canvas');
@@ -622,8 +624,19 @@ export class Hud {
     // ---- corner holo panels ----
     const pw = Math.min(252, Math.max(200, W * 0.19));
     const ph = 128;
-    this.drawTargetPanel(world, ship, 14, H - ph - 12, pw, ph);
-    this.drawStatusPanel(world, ship, W - pw - 14, H - ph - 12, pw, ph);
+    if (this.mobile) {
+      // phones: chromeless HUD text lifted above the corner ROLL buttons,
+      // with a soft dark glow so it stays readable over bright backdrops
+      ctx.save();
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+      ctx.shadowBlur = 5;
+      this.drawTargetPanel(world, ship, 8, H - ph - 88, pw, ph);
+      this.drawStatusPanel(world, ship, W - pw - 8, H - ph - 88, pw, ph);
+      ctx.restore();
+    } else {
+      this.drawTargetPanel(world, ship, 14, H - ph - 12, pw, ph);
+      this.drawStatusPanel(world, ship, W - pw - 14, H - ph - 12, pw, ph);
+    }
   }
 
   // ED-style scanner: perspective ellipse, contacts as stalked blips showing
@@ -728,9 +741,23 @@ export class Hud {
     ctx.fillText(`SCAN ${fmtDistance(world.shipStats.sensorRange)}`, cx, cy + ry + 11);
   }
 
+  // window chrome on desktop; on phones just a dim spaced caption — the
+  // panels render as transparent HUD text straight over the game view
+  private panelFrame(x: number, y: number, w: number, h: number, title: string, right = false): void {
+    if (!this.mobile) {
+      this.holoPanel(x, y, w, h, title);
+      return;
+    }
+    const ctx = this.ctx;
+    ctx.fillStyle = 'rgba(217, 164, 65, 0.5)';
+    ctx.font = '9px "Lucida Console", monospace';
+    ctx.textAlign = right ? 'right' : 'left';
+    ctx.fillText(title.split('').join(' '), right ? x + w - 10 : x + 10, y + 10);
+  }
+
   private drawTargetPanel(world: IWorld, ship: Entity, x: number, y: number, w: number, h: number): void {
     const ctx = this.ctx;
-    this.holoPanel(x, y, w, h, 'TARGET');
+    this.panelFrame(x, y, w, h, 'TARGET');
     const target = ship.targetId !== null ? world.entities.get(ship.targetId) : null;
     ctx.textAlign = 'left';
     if (!target || target.dead) {
@@ -781,7 +808,7 @@ export class Hud {
 
   private drawStatusPanel(world: IWorld, ship: Entity, x: number, y: number, w: number, h: number): void {
     const ctx = this.ctx;
-    this.holoPanel(x, y, w, h, 'SHIP STATUS');
+    this.panelFrame(x, y, w, h, 'SHIP STATUS', this.mobile);
     ctx.textAlign = 'left';
     ctx.font = '11px "Lucida Console", monospace';
     const prof = world.profile;
@@ -802,6 +829,20 @@ export class Hud {
       lines.push(['DEST', '— set on chart [M]', GRAY]);
     }
     let ly = y + 32;
+    if (this.mobile) {
+      // chromeless block hugs the right screen edge: values right-aligned,
+      // dim labels leading them
+      ctx.textAlign = 'right';
+      for (const [k, v, color] of lines) {
+        ctx.fillStyle = color;
+        ctx.fillText(v, x + w - 10, ly);
+        ctx.fillStyle = AMBER_DIM;
+        ctx.fillText(k, x + w - 16 - ctx.measureText(v).width, ly);
+        ly += 17;
+      }
+      ctx.textAlign = 'left';
+      return;
+    }
     for (const [k, v, color] of lines) {
       ctx.fillStyle = AMBER_DIM;
       ctx.fillText(k, x + 10, ly);
