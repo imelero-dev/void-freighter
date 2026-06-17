@@ -9,6 +9,7 @@ import { EntitiesLayer } from '../render/entities';
 import { FxLayer } from '../render/fx';
 import { PostPipeline } from '../render/post';
 import { SceneManager } from '../render/scene';
+import { TerrainPatch } from '../render/terrain';
 import { buildStarfield } from '../render/starfield';
 import { BOLT_SPEED, GOODS, MODULE_NAMES, MODULE_TIER_TAGS } from '../sim/data';
 import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
@@ -34,6 +35,7 @@ export class GameApp {
   private entities: EntitiesLayer;
   private fx: FxLayer;
   private dust: DustLayer;
+  private terrain: TerrainPatch;
   private cockpit: THREE.Group;
   private gamepad = new GamepadManager();
   private gpFireWas: boolean | null = null;
@@ -71,6 +73,7 @@ export class GameApp {
     this.entities = new EntitiesLayer(this.sm, world);
     this.fx = new FxLayer(this.sm, world, this.entities);
     this.dust = new DustLayer(this.sm, world);
+    this.terrain = new TerrainPatch(this.sm);
     // first-person cockpit interior rides on the camera
     this.sm.near.add(this.sm.camera);
     this.cockpit = buildCockpit();
@@ -611,6 +614,7 @@ export class GameApp {
     this.entities.update(w.time);
     this.fx.update(dt);
     this.dust.update();
+    if (ship) this.terrain.update(w.system, ship.pos);
 
     const hullFrac = ship ? ship.hull / ship.maxHull : 1;
     const damageLevel = hullFrac < 0.25 ? (0.25 - hullFrac) * 4 : 0;
