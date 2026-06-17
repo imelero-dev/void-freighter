@@ -34,7 +34,12 @@ export class TerrainPatch {
 
   constructor(private sm: SceneManager) {
     const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
-    this.mat = new THREE.MeshStandardMaterial({ color: 0x6b6357, roughness: 1, metalness: 0, flatShading: true });
+    // a faint self-illumination so the ground reads even on a planet's night
+    // side, where the sun isn't lighting it
+    this.mat = new THREE.MeshStandardMaterial({
+      color: 0x6b6357, roughness: 1, metalness: 0, flatShading: true,
+      emissive: 0x6b6357, emissiveIntensity: 0.35,
+    });
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.receiveShadow = true;
     this.mesh.visible = false;
@@ -84,6 +89,10 @@ export class TerrainPatch {
     pos.needsUpdate = true;
     this.mesh.geometry.computeVertexNormals();
     this.mat.color.setHex(GROUND_COLOR[p.kind]);
+    this.mat.emissive.setHex(GROUND_COLOR[p.kind]);
+    // fade the self-illumination up as you get very low so high passes still
+    // look sunlit, but a night-side touchdown is never pitch black
+    this.mat.emissiveIntensity = 0.25 + 0.35 * (1 - Math.min(1, atmo.altitude / VISIBLE_ALT));
     this.mesh.visible = true;
   }
 }

@@ -602,6 +602,15 @@ export class GameApp {
       this.entities.showPlayer = this.camera.mode === 'chase';
       this.cockpit.visible = this.camera.mode === 'cockpit' && !ship.dockedAt;
       this.headlight.visible = this.headlightOn && !ship.dockedAt;
+      // auto-dim the headlight against a station hull at point-blank, so the
+      // dock isn't washed out in bloom during the final approach
+      let nearStDist = Infinity;
+      for (const s of w.system.stations) {
+        const sd = vdist(s.pos, ship.pos) - s.radius;
+        if (sd < nearStDist) nearStDist = sd;
+      }
+      const dim = nearStDist < 700 ? Math.max(0.1, nearStDist / 700) : 1;
+      this.headlight.intensity = 2200 * dim;
       // speed-based FOV: subtle at maneuver, pronounced under cruise
       const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
       const maneuverKick = Math.min(1.1, speed / Math.max(1, w.shipStats.maxSpeed)) * 6;
