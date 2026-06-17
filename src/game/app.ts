@@ -625,7 +625,7 @@ export class GameApp {
     // approach radar aid proximity beep: rate rises as you near the dock on a
     // good glidepath (#18)
     const ap = this.hud.approach;
-    if (ap && ap.active && ap.beep > 0 && !ship?.dockedAt) {
+    if (ap && ap.active && ap.beep > 0 && ship && !ship.dockedAt) {
       this.approachBeepAcc += dt * ap.beep;
       if (this.approachBeepAcc >= 1) {
         this.approachBeepAcc = 0;
