@@ -6,6 +6,7 @@ import { isMobile } from '../game/touch';
 import { BOLT_SPEED, DOCK_MAX_SPEED, GOODS } from '../sim/data';
 import type { Entity } from '../sim/types';
 import { leadPoint, qForward, qRight, qUp, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
+import { atmosphereAt } from '../sim/system';
 import type { IWorld } from '../world_api';
 import { fmtDistance, fmtTime } from './dom';
 
@@ -189,6 +190,9 @@ export class Hud {
 
     // ---- bottom instrument cluster (ED style) ----
     this.drawBottomCluster(world, ship, W, H);
+
+    // ---- altimeter / atmosphere readout (only near a planet) ----
+    this.drawAltimeter(world, ship, cx);
 
     // ---- world-anchored target bracket + lead pip ----
     const target = ship.targetId !== null ? world.entities.get(ship.targetId) : null;
@@ -637,6 +641,41 @@ export class Hud {
     } else {
       this.drawTargetPanel(world, ship, 14, H - ph - 12, pw, ph);
       this.drawStatusPanel(world, ship, W - pw - 14, H - ph - 12, pw, ph);
+    }
+  }
+
+  // Altimeter + atmosphere readout (#16): altitude above the nearest planet,
+  // vertical (descent) speed coloured by touchdown safety, and an atmosphere
+  // density bar. Shown only when close to a planet so it never clutters space.
+  private drawAltimeter(world: IWorld, ship: Entity, cx: number): void {
+    const ctx = this.ctx;
+    const atmo = atmosphereAt(world.system, ship.pos);
+    if (!atmo.planet) return;
+    const near = atmo.altitude < atmo.planet.radius * 0.5;
+    if (!near && atmo.density <= 0) return;
+
+    const y = 52;
+    // vertical speed: positive = descending toward the surface
+    const n = vnorm(vsub(ship.pos, atmo.planet.pos));
+    const vs = -vdot(ship.vel, n);
+    ctx.textAlign = 'center';
+    ctx.font = '10px "Lucida Console", monospace';
+    ctx.fillStyle = atmo.density > 0 ? CIV_TEAL : AMBER_DIM;
+    ctx.fillText(`${atmo.planet.name.toUpperCase()}  ·  ALT ${fmtDistance(Math.max(0, atmo.altitude))}`, cx, y);
+
+    // descent-rate cue: green when gentle, red when you'd slam in
+    const descending = vs > 1;
+    const safe = vs < 35;
+    ctx.font = '10px "Lucida Console", monospace';
+    ctx.fillStyle = !descending ? AMBER_DIM : safe ? GREEN : RED;
+    ctx.fillText(descending ? `VS ▼ ${Math.round(vs)} m/s${!world.gearDown && atmo.altitude < atmo.planet.radius * 0.06 ? '  ⚠ GEAR UP' : ''}` : 'VS  level', cx, y + 14);
+
+    if (atmo.density > 0) {
+      const bw = 90;
+      this.hbar(cx - bw / 2, y + 22, bw, 5, atmo.density, CIV_TEAL);
+      ctx.fillStyle = AMBER_DIM;
+      ctx.font = '9px "Lucida Console", monospace';
+      ctx.fillText('ATMOSPHERE', cx, y + 36);
     }
   }
 

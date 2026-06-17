@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/sim';
 import { DT, emptyShipInput } from '../src/sim/types';
 import { integrateFlight } from '../src/sim/flight';
+import { isLandable } from '../src/sim/system';
 import { qLookAt, vadd, vdist, vlen, vnorm, vscale, vsub, v3 } from '../src/sim/vec';
 
 function makeSim(): Sim {
@@ -278,6 +279,50 @@ describe('docking', () => {
     sim.requestDock(pid);
     runTicks(sim, 20);
     expect(e.dockedAt).toBeNull();
+  });
+});
+
+describe('planetary atmosphere & landing (#16)', () => {
+  const landablePlanet = (sim: Sim) => sim.system.planets.find((p) => isLandable(p.kind))!;
+
+  it('atmospheric drag bleeds speed near a planet', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.flightAssist = false;
+    const p = landablePlanet(sim);
+    e.pos = vadd(p.pos, vscale(v3(0, 1, 0), p.radius * 1.1)); // inside the shell
+    e.vel = v3(300, 0, 0); // tangential, so we don't hit the surface
+    const v0 = vlen(e.vel);
+    runTicks(sim, 20 * 3);
+    expect(vlen(e.vel)).toBeLessThan(v0 * 0.9);
+  });
+
+  it('slow gear-down touchdown is clean; gear-up slam damages the hull (#18)', () => {
+    const land = (gearDown: boolean, speed: number) => {
+      const sim = makeSim();
+      const pid = sim.addPlayer('tester');
+      sim.undock(pid);
+      const e = sim.entities.get(pid)!;
+      const meta = sim.meta(pid)!;
+      meta.flightAssist = false;
+      meta.undockInvuln = 0;
+      meta.gearDown = gearDown;
+      e.maxHull = e.hull = 100_000;
+      const p = landablePlanet(sim);
+      const up = v3(0, 1, 0);
+      e.pos = vadd(p.pos, vscale(up, p.radius + e.radius + 5));
+      e.vel = vscale(up, -speed); // straight down
+      const h0 = e.hull;
+      runTicks(sim, 12);
+      return { dmg: h0 - e.hull, alt: vdist(e.pos, p.pos) - p.radius };
+    };
+    const soft = land(true, 20);
+    expect(soft.dmg).toBe(0);              // gear down + gentle = no damage
+    expect(soft.alt).toBeGreaterThan(-1);  // rests on the surface, no clipping
+    expect(land(false, 200).dmg).toBeGreaterThan(0); // gear up + fast = hull damage
   });
 });
 

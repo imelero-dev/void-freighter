@@ -5,7 +5,7 @@
 import { shipStats, ROCK_TYPES, TURBO_ACCEL_MULT, TURBO_SPEED, type ShipStats } from '../sim/data';
 import { integrateFlight } from '../sim/flight';
 import { blankEntity, defaultProfile, SHIP_RADIUS } from '../sim/sim';
-import { dangerAt, generateSystem, rockSpawn } from '../sim/system';
+import { ATMO_DRAG, atmosphereAt, dangerAt, generateSystem, rockSpawn } from '../sim/system';
 import {
   emptyShipInput, type Contract, type Destination, type Entity, type HullId, type MarketEntry,
   type ModuleSlot, type PlayerProfile, type ShipInput, type SimEvent, type StationDef,
@@ -227,6 +227,13 @@ export class ClientWorld implements IWorld {
             ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate, massFactor: stats.massFactor }
             : stats;
         integrateFlight(e, this.input, perf, dt, this.flightAssist);
+        // atmospheric drag parity with the server so prediction stays aligned
+        // near planets (#16)
+        const atmo = atmosphereAt(this.system, e.pos);
+        if (atmo.density > 0) {
+          const f = Math.max(0, 1 - ATMO_DRAG * atmo.density * dt);
+          e.vel.x *= f; e.vel.y *= f; e.vel.z *= f;
+        }
         // reconcile against extrapolated server state
         const age = (performance.now() - this.lastSnapAt) / 1000;
         const sx = sv.x + sv.vx * age, sy = sv.y + sv.vy * age, sz = sv.z + sv.vz * age;

@@ -18,7 +18,7 @@ import { integrateFlight } from './flight';
 import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
-import { dangerAt, generateSystem, rockSpawn, stationInfoCost, WORLD_SEED } from './system';
+import { ATMO_DRAG, atmosphereAt, dangerAt, generateSystem, isLandable, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
 import { TrafficSystem } from './traffic';
 import {
   DT, emptyShipInput, type CargoItem, type Contract, type Destination, type Entity,
@@ -160,6 +160,7 @@ export interface PlayerMeta {
   vtol: boolean;         // VTOL hover mode: precise, reduced forward envelope
   gearDown: boolean;     // landing gear deployed (required for pad touchdown)
   approachStation: string | null; // station we've been cleared to approach (ATC)
+  onSurface: boolean;    // resting on a planet surface (rising-edge touchdown msg)
 }
 
 interface RockState {
@@ -230,7 +231,7 @@ export class Sim {
       forcefieldCooldown: 0, promptedDerelicts: new Set(),
       turboCharge: 1, turboActive: false, lastCombatAt: -999,
       miningBeam: false, beamFiring: false, drillHeat: 0, drillOverheated: false,
-      vtol: false, gearDown: false, approachStation: null,
+      vtol: false, gearDown: false, approachStation: null, onSurface: false,
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
@@ -555,6 +556,16 @@ export class Sim {
       this.integrateShip(e, meta.input, perf, dt, meta.flightAssist);
       if (meta.cruiseRequested) this.tryStartCruise(meta, e);
     }
+    // atmospheric drag: the air thickens as you descend, bleeding speed and
+    // changing the control feel near a planet (#16)
+    if (!e.dockedAt) {
+      const atmo = atmosphereAt(this.system, e.pos);
+      if (atmo.density > 0) {
+        const f = Math.max(0, 1 - ATMO_DRAG * atmo.density * dt);
+        e.vel = vscale(e.vel, f);
+      }
+    }
+
     const moved = vlen(e.vel) * dt;
     prof.stats.distanceTravelled += moved;
 
@@ -856,10 +867,13 @@ export class Sim {
       }
     };
     for (const p of this.system.planets) {
-      bounce(p.pos, p.radius * 1.15, p.name);
+      // solid worlds can be set down on; gas giants and lava worlds keep their
+      // hard exclusion field (no surface to land on)
+      if (isLandable(p.kind)) this.planetSurface(meta, e, p.pos, p.radius, p.name);
+      else bounce(p.pos, p.radius * 1.15, p.name);
     }
     for (const m of this.system.moons) {
-      bounce(m.pos, m.radius * 1.3, 'moon');
+      this.planetSurface(meta, e, m.pos, m.radius, 'the moon');
     }
     // stations: a solid hull you can scrape along, not a trampoline
     for (const s of this.system.stations) {
@@ -905,6 +919,43 @@ export class Sim {
         this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * dmgScale * meta.stats.massFactor, -1, true);
       }
       if (e.cruise !== 'off' && impact > 40) this.dropCruise(e, 'collision');
+    }
+  }
+
+  // Seamless planetary touchdown (#16/#18): the same mass-based contact as a
+  // solid body, but landing quality depends on closing speed and the gear. A
+  // slow approach with gear down is a clean touchdown; fast or gear-up bites
+  // hull. Resting is just the surface stopping you — thrust away to take off.
+  private planetSurface(meta: PlayerMeta, e: Entity, center: Vec3, radius: number, name: string): void {
+    const rx = e.pos.x - center.x, ry = e.pos.y - center.y, rz = e.pos.z - center.z;
+    const d = Math.hypot(rx, ry, rz);
+    const minD = radius + e.radius;
+    if (d >= minD) {
+      if (meta.onSurface && d > minD + 50) meta.onSurface = false; // lifted off
+      return;
+    }
+    const n = d > 1e-6 ? v3(rx / d, ry / d, rz / d) : v3(0, 1, 0);
+    e.pos = vadd(center, vscale(n, minD + 0.5));
+    const vn = vdot(e.vel, n); // <0 descending into the surface
+    if (vn < 0) {
+      e.vel = vsub(e.vel, vscale(n, vn * 1.04)); // cancel inbound, keep tangential
+      const impact = -vn;
+      const softLimit = meta.gearDown ? SOFT_LAND_SPEED : 12;
+      if (impact > softLimit) {
+        const penalty = meta.gearDown ? 0.4 : 1.4; // gear-up slams the hull
+        this.applyDamage(e, (impact - softLimit) * penalty * meta.stats.massFactor, -1, true);
+        if (!meta.onSurface) {
+          this.events.push({
+            type: 'log',
+            text: meta.gearDown ? `Hard landing on ${name} — hull stressed.` : 'CRASH LANDING — deploy landing gear [P] before touchdown!',
+            color: '#f66', pid: meta.pid,
+          });
+        }
+      } else if (!meta.onSurface) {
+        this.events.push({ type: 'log', text: `Touchdown on ${name}. Gear holding — thrust up to lift off.`, color: '#8fb', pid: meta.pid });
+      }
+      meta.onSurface = true;
+      if (e.cruise !== 'off') this.dropCruise(e, 'landing');
     }
   }
 

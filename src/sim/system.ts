@@ -266,6 +266,39 @@ export function stationInfoCost(from: Vec3, st: StationDef): number {
   return Math.round((500 + (d / 1e6) * 35) / 10) * 10;
 }
 
+// Atmospheric shell thickness as a fraction of planet radius. Drag ramps from
+// zero at the top of the shell to peak at the surface.
+export const ATMO_THICKNESS = 0.28;
+export const ATMO_DRAG = 1.1;          // peak per-second velocity drag coefficient
+export const SOFT_LAND_SPEED = 35;     // m/s closing speed for a clean touchdown
+
+// Gas giants and lava worlds have no surface you can set down on.
+export function isLandable(kind: PlanetDef['kind']): boolean {
+  return kind !== 'gas' && kind !== 'lava';
+}
+
+// Atmosphere at a world position: nearest planet, your altitude above its
+// surface, and the air density there (0 in vacuum, 1 at the surface). Shared by
+// the sim (drag), the online client (prediction parity) and the HUD readout.
+export function atmosphereAt(system: SystemDef, pos: Vec3): { density: number; planet: PlanetDef | null; altitude: number } {
+  let planet: PlanetDef | null = null;
+  let altitude = Infinity;
+  for (const p of system.planets) {
+    const d = Math.hypot(pos.x - p.pos.x, pos.y - p.pos.y, pos.z - p.pos.z);
+    const alt = d - p.radius;
+    if (alt < altitude) {
+      altitude = alt;
+      planet = p;
+    }
+  }
+  let density = 0;
+  if (planet) {
+    const shell = planet.radius * ATMO_THICKNESS;
+    if (altitude < shell) density = Math.min(1, Math.max(0, 1 - altitude / shell));
+  }
+  return { density, planet, altitude };
+}
+
 // Danger level (0..1) at a world position: belts/fields project danger near
 // them, Rusthaven has a hot zone, deep void has a low floor. Drives pirate
 // spawns and cruise interdiction odds.
