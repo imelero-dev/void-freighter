@@ -602,21 +602,24 @@ export class GameApp {
       this.entities.showPlayer = this.camera.mode === 'chase';
       this.cockpit.visible = this.camera.mode === 'cockpit' && !ship.dockedAt;
       this.headlight.visible = this.headlightOn && !ship.dockedAt;
-      // auto-dim the headlight against a big surface at point-blank (station
-      // hull while docking, asteroid while mining) so the view isn't blown out
-      // in bloom — the inverse-distance falloff makes close surfaces searing
+      // Auto-exposing headlight: the inverse-distance falloff means a fixed
+      // intensity sears anything close (bloom blow-out) and barely touches
+      // anything far. Instead, scale intensity to the nearest surface in front
+      // so whatever you light lands at a roughly constant, useful brightness —
+      // never blinding, always doing something. Open space falls back to max.
       let nearSurf = Infinity;
       for (const s of w.system.stations) {
         const sd = vdist(s.pos, ship.pos) - s.radius;
         if (sd < nearSurf) nearSurf = sd;
       }
       for (const en of w.entities.values()) {
-        if (en.kind !== 'asteroid') continue;
+        if (en.id === w.playerId || en.dead) continue;
+        if (en.kind !== 'asteroid' && en.kind !== 'ship') continue;
         const sd = vdist(en.pos, ship.pos) - en.radius;
         if (sd < nearSurf) nearSurf = sd;
       }
-      const dim = nearSurf < 700 ? Math.max(0.1, nearSurf / 700) : 1;
-      this.headlight.intensity = 2200 * dim;
+      // target illuminance ≈ sunlight: intensity = k · distance, clamped
+      this.headlight.intensity = Math.max(180, Math.min(2200, nearSurf * 3.5));
       // speed-based FOV: subtle at maneuver, pronounced under cruise
       const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
       const maneuverKick = Math.min(1.1, speed / Math.max(1, w.shipStats.maxSpeed)) * 6;
