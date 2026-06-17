@@ -69,10 +69,17 @@ function fragMat(goodId: string | null): THREE.MeshStandardMaterial {
 }
 const lootGeo = new THREE.BoxGeometry(2.6, 2.6, 2.6);
 const lootMat = new THREE.MeshStandardMaterial({ color: 0x8a6a2a, roughness: 0.5, metalness: 0.7, emissive: 0x332200 });
-// weapon bolts: shared elongated tracer (cylinder axis +Y), oriented per frame
-const boltGeo = new THREE.CylinderGeometry(0.45, 0.45, 9, 5, 1, true);
+// weapon bolts: shared elongated tracer (cylinder axis +Y), oriented per frame.
+// Beefier than a thin line so shots read with weight (#12).
+const boltGeo = new THREE.CylinderGeometry(0.7, 0.7, 14, 6, 1, true);
 const boltMat = new THREE.MeshBasicMaterial({
-  color: 0xff6a3a, transparent: true, opacity: 0.95,
+  color: 0xff7a3a, transparent: true, opacity: 0.98,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+// soft glow sleeve around the tracer core — shared, never disposed
+const boltGlowGeo = new THREE.CylinderGeometry(1.7, 1.7, 16, 6, 1, true);
+const boltGlowMat = new THREE.MeshBasicMaterial({
+  color: 0xffae5a, transparent: true, opacity: 0.35,
   blending: THREE.AdditiveBlending, depthWrite: false,
 });
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
@@ -260,6 +267,7 @@ export class EntitiesLayer {
       }
       case 'bolt': {
         const mesh = new THREE.Mesh(boltGeo, boltMat); // shared pool — never disposed
+        mesh.add(new THREE.Mesh(boltGlowGeo, boltGlowMat)); // glow sleeve
         view = { obj: mesh, kindKey };
         break;
       }

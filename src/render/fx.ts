@@ -10,7 +10,8 @@ interface Effect {
   obj: THREE.Object3D;
   ttl: number;
   life: number;
-  kind: 'beam' | 'flash' | 'explosion' | 'sparks';
+  kind: 'beam' | 'flash' | 'explosion' | 'sparks' | 'ring';
+  grow?: number; // ring: final scale multiple relative to start
 }
 
 function glowTexture(): THREE.Texture {
@@ -26,7 +27,23 @@ function glowTexture(): THREE.Texture {
   return new THREE.CanvasTexture(c);
 }
 
+// annulus texture for shield ripples (a bright ring, hollow centre)
+function ringTexture(): THREE.Texture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,0)');
+  g.addColorStop(0.62, 'rgba(255,255,255,0)');
+  g.addColorStop(0.82, 'rgba(255,255,255,0.95)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+
 let glowTex: THREE.Texture | null = null;
+let ringTex: THREE.Texture | null = null;
 
 export class FxLayer {
   private effects: Effect[] = [];
@@ -45,6 +62,7 @@ export class FxLayer {
 
   constructor(private sm: SceneManager, private world: IWorld, private entities: EntitiesLayer) {
     if (!glowTex) glowTex = glowTexture();
+    if (!ringTex) ringTex = ringTexture();
   }
 
   handleEvents(events: SimEvent[]): void {
@@ -79,14 +97,28 @@ export class FxLayer {
         }
         case 'hit': {
           const p = new THREE.Vector3(ev.x - this.sm.origin.x, ev.y - this.sm.origin.y, ev.z - this.sm.origin.z);
-          if (ev.amount > 0) this.spawnFlash(p, ev.shield ? 0x66aaff : 0xffaa55, ev.shield ? 14 : 9, 0.25);
-          else this.spawnFlash(p, 0x997755, 4, 0.12); // bolt soaked by a rock
+          if (ev.amount > 0) {
+            if (ev.shield) {
+              // shield impact: a blue ripple ring + soft flash; a collapsing
+              // shield throws a much bigger ring
+              this.spawnRipple(p, 0x6cb6ff, ev.broke ? 30 : 16);
+              this.spawnFlash(p, 0x66aaff, ev.broke ? 18 : 12, ev.broke ? 0.4 : 0.22);
+            } else {
+              // bare hull: hot orange sparks shower off the plating
+              this.spawnHullSparks(p);
+              this.spawnFlash(p, 0xffaa55, 9, 0.22);
+            }
+          } else {
+            this.spawnFlash(p, 0x997755, 4, 0.12); // bolt soaked by a rock
+          }
           break;
         }
         case 'shot': {
-          // muzzle flash
+          // muzzle flash: a punchy double pop (hot core + warm halo) so firing
+          // has visible weight (#12)
           const p = new THREE.Vector3(ev.x - this.sm.origin.x, ev.y - this.sm.origin.y, ev.z - this.sm.origin.z);
-          this.spawnFlash(p, 0xffaa55, 3, 0.07);
+          this.spawnFlash(p, 0xffe0a0, 5, 0.09);
+          this.spawnFlash(p, 0xff8a3a, 9, 0.06);
           break;
         }
         case 'explosion': {
@@ -120,6 +152,44 @@ export class FxLayer {
     sprite.scale.set(size, size, 1);
     this.sm.near.add(sprite);
     this.effects.push({ obj: sprite, ttl, life: ttl, kind: 'flash' });
+  }
+
+  // expanding shield ripple: a camera-facing ring that grows and fades
+  private spawnRipple(p: THREE.Vector3, color: number, finalSize: number): void {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: ringTex!, color, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    sprite.position.copy(p);
+    const start = finalSize * 0.3;
+    sprite.scale.set(start, start, 1);
+    this.sm.near.add(sprite);
+    this.effects.push({ obj: sprite, ttl: 0.4, life: 0.4, kind: 'ring', grow: finalSize / start });
+  }
+
+  // hot sparks shed off bare hull plating on a kinetic hit
+  private spawnHullSparks(p: THREE.Vector3): void {
+    const count = 10;
+    const positions = new Float32Array(count * 3);
+    const velocities: THREE.Vector3[] = [];
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = p.x;
+      positions[i * 3 + 1] = p.y;
+      positions[i * 3 + 2] = p.z;
+      velocities.push(new THREE.Vector3(
+        Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5,
+      ).normalize().multiplyScalar(14 + Math.random() * 40));
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      color: 0xffb347, size: 2.0, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+    });
+    const points = new THREE.Points(geo, mat);
+    points.userData.velocities = velocities;
+    this.sm.near.add(points);
+    this.effects.push({ obj: points, ttl: 0.45, life: 0.45, kind: 'sparks' });
   }
 
   private spawnExplosion(p: THREE.Vector3, big: boolean): void {
@@ -249,6 +319,15 @@ export class FxLayer {
       if (fx.kind === 'beam' || fx.kind === 'flash') {
         const mat = (fx.obj as THREE.Mesh | THREE.Sprite).material as THREE.Material & { opacity: number };
         mat.opacity = t * 0.9;
+      } else if (fx.kind === 'ring') {
+        // ease-out growth + fade for the shield ripple
+        const sprite = fx.obj as THREE.Sprite;
+        const start = (sprite.userData.startScale ??= sprite.scale.x);
+        const prog = 1 - t;                 // 0 -> 1 over the effect's life
+        const ease = 1 - (1 - prog) * (1 - prog);
+        const s = start * (1 + (fx.grow! - 1) * ease);
+        sprite.scale.set(s, s, 1);
+        (sprite.material as THREE.SpriteMaterial).opacity = t * 0.85;
       } else if (fx.kind === 'sparks') {
         const points = fx.obj as THREE.Points;
         const pos = points.geometry.attributes.position;

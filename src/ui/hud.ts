@@ -194,18 +194,50 @@ export class Hud {
         const r = 14;
         ctx.strokeRect(s.x - r, s.y - r, r * 2, r * 2);
       }
-      // lead pip: where to aim so your bolts intercept the target
+      // lead pip: where to aim so your bolts intercept the target. Large and
+      // glanceable, and it snaps to a green firing solution when your nose is
+      // lined up on it within weapon range (#12).
       if (target.kind === 'ship' && stats.weaponDamage > 0 && d < stats.weaponRange * 1.4) {
         const aim = leadPoint(ship.pos, ship.vel, target.pos, target.vel, BOLT_SPEED);
         const ap = this.toScreen(this.tmpLocal.set(aim.x - origin.x, aim.y - origin.y, aim.z - origin.z));
         if (!ap.behind) {
-          ctx.strokeStyle = target.pirate ? RED : CYAN;
-          ctx.lineWidth = 1.2;
+          const inRange = d < stats.weaponRange;
+          const onTarget = inRange && Math.hypot(ap.x - cx, ap.y - cy) < 16;
+          const base = onTarget ? GREEN : target.pirate ? RED : CYAN;
+          const pulse = 0.55 + 0.45 * Math.sin(now / 80);
+          ctx.save();
+          ctx.strokeStyle = base;
+          ctx.fillStyle = base;
+          ctx.globalAlpha = inRange ? 1 : 0.5;
+          ctx.lineWidth = onTarget ? 2 : 1.4;
+          const r = onTarget ? 9 : 7;
           ctx.beginPath();
-          ctx.arc(ap.x, ap.y, 5, 0, Math.PI * 2);
+          ctx.arc(ap.x, ap.y, r, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.fillStyle = ctx.strokeStyle;
-          ctx.fillRect(ap.x - 0.5, ap.y - 0.5, 1.5, 1.5);
+          // crosshair ticks around the pip
+          ctx.beginPath();
+          ctx.moveTo(ap.x - r - 4, ap.y); ctx.lineTo(ap.x - r, ap.y);
+          ctx.moveTo(ap.x + r, ap.y); ctx.lineTo(ap.x + r + 4, ap.y);
+          ctx.moveTo(ap.x, ap.y - r - 4); ctx.lineTo(ap.x, ap.y - r);
+          ctx.moveTo(ap.x, ap.y + r); ctx.lineTo(ap.x, ap.y + r + 4);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(ap.x, ap.y, 1.8, 0, Math.PI * 2);
+          ctx.fill();
+          if (onTarget) {
+            // pulsing corner brackets: you have a firing solution, shoot now
+            ctx.globalAlpha = pulse;
+            ctx.lineWidth = 2;
+            const b = 13;
+            for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+              ctx.beginPath();
+              ctx.moveTo(ap.x + sx * b, ap.y + sy * b - sy * 5);
+              ctx.lineTo(ap.x + sx * b, ap.y + sy * b);
+              ctx.lineTo(ap.x + sx * b - sx * 5, ap.y + sy * b);
+              ctx.stroke();
+            }
+          }
+          ctx.restore();
         }
       }
     }

@@ -694,6 +694,7 @@ export class GameApp {
       case 'shot': {
         if (ev.entityId === w.playerId) {
           this.audio.laser(true);
+          this.camera.kick(0.7); // recoil punch gives the shot weight
         } else {
           const ship = w.player;
           if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 2800) {
@@ -704,8 +705,14 @@ export class GameApp {
       }
       case 'hit': {
         if (ev.entityId === w.playerId) {
-          if (ev.shield) this.audio.hitShield();
-          else {
+          if (ev.shield) {
+            this.audio.hitShield();
+            if (ev.broke) {
+              this.audio.shieldDown();
+              this.hud.flashAlert('SHIELDS DOWN', '#e8402a', 1800);
+              buzz(HAPTIC.hullHit);
+            }
+          } else {
             this.audio.hitHull();
             buzz(HAPTIC.hullHit);
           }

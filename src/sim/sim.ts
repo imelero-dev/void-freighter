@@ -1186,7 +1186,10 @@ export class Sim {
       const absorbed = Math.min(target.shield, remaining);
       target.shield -= absorbed;
       remaining -= absorbed;
-      this.events.push({ type: 'hit', entityId: target.id, shield: true, amount: Math.round(absorbed), x: target.pos.x, y: target.pos.y, z: target.pos.z, ...from });
+      // flag the exact moment the shield collapses so clients can sound/flash a
+      // distinct "shields down" cue (#12)
+      const broke = target.shield <= 0;
+      this.events.push({ type: 'hit', entityId: target.id, shield: true, amount: Math.round(absorbed), x: target.pos.x, y: target.pos.y, z: target.pos.z, ...from, broke });
     }
     if (remaining > 0) {
       target.hull -= remaining;

@@ -254,6 +254,13 @@ export class AudioEngine {
     this.noiseBurst('highpass', 2500, 1200, 0.08, 0.05);
   }
 
+  // the moment a shield collapses: a downward electric whine + crackle, clearly
+  // different from a normal shield ping so the player feels the layer drop
+  shieldDown(): void {
+    this.blip(900, 180, 0.45, 'sawtooth', 0.12);
+    this.noiseBurst('bandpass', 2400, 400, 0.4, 0.09);
+  }
+
   hitHull(): void {
     this.noiseBurst('lowpass', 380, 90, 0.18, 0.22);
     this.blip(120, 55, 0.16, 'triangle', 0.18);

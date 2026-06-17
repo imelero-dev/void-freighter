@@ -27,10 +27,16 @@ const COCKPIT_OFFSETS: Record<string, Vec3> = {
 export class CameraRig {
   mode: 'cockpit' | 'chase' = 'cockpit';
   private smoothing: { pos: Vec3; quat: Quat } | null = null;
+  private recoil = 0; // transient weapon-fire screen kick, decays fast
 
   toggle(): void {
     this.mode = this.mode === 'cockpit' ? 'chase' : 'cockpit';
     this.smoothing = null;
+  }
+
+  // brief camera punch when the player fires — gives shots weight (#12)
+  kick(mag = 1): void {
+    this.recoil = Math.min(1.5, this.recoil + mag);
   }
 
   // Computes camera world pos + orientation from the (interpolated) ship state.
@@ -63,6 +69,16 @@ export class CameraRig {
       }
       camQuat = this.smoothing.quat;
       camPos = vadd(pos, qrot(camQuat, off));
+    }
+    // weapon recoil: a small, fast-decaying back-and-jitter kick in camera space
+    if (this.recoil > 0) {
+      const j = this.recoil;
+      camPos = vadd(camPos, qrot(camQuat, {
+        x: (Math.random() - 0.5) * 0.14 * j,
+        y: (Math.random() - 0.5) * 0.1 * j,
+        z: 0.09 * j,
+      }));
+      this.recoil = Math.max(0, this.recoil - dt * 9);
     }
     sm.setCamera(camPos, new THREE.Quaternion(camQuat.x, camQuat.y, camQuat.z, camQuat.w));
   }
