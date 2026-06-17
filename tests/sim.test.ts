@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/sim';
 import { DT, emptyShipInput } from '../src/sim/types';
 import { integrateFlight } from '../src/sim/flight';
-import { qLookAt, vdist, vlen, vnorm, vsub, v3 } from '../src/sim/vec';
+import { qLookAt, vadd, vdist, vlen, vnorm, vscale, vsub, v3 } from '../src/sim/vec';
 
 function makeSim(): Sim {
   return new Sim();
@@ -155,6 +155,61 @@ describe('VTOL flight mode (#19)', () => {
     expect(meta.vtol).toBe(true);
     sim.toggleCruise(pid);
     expect(meta.vtol).toBe(false);
+  });
+});
+
+describe('solid collision (#21)', () => {
+  const stageAtStation = (sim: Sim, speed: number) => {
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.undockInvuln = 0;
+    meta.flightAssist = false; // coast straight in, deterministic
+    const st = sim.system.stations[0];
+    const dir = v3(1, 0, 0);
+    e.pos = vadd(st.pos, vscale(dir, st.radius + e.radius + 5));
+    e.vel = vscale(dir, -speed); // straight into the hull
+    return { e, st };
+  };
+
+  it('low-speed contact gently stops/slides — no hard bounce, no clipping', () => {
+    const sim = makeSim();
+    const { e, st } = stageAtStation(sim, 20);
+    runTicks(sim, 40);
+    expect(vdist(e.pos, st.pos)).toBeGreaterThanOrEqual(st.radius + e.radius - 1); // never inside
+    expect(vlen(e.vel)).toBeLessThan(20); // not flung away
+  });
+
+  it('high-speed impact damages the hull proportionally and still resolves cleanly', () => {
+    const sim = makeSim();
+    const { e, st } = stageAtStation(sim, 400);
+    const hull0 = e.hull;
+    runTicks(sim, 5);
+    expect(e.hull).toBeLessThan(hull0);
+    expect(vdist(e.pos, st.pos)).toBeGreaterThanOrEqual(st.radius + e.radius - 1);
+  });
+
+  it('a heavier hull takes more impact damage than a light one at equal speed', () => {
+    const dmg = (massFactor: number) => {
+      const sim = makeSim();
+      const pid = sim.addPlayer('tester');
+      sim.undock(pid);
+      const e = sim.entities.get(pid)!;
+      const meta = sim.meta(pid)!;
+      meta.undockInvuln = 0;
+      meta.flightAssist = false;
+      meta.stats.massFactor = massFactor; // isolate mass as the only variable
+      e.maxHull = e.hull = 100_000; // big tank so neither hull dies + resets
+      const st = sim.system.stations[0];
+      const dir = v3(1, 0, 0);
+      e.pos = vadd(st.pos, vscale(dir, st.radius + e.radius + 5));
+      e.vel = vscale(dir, -300);
+      const h0 = e.hull;
+      runTicks(sim, 5);
+      return h0 - e.hull;
+    };
+    expect(dmg(2.5)).toBeGreaterThan(dmg(0.8));
   });
 });
 

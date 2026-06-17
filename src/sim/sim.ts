@@ -37,6 +37,7 @@ export const SHIP_RADIUS: Record<string, number> = {
 const FRAGMENT_CHUNK = 3;        // mined units per fragment entity
 const FRAGMENT_TTL = 150;
 const VTOL_SPEED_FACTOR = 0.22;  // forward-speed envelope in VTOL hover mode
+const ZERO_VEL: Vec3 = { x: 0, y: 0, z: 0 }; // stationary collider reference
 const LOOT_TTL = 240;
 const MISSILE_SPEED = 700;
 const MISSILE_TURN = 2.8;        // rad/s
@@ -856,46 +857,50 @@ export class Sim {
     for (const m of this.system.moons) {
       bounce(m.pos, m.radius * 1.3, 'moon');
     }
-    // stations: bounce
+    // stations: a solid hull you can scrape along, not a trampoline
     for (const s of this.system.stations) {
-      const d = vdist(e.pos, s.pos);
-      if (d < s.radius + e.radius && !e.dockedAt) {
-        const n = vnorm(vsub(e.pos, s.pos));
-        e.pos = vadd(s.pos, vscale(n, s.radius + e.radius + 2));
-        const impact = vlen(e.vel);
-        e.vel = vscale(n, Math.max(10, impact * 0.25));
-        if (impact > COLLISION_DAMAGE_SPEED) {
-          this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.3, -1, true);
-        }
-      }
+      if (e.dockedAt) break;
+      this.solidCollision(meta, e, s.pos, s.radius, ZERO_VEL, 0.3);
     }
     // asteroids (active entities only)
     for (const a of this.entities.values()) {
       if (a.kind !== 'asteroid') continue;
-      const d = vdist(e.pos, a.pos);
-      if (d < a.radius + e.radius) {
-        const n = vnorm(vsub(e.pos, a.pos));
-        e.pos = vadd(a.pos, vscale(n, a.radius + e.radius + 1));
-        const impact = vlen(e.vel);
-        e.vel = vscale(n, Math.max(8, impact * 0.3));
-        if (impact > COLLISION_DAMAGE_SPEED) {
-          this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.5, -1, true);
-        }
-      }
+      this.solidCollision(meta, e, a.pos, a.radius, ZERO_VEL, 0.5);
     }
     // bulk carriers are solid: half a kilometre of hull is not a suggestion
     for (const n of this.entities.values()) {
       if (n.kind !== 'ship' || n.npc !== 'superfreighter' || n.dead) continue;
-      const d = vdist(e.pos, n.pos);
-      if (d < n.radius + e.radius) {
-        const out = vnorm(vsub(e.pos, n.pos));
-        e.pos = vadd(n.pos, vscale(out, n.radius + e.radius + 2));
-        const impact = vlen(vsub(e.vel, n.vel));
-        e.vel = vadd(vclone(n.vel), vscale(out, Math.max(15, impact * 0.25)));
-        if (impact > COLLISION_DAMAGE_SPEED) {
-          this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.4, -1, true);
-        }
+      this.solidCollision(meta, e, n.pos, n.radius, n.vel, 0.4);
+    }
+  }
+
+  // Credible solid-body contact response (#21): push the ship exactly to the
+  // surface (no clipping, no overshoot), then cancel the inbound NORMAL
+  // velocity while preserving the TANGENTIAL part — so low-speed contact slides
+  // or gently stops along the surface instead of bouncing off. Damage scales
+  // with closing momentum (mass × speed), so a heavy freighter hits harder than
+  // a scout at the same speed.
+  private solidCollision(meta: PlayerMeta, e: Entity, center: Vec3, surfaceRadius: number, otherVel: Vec3, dmgScale: number): void {
+    const rx = e.pos.x - center.x, ry = e.pos.y - center.y, rz = e.pos.z - center.z;
+    const d = Math.hypot(rx, ry, rz);
+    const minD = surfaceRadius + e.radius;
+    if (d >= minD) return;
+    const n = d > 1e-6 ? v3(rx / d, ry / d, rz / d) : v3(0, 1, 0);
+    e.pos = vadd(center, vscale(n, minD + 0.5));
+    const relVel = vsub(e.vel, otherVel);
+    const vn = vdot(relVel, n); // <0 while moving into the surface
+    if (vn < 0) {
+      // remove the inbound component (tiny restitution for a soft nudge at
+      // speed; at low speed this is effectively a gentle stop). Tangential
+      // velocity is untouched, which is what lets the ship slide along.
+      const restitution = 0.08;
+      const newRel = vsub(relVel, vscale(n, vn * (1 + restitution)));
+      e.vel = vadd(otherVel, newRel);
+      const impact = -vn; // closing speed along the normal
+      if (impact > COLLISION_DAMAGE_SPEED) {
+        this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * dmgScale * meta.stats.massFactor, -1, true);
       }
+      if (e.cruise !== 'off' && impact > 40) this.dropCruise(e, 'collision');
     }
   }
 
