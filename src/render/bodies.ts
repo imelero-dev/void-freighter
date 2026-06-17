@@ -167,9 +167,92 @@ export interface StationView {
   ring: THREE.Mesh | null;
   blinkers: THREE.Mesh[];
   marker: THREE.Group;      // far-scene beacon
+  hatch: THREE.Object3D[];  // clamp hatch panels that slide open on approach
 }
 
-function buildStationMesh(def: StationDef): { group: THREE.Group; ring: THREE.Mesh | null; blinkers: THREE.Mesh[] } {
+const Y_UP = new THREE.Vector3(0, 1, 0);
+const Z_FWD = new THREE.Vector3(0, 0, 1);
+
+// The visible dock feature for a station, built facing local +Z and oriented so
+// that +Z points along the world dock port (#17). Returns any hatch panels for
+// the approach-open animation.
+function buildDockFeature(def: StationDef, localDir: THREE.Vector3, hull: THREE.Material, dark: THREE.Material): { group: THREE.Group; hatch: THREE.Object3D[] } {
+  const r = def.radius;
+  const fg = new THREE.Group();
+  fg.position.copy(localDir).multiplyScalar(r * 0.98);
+  fg.quaternion.setFromUnitVectors(Z_FWD, localDir.clone().normalize());
+  const lit = (color: number) => new THREE.MeshBasicMaterial({ color });
+  const hatch: THREE.Object3D[] = [];
+
+  if (def.dockType === 'clamp') {
+    // external collar ring + two sliding hatch panels + green guide lights
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(r * 0.3, r * 0.06, 8, 24), hull);
+    fg.add(collar);
+    const inner = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.24, r * 0.24, r * 0.06, 20, 1, true), dark);
+    inner.rotation.x = Math.PI / 2;
+    fg.add(inner);
+    for (const side of [-1, 1]) {
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(r * 0.28, r * 0.5, r * 0.05), hull);
+      panel.position.set(side * r * 0.15, 0, r * 0.02);
+      panel.userData.closedX = side * r * 0.15;
+      panel.userData.openX = side * r * 0.46;
+      fg.add(panel);
+      hatch.push(panel);
+    }
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const g = new THREE.Mesh(new THREE.SphereGeometry(r * 0.02, 6, 6), lit(0x55ff77));
+      g.position.set(Math.cos(a) * r * 0.34, Math.sin(a) * r * 0.34, r * 0.03);
+      fg.add(g);
+    }
+  } else if (def.dockType === 'bay') {
+    // open square mouth with a recessed dark interior (you fly into it)
+    const m = r * 0.34;
+    const frameMat = hull;
+    const bars: Array<[number, number, number, number, number]> = [
+      [0, m, m * 2.2, r * 0.07, r * 0.12],
+      [0, -m, m * 2.2, r * 0.07, r * 0.12],
+    ];
+    for (const [x, y, w, h, d] of bars) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), frameMat);
+      bar.position.set(x, y, 0);
+      fg.add(bar);
+    }
+    for (const sx of [-1, 1]) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(r * 0.07, m * 2.2, r * 0.12), frameMat);
+      bar.position.set(sx * m, 0, 0);
+      fg.add(bar);
+    }
+    // recessed interior: a dark box behind the mouth
+    const interior = new THREE.Mesh(new THREE.BoxGeometry(m * 1.9, m * 1.9, r * 0.5), dark);
+    interior.position.set(0, 0, -r * 0.28);
+    fg.add(interior);
+    // amber approach lights framing the mouth
+    for (let i = 0; i < 4; i++) {
+      const g = new THREE.Mesh(new THREE.SphereGeometry(r * 0.022, 6, 6), lit(0xffaa33));
+      const cx = (i < 2 ? -1 : 1) * m, cy = (i % 2 ? -1 : 1) * m;
+      g.position.set(cx, cy, r * 0.04);
+      fg.add(g);
+    }
+  } else {
+    // flat landing pad with a marked ring + perimeter lights
+    const pad = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.42, r * 0.42, r * 0.04, 24), hull);
+    pad.rotation.x = Math.PI / 2; // flat face toward +Z (outward)
+    fg.add(pad);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(r * 0.3, r * 0.02, 6, 28), lit(0x66ddff));
+    ring.position.z = r * 0.03;
+    fg.add(ring);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const g = new THREE.Mesh(new THREE.SphereGeometry(r * 0.018, 6, 6), lit(i % 2 ? 0xffffff : 0x66ddff));
+      g.position.set(Math.cos(a) * r * 0.4, Math.sin(a) * r * 0.4, r * 0.04);
+      fg.add(g);
+    }
+  }
+  return { group: fg, hatch };
+}
+
+function buildStationMesh(def: StationDef): { group: THREE.Group; ring: THREE.Mesh | null; blinkers: THREE.Mesh[]; hatch: THREE.Object3D[] } {
   const rng = new Rng(def.seed);
   const group = new THREE.Group();
   const tex = panelTexture(def.seed);
@@ -237,7 +320,13 @@ function buildStationMesh(def: StationDef): { group: THREE.Group; ring: THREE.Me
     group.add(ant);
   }
 
-  group.rotation.y = rng.range(0, Math.PI * 2);
+  const groupRotY = rng.range(0, Math.PI * 2);
+  group.rotation.y = groupRotY;
+  // the dock feature sits at the world dock port; express it in the group's
+  // (Y-rotated) local frame so it ends up in the right place after the rotation
+  const localDir = new THREE.Vector3(def.dockPort.x, def.dockPort.y, def.dockPort.z).applyAxisAngle(Y_UP, -groupRotY).normalize();
+  const dock = buildDockFeature(def, localDir, hull, dark);
+  group.add(dock.group);
   group.traverse((node) => {
     const m = node as THREE.Mesh;
     if (m.isMesh) {
@@ -245,7 +334,7 @@ function buildStationMesh(def: StationDef): { group: THREE.Group; ring: THREE.Me
       m.receiveShadow = true;
     }
   });
-  return { group, ring, blinkers };
+  return { group, ring, blinkers, hatch: dock.hatch };
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +414,7 @@ export class BodiesLayer {
 
     // stations: near detail + far beacon
     for (const def of system.stations) {
-      const { group, ring, blinkers } = buildStationMesh(def);
+      const { group, ring, blinkers, hatch } = buildStationMesh(def);
       group.visible = false;
       sm.near.add(group);
       const marker = new THREE.Group();
@@ -335,7 +424,7 @@ export class BodiesLayer {
       );
       marker.add(beacon, glowSprite('rgb(150,200,235)', 14));
       sm.far.add(marker);
-      this.stations.push({ def, group, ring, blinkers, marker });
+      this.stations.push({ def, group, ring, blinkers, marker, hatch });
     }
   }
 
@@ -359,6 +448,15 @@ export class BodiesLayer {
         if (sv.ring) sv.ring.rotation.z = time * 0.05;
         const blink = Math.sin(time * 4 + sv.def.seed % 10) > 0.4;
         for (const b of sv.blinkers) b.visible = blink;
+        // clamp hatch slides open as you enter the approach envelope
+        if (sv.hatch.length) {
+          const open = dist < sv.def.dockRadius * 1.3 ? 1 : 0;
+          for (const panel of sv.hatch) {
+            const cx = panel.userData.closedX as number;
+            const ox = panel.userData.openX as number;
+            panel.position.x += (cx + (ox - cx) * open - panel.position.x) * Math.min(1, 0.08);
+          }
+        }
       } else {
         sv.marker.position.copy(sm.toFar(sv.def.pos, tmp));
       }
