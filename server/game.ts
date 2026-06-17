@@ -163,6 +163,8 @@ export class GameServer {
       case 'beam': sim.setMiningBeam(pid, !!msg.on); break;
       case 'cruise': sim.toggleCruise(pid); break;
       case 'fa': sim.toggleFlightAssist(pid); break;
+      case 'vtol': sim.toggleVtol(pid); break;
+      case 'gear': sim.toggleGear(pid); break;
       case 'target': sim.setTarget(pid, msg.id === null ? null : int(msg.id)); break;
       case 'tab': sim.tabTarget(pid); break;
       case 'reticle': sim.targetReticle(pid); break;
@@ -297,6 +299,8 @@ export class GameServer {
         snap.dest = meta.destination;
         snap.fa = meta.flightAssist ? 1 : 0;
         snap.drill = meta.drillOn ? 1 : 0;
+        snap.vt = meta.vtol ? 1 : 0;
+        snap.gr = meta.gearDown ? 1 : 0;
         snap.news = this.sim.newsLog.slice(0, 8);
       }
       this.send(session, snap);

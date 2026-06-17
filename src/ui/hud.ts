@@ -576,12 +576,13 @@ export class Hud {
     ctx.font = '19px "Lucida Console", monospace';
     ctx.fillText(speed > 10_000 ? `${(speed / 1000).toFixed(1)} km/s` : `${Math.round(speed)} m/s`, gx + 72, gy - 58);
     ctx.font = '10px "Lucida Console", monospace';
-    ctx.fillStyle = world.turboActive ? '#ff8830' : AMBER_DIM;
+    ctx.fillStyle = world.vtolMode ? '#7fd0ff' : world.turboActive ? '#ff8830' : AMBER_DIM;
     ctx.fillText(
-      world.turboActive ? 'TURBO OVERBURN'
-        : ship.cruise === 'cruise' ? 'CRUISE'
-          : ship.cruise === 'charging' ? 'CRUISE CHARGE…'
-            : `THR ${Math.round(ship.throttle * 100)}%`,
+      world.vtolMode ? 'VTOL HOVER'
+        : world.turboActive ? 'TURBO OVERBURN'
+          : ship.cruise === 'cruise' ? 'CRUISE'
+            : ship.cruise === 'charging' ? 'CRUISE CHARGE…'
+              : `THR ${Math.round(ship.throttle * 100)}%`,
       gx + 72, gy - 42);
     ctx.textAlign = 'center';
     const fuelFrac = world.profile.fuel / stats.fuelMax;
@@ -609,6 +610,14 @@ export class Hud {
     if (!world.flightAssist) {
       ctx.fillStyle = CYAN;
       ctx.fillText('FA OFF', gx + 30, gy - 74);
+    }
+    if (world.gearDown) {
+      ctx.fillStyle = GREEN;
+      ctx.fillText('GEAR ▼ DOWN', gx + 30, gy - 102);
+    }
+    if (world.vtolMode) {
+      ctx.fillStyle = '#7fd0ff';
+      ctx.fillText('▼ VTOL', gx + 30, gy - 88);
     }
     if (world.drillOn) {
       ctx.fillStyle = world.drillOverheated ? RED : '#9ab3a0';

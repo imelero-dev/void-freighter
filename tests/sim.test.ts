@@ -132,6 +132,32 @@ describe('flight model: inertia & flight assist', () => {
   });
 });
 
+describe('VTOL flight mode (#19)', () => {
+  it('VTOL caps the forward speed envelope for precise hover', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    sim.toggleVtol(pid);
+    expect(meta.vtol).toBe(true);
+    meta.input.thrustForward = 1;
+    runTicks(sim, 20 * 30);
+    expect(vlen(e.vel)).toBeLessThanOrEqual(meta.stats.maxSpeed * 0.25);
+  });
+
+  it('engaging the cruise drive exits VTOL (mutually exclusive)', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const meta = sim.meta(pid)!;
+    sim.toggleVtol(pid);
+    expect(meta.vtol).toBe(true);
+    sim.toggleCruise(pid);
+    expect(meta.vtol).toBe(false);
+  });
+});
+
 describe('docking', () => {
   it('docks when close and slow, undocks cleanly', () => {
     const sim = makeSim();

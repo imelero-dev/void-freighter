@@ -23,6 +23,8 @@ export interface IWorld {
   readonly connected: boolean;
   readonly online: boolean;
   readonly flightAssist: boolean;
+  readonly vtolMode: boolean;     // VTOL hover flight mode engaged
+  readonly gearDown: boolean;     // landing gear deployed
   readonly drillOn: boolean;
   readonly turboCharge: number;  // 0..1 burst gauge
   readonly turboActive: boolean;
@@ -50,6 +52,8 @@ export interface IWorld {
   setMiningBeam(on: boolean): void;
   toggleCruise(): void;
   toggleFlightAssist(): void;
+  toggleVtol(): void;
+  toggleGear(): void;
   setTarget(id: number | null): void;
   tabTarget(): void;
   targetReticle(): void;

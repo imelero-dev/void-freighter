@@ -19,6 +19,8 @@ export const BINDABLE: BindDef[] = [
   { id: 'rollRight', label: 'Roll right', def: 'KeyE' },
   { id: 'cruise', label: 'Cruise drive', def: 'CapsLock' },
   { id: 'assist', label: 'Flight assist', def: 'KeyZ' },
+  { id: 'vtol', label: 'VTOL / cruise mode', def: 'KeyO' },
+  { id: 'gear', label: 'Landing gear', def: 'KeyP' },
   { id: 'drill', label: 'Mining drill', def: 'KeyG' },
   { id: 'dock', label: 'Dock / undock', def: 'Space' },
   { id: 'tab', label: 'Cycle hostiles', def: 'Tab' },

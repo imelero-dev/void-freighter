@@ -59,6 +59,8 @@ export class OfflineWorld implements IWorld {
   get time(): number { return this.sim.time; }
   get newsLog(): string[] { return this.sim.newsLog; }
   get flightAssist(): boolean { return this.meta.flightAssist; }
+  get vtolMode(): boolean { return this.meta.vtol; }
+  get gearDown(): boolean { return this.meta.gearDown; }
   get drillOn(): boolean { return this.meta.drillOn; }
   get turboCharge(): number { return this.meta.turboCharge; }
   get turboActive(): boolean { return this.meta.turboActive; }
@@ -137,6 +139,8 @@ export class OfflineWorld implements IWorld {
   setMiningBeam(on: boolean): void { this.sim.setMiningBeam(this.playerId, on); }
   toggleCruise(): void { this.sim.toggleCruise(this.playerId); }
   toggleFlightAssist(): void { this.sim.toggleFlightAssist(this.playerId); }
+  toggleVtol(): void { this.sim.toggleVtol(this.playerId); }
+  toggleGear(): void { this.sim.toggleGear(this.playerId); }
   setTarget(id: number | null): void { this.sim.setTarget(this.playerId, id); }
   tabTarget(): void { this.sim.tabTarget(this.playerId); }
   targetReticle(): void { this.sim.targetReticle(this.playerId); }

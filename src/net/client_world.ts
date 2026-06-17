@@ -75,6 +75,8 @@ export class ClientWorld implements IWorld {
   newsLog: string[] = [];
   destination: Destination | null = null;
   flightAssist = true;
+  vtolMode = false;
+  gearDown = false;
   drillOn = false;
   turboCharge = 1;
   turboActive = false;
@@ -219,9 +221,11 @@ export class ClientWorld implements IWorld {
         // predict locally with the shared integrator (turbo overrides the cap,
         // mirroring the server's perf calculation)
         const stats = this.shipStats;
-        const perf = this.turboActive
-          ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate, massFactor: stats.massFactor }
-          : stats;
+        const perf = this.vtolMode
+          ? { maxSpeed: stats.maxSpeed * 0.22, accel: stats.accel, turnRate: stats.turnRate * 0.85, massFactor: stats.massFactor }
+          : this.turboActive
+            ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate, massFactor: stats.massFactor }
+            : stats;
         integrateFlight(e, this.input, perf, dt, this.flightAssist);
         // reconcile against extrapolated server state
         const age = (performance.now() - this.lastSnapAt) / 1000;
@@ -478,6 +482,8 @@ export class ClientWorld implements IWorld {
       this.destination = (snap.dest as Destination | null) ?? null;
       this.flightAssist = snap.fa !== 0;
       this.drillOn = snap.drill === 1;
+      if (snap.vt !== undefined) this.vtolMode = snap.vt === 1;
+      if (snap.gr !== undefined) this.gearDown = snap.gr === 1;
       if (snap.news) this.newsLog = snap.news;
     }
 
@@ -526,6 +532,14 @@ export class ClientWorld implements IWorld {
     this.cmd({ cmd: 'beam', on });
   }
   toggleCruise(): void { this.cmd({ cmd: 'cruise' }); }
+  toggleVtol(): void {
+    this.vtolMode = !this.vtolMode;
+    this.cmd({ cmd: 'vtol' });
+  }
+  toggleGear(): void {
+    this.gearDown = !this.gearDown;
+    this.cmd({ cmd: 'gear' });
+  }
   toggleFlightAssist(): void {
     this.flightAssist = !this.flightAssist;
     this.cmd({ cmd: 'fa' });

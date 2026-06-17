@@ -10,11 +10,13 @@ export type GameAction =
   | 'toggleCruise' | 'zeroThrottle' | 'toggleAssist' | 'toggleDrill'
   | 'dock' | 'tab' | 'targetReticle' | 'fireMissile' | 'rescue' | 'hail'
   | 'map' | 'cargo' | 'ship' | 'journal' | 'market' | 'contacts' | 'chat'
-  | 'setDestination' | 'escape' | 'toggleCamera' | 'help' | 'controls' | 'lights';
+  | 'setDestination' | 'escape' | 'toggleCamera' | 'help' | 'controls' | 'lights'
+  | 'toggleVtol' | 'toggleGear';
 
 // bind id -> discrete action (axis-style binds are read in frame())
 const BIND_ACTIONS: Record<string, GameAction> = {
   cruise: 'toggleCruise', cutThrottle: 'zeroThrottle', assist: 'toggleAssist',
+  vtol: 'toggleVtol', gear: 'toggleGear',
   drill: 'toggleDrill', dock: 'dock', tab: 'tab', reticle: 'targetReticle',
   map: 'map', cargo: 'cargo', ship: 'ship', journal: 'journal',
   market: 'market', contacts: 'contacts', chat: 'chat', dest: 'setDestination',

@@ -99,6 +99,8 @@ export interface SnapMsg {
   dest?: { kind: string; id: string; name: string; pos: { x: number; y: number; z: number } } | null;
   fa?: 0 | 1;      // flight assist
   drill?: 0 | 1;
+  vt?: 0 | 1;      // VTOL hover mode
+  gr?: 0 | 1;      // landing gear deployed
   news?: string[];
 }
 

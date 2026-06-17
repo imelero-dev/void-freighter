@@ -36,6 +36,7 @@ export const SHIP_RADIUS: Record<string, number> = {
 
 const FRAGMENT_CHUNK = 3;        // mined units per fragment entity
 const FRAGMENT_TTL = 150;
+const VTOL_SPEED_FACTOR = 0.22;  // forward-speed envelope in VTOL hover mode
 const LOOT_TTL = 240;
 const MISSILE_SPEED = 700;
 const MISSILE_TURN = 2.8;        // rad/s
@@ -155,6 +156,8 @@ export interface PlayerMeta {
   beamFiring: boolean;   // beam actually firing this tick (drives FX/audio)
   drillHeat: number;     // 0..1 — overheats, cools when idle
   drillOverheated: boolean;
+  vtol: boolean;         // VTOL hover mode: precise, reduced forward envelope
+  gearDown: boolean;     // landing gear deployed (required for pad touchdown)
 }
 
 interface RockState {
@@ -225,6 +228,7 @@ export class Sim {
       forcefieldCooldown: 0, promptedDerelicts: new Set(),
       turboCharge: 1, turboActive: false, lastCombatAt: -999,
       miningBeam: false, beamFiring: false, drillHeat: 0, drillOverheated: false,
+      vtol: false, gearDown: false,
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
@@ -537,10 +541,15 @@ export class Sim {
       if (!turbo && !wantsTurbo) {
         meta.turboCharge = Math.min(1, meta.turboCharge + dt / TURBO_RECHARGE_S);
       }
+      // VTOL overrides the burn: a precise hover with a much-reduced forward
+      // envelope for setting down (issue #19). Cruise/turbo can't run in VTOL.
+      if (meta.vtol) turbo = false;
       meta.turboActive = turbo;
-      const perf = turbo
-        ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate, massFactor: meta.stats.massFactor }
-        : meta.stats;
+      const perf = meta.vtol
+        ? { maxSpeed: meta.stats.maxSpeed * VTOL_SPEED_FACTOR, accel: meta.stats.accel, turnRate: meta.stats.turnRate * 0.85, massFactor: meta.stats.massFactor }
+        : turbo
+          ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate, massFactor: meta.stats.massFactor }
+          : meta.stats;
       this.integrateShip(e, meta.input, perf, dt, meta.flightAssist);
       if (meta.cruiseRequested) this.tryStartCruise(meta, e);
     }
@@ -652,6 +661,7 @@ export class Sim {
     const e = this.entities.get(pid);
     if (!meta || !e || e.dead || e.dockedAt || meta.docking) return;
     if (e.cruise === 'off') {
+      meta.vtol = false; // the cruise drive and VTOL hover are mutually exclusive
       meta.cruiseRequested = true;
       this.tryStartCruise(meta, e);
     } else {
@@ -916,6 +926,31 @@ export class Sim {
     meta.flightAssist = !meta.flightAssist;
     this.events.push({ type: 'log', text: `Flight assist ${meta.flightAssist ? 'ON' : 'OFF'}.`, color: '#8ad', pid });
     return meta.flightAssist;
+  }
+
+  // VTOL: precise hover for atmospheric/pad landing — reduced forward envelope,
+  // mutually exclusive with the cruise drive (#19).
+  toggleVtol(pid: number): boolean {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || e.dead || e.dockedAt) return false;
+    meta.vtol = !meta.vtol;
+    if (meta.vtol) {
+      meta.cruiseRequested = false;
+      if (e.cruise !== 'off') this.dropCruise(e, 'manual');
+    }
+    this.events.push({ type: 'log', text: `Flight mode: ${meta.vtol ? 'VTOL — vertical/hover' : 'CRUISE — standard'}.`, color: '#8ad', pid });
+    return meta.vtol;
+  }
+
+  // Landing gear: must be down for a clean pad/surface touchdown (#18).
+  toggleGear(pid: number): boolean {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || e.dead || e.dockedAt) return false;
+    meta.gearDown = !meta.gearDown;
+    this.events.push({ type: 'log', text: `Landing gear ${meta.gearDown ? 'DEPLOYED' : 'retracted'}.`, color: '#8ad', pid });
+    return meta.gearDown;
   }
 
   setFiring(pid: number, on: boolean): void {

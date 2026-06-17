@@ -129,6 +129,8 @@ export class GameApp {
     input.on('toggleCruise', () => w.toggleCruise());
     input.on('zeroThrottle', () => input.zeroThrottle());
     input.on('toggleAssist', () => w.toggleFlightAssist());
+    input.on('toggleVtol', () => w.toggleVtol());
+    input.on('toggleGear', () => w.toggleGear());
     input.on('toggleDrill', () => w.setDrill(!w.drillOn));
     input.on('dock', () => {
       if (w.player?.dockedAt) {
