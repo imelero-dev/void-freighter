@@ -83,9 +83,10 @@ Notes:
 | Ctrl / S | throttle down — hold past zero to brake |
 | Caps Lock | cruise drive ("hypervelocity") · X cut throttle |
 | A D R F | strafe · Q E roll · mouse pitch/yaw · Z flight assist |
+| O / P | VTOL hover mode · landing gear |
 | LMB / RMB | cannon / missile (when locked) |
 | Tab / T | cycle hostiles / target reticle |
-| G | mining drill · Space dock/undock · H rescue tow |
+| G | mining drill · Space dock/undock · Y autodock · H rescue tow |
 | M B C J K L | map · cargo · ship · journal · market · contacts |
 | N / V / Enter / F1 | set destination · camera · chat · help |
 

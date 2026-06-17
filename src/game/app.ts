@@ -60,6 +60,7 @@ export class GameApp {
   private wasOverheated = false;
   private fovCurrent = 68;
   private alarmUntil = 0;   // hull klaxon bursts on damage, then shuts up
+  private approachBeepAcc = 0; // accumulates toward the next approach-aid beep
 
   onExit: (() => void) | null = null;
 
@@ -131,6 +132,7 @@ export class GameApp {
     input.on('toggleAssist', () => w.toggleFlightAssist());
     input.on('toggleVtol', () => w.toggleVtol());
     input.on('toggleGear', () => w.toggleGear());
+    input.on('autodock', () => w.autodock());
     input.on('toggleDrill', () => w.setDrill(!w.drillOn));
     input.on('dock', () => {
       if (w.player?.dockedAt) {
@@ -619,6 +621,19 @@ export class GameApp {
     // GPS alignment snap tone (rising edge only)
     if (this.hud.destAligned && !this.wasAligned) this.audio.alignSnap();
     this.wasAligned = this.hud.destAligned;
+
+    // approach radar aid proximity beep: rate rises as you near the dock on a
+    // good glidepath (#18)
+    const ap = this.hud.approach;
+    if (ap && ap.active && ap.beep > 0 && !ship?.dockedAt) {
+      this.approachBeepAcc += dt * ap.beep;
+      if (this.approachBeepAcc >= 1) {
+        this.approachBeepAcc = 0;
+        this.audio.approachBeep(ap.level === 2);
+      }
+    } else {
+      this.approachBeepAcc = 0;
+    }
 
     // drill overheat buzz (rising edge — the audio drone already ramps with heat)
     const overheated = w.drillHeat >= 1;

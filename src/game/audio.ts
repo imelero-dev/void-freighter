@@ -325,6 +325,12 @@ export class AudioEngine {
     this.blip(880, 1240, 0.12, 'sine', 0.05);
   }
 
+  // approach radar aid proximity beep: a clean high tone when on glidepath, a
+  // lower flatter tone when the approach is off (#18)
+  approachBeep(good: boolean): void {
+    this.blip(good ? 1500 : 760, good ? 1500 : 760, 0.05, 'square', 0.045);
+  }
+
   alarmFuel(): void {
     this.blip(620, 620, 0.25, 'square', 0.07);
     setTimeout(() => this.blip(470, 470, 0.3, 'square', 0.07), 300);

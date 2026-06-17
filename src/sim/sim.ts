@@ -159,6 +159,7 @@ export interface PlayerMeta {
   drillOverheated: boolean;
   vtol: boolean;         // VTOL hover mode: precise, reduced forward envelope
   gearDown: boolean;     // landing gear deployed (required for pad touchdown)
+  approachStation: string | null; // station we've been cleared to approach (ATC)
 }
 
 interface RockState {
@@ -229,7 +230,7 @@ export class Sim {
       forcefieldCooldown: 0, promptedDerelicts: new Set(),
       turboCharge: 1, turboActive: false, lastCombatAt: -999,
       miningBeam: false, beamFiring: false, drillHeat: 0, drillOverheated: false,
-      vtol: false, gearDown: false,
+      vtol: false, gearDown: false, approachStation: null,
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
@@ -559,6 +560,9 @@ export class Sim {
 
     // collisions & hazards
     this.tickCollisions(meta, e, dt);
+
+    // ATC: announce approach clearance on entering a station's approach range
+    this.tickApproach(meta, e);
 
     // mining
     this.tickMining(meta, e, dt);
@@ -2016,6 +2020,32 @@ export class Sim {
   // Docking & station services
   // -------------------------------------------------------------------------
 
+  // terse pilot callsign for ATC chatter
+  private callsign(meta: PlayerMeta): string {
+    return meta.name.length > 14 ? meta.name.slice(0, 14) : meta.name;
+  }
+
+  // ATC presence: a one-shot approach clearance when you enter a station's
+  // approach envelope, cleared when you leave it (#20).
+  private tickApproach(meta: PlayerMeta, e: Entity): void {
+    if (e.dockedAt || meta.docking || e.cruise !== 'off') return;
+    const near = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
+    if (near) {
+      if (meta.approachStation !== near.id) {
+        meta.approachStation = near.id;
+        this.events.push({
+          type: 'comms', pid: meta.pid, from: `${near.name} ATC`,
+          text: `${this.callsign(meta)}, cleared approach. Reduce to docking speed, under ${DOCK_MAX_SPEED}, and line up on the dock.`,
+        });
+      }
+    } else if (meta.approachStation) {
+      meta.approachStation = null;
+    }
+  }
+
+  // Manual docking (#17): docking is earned by flying the approach — within
+  // range, below docking speed AND nose lined up on the dock. A bad approach
+  // gets a terse ATC wave-off instead of a free suck-in.
   requestDock(pid: number): void {
     const meta = this.players.get(pid);
     const e = this.entities.get(pid);
@@ -2030,11 +2060,42 @@ export class Sim {
       return;
     }
     if (vlen(e.vel) > DOCK_MAX_SPEED) {
-      this.events.push({ type: 'log', text: `Docking denied: reduce speed below ${DOCK_MAX_SPEED} m/s.`, color: '#fa4', pid });
+      this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: 'Excessive closure rate. Go around — reduce to docking speed.' });
+      return;
+    }
+    // nose alignment on the dock collar: < ~50° off
+    const align = vdot(qForward(e.orient), vnorm(vsub(st.pos, e.pos)));
+    if (align < 0.64) {
+      this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: 'Approach angle off. Line up with the dock and try again. [Y] for autodock.' });
       return;
     }
     meta.docking = { stationId: st.id, t: 0, from: vclone(e.pos) };
-    this.events.push({ type: 'log', text: `Docking clearance granted — ${st.name}.`, color: '#8fb', pid });
+    this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `Alignment good. Bay assigned, ${this.callsign(meta)}. Bringing you in.` });
+  }
+
+  // Autodock convenience service (#17): a paid hands-off final approach for
+  // when you can't be bothered to fly the collar yourself.
+  autodock(pid: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || e.dead || e.dockedAt || meta.docking) return;
+    if (e.cruise !== 'off') {
+      this.events.push({ type: 'log', text: 'Cannot autodock at cruise speed.', color: '#f66', pid });
+      return;
+    }
+    const st = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
+    if (!st) {
+      this.events.push({ type: 'log', text: 'No station in range for autodock.', color: '#f66', pid });
+      return;
+    }
+    const COST = 500;
+    if (meta.profile.credits < COST) {
+      this.events.push({ type: 'log', text: 'Autodock service: insufficient credits (500c).', color: '#f66', pid });
+      return;
+    }
+    meta.profile.credits -= COST;
+    meta.docking = { stationId: st.id, t: 0, from: vclone(e.pos) };
+    this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `Autodock fee logged, ${this.callsign(meta)}. Hands off the stick — we have control.` });
   }
 
   private dockShip(meta: PlayerMeta, e: Entity, st: StationDef, viaTow: boolean): void {
@@ -2049,7 +2110,11 @@ export class Sim {
     const prof = meta.profile;
     prof.respawnStation = st.id;
     if (!prof.knownStations.includes(st.id)) prof.knownStations.push(st.id);
+    meta.approachStation = null;
     this.events.push({ type: 'docked', pid: meta.pid, stationId: st.id });
+    if (!viaTow) {
+      this.events.push({ type: 'comms', pid: meta.pid, from: `${st.name} ATC`, text: `Contact. Welcome to ${st.name}.` });
+    }
 
     // customs inspection at legal stations
     if (!st.blackMarket && !viaTow) {

@@ -58,6 +58,7 @@ export interface IWorld {
   tabTarget(): void;
   targetReticle(): void;
   requestDock(): void;
+  autodock(): void;
   undock(): void;
   setDestination(dest: Destination | null): void;
   hailRescue(): void;

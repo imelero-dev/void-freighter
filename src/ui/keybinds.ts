@@ -23,6 +23,7 @@ export const BINDABLE: BindDef[] = [
   { id: 'gear', label: 'Landing gear', def: 'KeyP' },
   { id: 'drill', label: 'Mining drill', def: 'KeyG' },
   { id: 'dock', label: 'Dock / undock', def: 'Space' },
+  { id: 'autodock', label: 'Autodock service', def: 'KeyY' },
   { id: 'tab', label: 'Cycle hostiles', def: 'Tab' },
   { id: 'reticle', label: 'Target reticle', def: 'KeyT' },
   { id: 'dest', label: 'Set destination', def: 'KeyN' },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/sim';
-import { v3 } from '../src/sim/vec';
+import { qLookAt, vnorm, vsub, v3 } from '../src/sim/vec';
 
 function runTicks(sim: Sim, n: number) {
   const events = [];
@@ -66,6 +66,7 @@ describe('transport contract lifecycle', () => {
     sim.undock(pid);
     e.pos = { x: dest.pos.x + 1200, y: dest.pos.y, z: dest.pos.z };
     e.vel = v3();
+    e.orient = qLookAt(vnorm(vsub(dest.pos, e.pos))); // line up on the dock
     const creditsBefore = meta.profile.credits;
     sim.requestDock(pid);
     runTicks(sim, 20 * 6);

@@ -221,13 +221,45 @@ describe('docking', () => {
     expect(e.dockedAt).toBe('morrow_granary'); // starts docked
     sim.undock(pid);
     expect(e.dockedAt).toBeNull();
-    // come back
+    // come back, lined up on the dock collar
     const st = sim.station('morrow_granary')!;
     e.pos = { x: st.pos.x + 1500, y: st.pos.y, z: st.pos.z };
     e.vel = v3();
+    e.orient = qLookAt(vnorm(vsub(st.pos, e.pos)));
     sim.requestDock(pid);
     runTicks(sim, 20 * 5);
     expect(e.dockedAt).toBe('morrow_granary');
+  });
+
+  it('refuses a misaligned approach — docking is earned (#17)', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const st = sim.station('morrow_granary')!;
+    e.pos = { x: st.pos.x + 1500, y: st.pos.y, z: st.pos.z };
+    e.vel = v3();
+    e.orient = qLookAt(v3(0, 0, 1)); // nose pointed away from the dock
+    sim.requestDock(pid);
+    runTicks(sim, 20);
+    expect(e.dockedAt).toBeNull();
+  });
+
+  it('autodock brings a misaligned ship in for a fee (#17)', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.profile.credits = 1000;
+    const st = sim.station('morrow_granary')!;
+    e.pos = { x: st.pos.x + 1500, y: st.pos.y, z: st.pos.z };
+    e.vel = v3();
+    e.orient = qLookAt(v3(0, 0, 1)); // misaligned — manual docking would refuse
+    sim.autodock(pid);
+    runTicks(sim, 20 * 5);
+    expect(e.dockedAt).toBe('morrow_granary');
+    expect(meta.profile.credits).toBe(500);
   });
 
   it('refuses docking when too fast or too far', () => {

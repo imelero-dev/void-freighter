@@ -169,6 +169,7 @@ export class GameServer {
       case 'tab': sim.tabTarget(pid); break;
       case 'reticle': sim.targetReticle(pid); break;
       case 'dock': sim.requestDock(pid); break;
+      case 'autodock': sim.autodock(pid); break;
       case 'undock': sim.undock(pid); break;
       case 'rescue': sim.hailRescue(pid); break;
       case 'fuelcells': sim.useFuelCells(pid, int(msg.qty)); break;

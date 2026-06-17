@@ -560,6 +560,7 @@ export class ClientWorld implements IWorld {
     this.cmd({ cmd: 'reticle' });
   }
   requestDock(): void { this.cmd({ cmd: 'dock' }); }
+  autodock(): void { this.cmd({ cmd: 'autodock' }); }
   undock(): void { this.cmd({ cmd: 'undock' }); }
   setDestination(dest: Destination | null): void {
     this.destination = dest;

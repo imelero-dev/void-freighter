@@ -145,6 +145,7 @@ export class OfflineWorld implements IWorld {
   tabTarget(): void { this.sim.tabTarget(this.playerId); }
   targetReticle(): void { this.sim.targetReticle(this.playerId); }
   requestDock(): void { this.sim.requestDock(this.playerId); }
+  autodock(): void { this.sim.autodock(this.playerId); }
   undock(): void { this.sim.undock(this.playerId); }
   setDestination(dest: Destination | null): void { this.sim.setDestination(this.playerId, dest); }
   hailRescue(): void { this.sim.hailRescue(this.playerId); }

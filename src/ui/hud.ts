@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 import { isMobile } from '../game/touch';
-import { BOLT_SPEED, GOODS } from '../sim/data';
+import { BOLT_SPEED, DOCK_MAX_SPEED, GOODS } from '../sim/data';
 import type { Entity } from '../sim/types';
 import { leadPoint, qForward, qRight, qUp, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
 import type { IWorld } from '../world_api';
@@ -44,6 +44,8 @@ export class Hud {
   alert: { text: string; color: string; until: number } | null = null;
   cameraMode: 'cockpit' | 'chase' = 'cockpit';
   destAligned = false; // exposed so the app can play the snap tone on change
+  // approach radar aid state, read by the app to drive the proximity beep (#18)
+  approach: { active: boolean; level: 0 | 1 | 2; beep: number } | null = null;
   showFps = false;
 
   private proj = new THREE.Vector3();
@@ -303,15 +305,8 @@ export class Hud {
     // ---- contact blips in 3D view ----
     this.drawContacts(world, ship, origin);
 
-    // ---- docking prompt ----
-    const nearStation = world.system.stations.find((s) => vdist(s.pos, ship.pos) < s.dockRadius);
-    ctx.textAlign = 'center';
-    if (nearStation) {
-      const slow = vlen(ship.vel) <= 60;
-      ctx.fillStyle = slow ? GREEN : AMBER;
-      ctx.font = '13px "Lucida Console", monospace';
-      ctx.fillText(slow ? `[SPACE] DOCK — ${nearStation.name}` : `${nearStation.name}: reduce speed to dock (<60 m/s)`, cx, H * 0.2);
-    }
+    // ---- approach radar aid + docking prompt ----
+    this.drawApproachAid(world, ship, origin, cx, H);
 
     // ---- alert banner ----
     if (this.alert && now < this.alert.until) {
@@ -643,6 +638,66 @@ export class Hud {
       this.drawTargetPanel(world, ship, 14, H - ph - 12, pw, ph);
       this.drawStatusPanel(world, ship, W - pw - 14, H - ph - 12, pw, ph);
     }
+  }
+
+  // Approach radar aid (#18): a compact red/amber/green instrument that grades
+  // your final approach to a station — alignment, closure rate and speed — plus
+  // the contextual dock prompt. Only shown in the approach envelope, so it never
+  // clutters cruising flight. Sets this.approach for the app's proximity beep.
+  private drawApproachAid(world: IWorld, ship: Entity, origin: { x: number; y: number; z: number }, cx: number, H: number): void {
+    const ctx = this.ctx;
+    this.approach = null;
+    const st = world.system.stations.find((s) => vdist(s.pos, ship.pos) < s.dockRadius * 1.25);
+    if (!st || ship.dockedAt || ship.cruise !== 'off') return;
+
+    const d = vdist(st.pos, ship.pos);
+    const speed = vlen(ship.vel);
+    const toSt = vnorm(vsub(st.pos, ship.pos));
+    const align = vdot(qForward(ship.orient), toSt); // 1 = nose on the dock collar
+    const inRange = d < st.dockRadius;
+    const slow = speed <= DOCK_MAX_SPEED;
+
+    let level: 0 | 1 | 2;
+    let cue: string;
+    if (inRange && slow && align > 0.82) { level = 2; cue = '[SPACE] DOCK'; }
+    else if (inRange && (slow || align > 0.6) && speed <= DOCK_MAX_SPEED * 2) { level = 1; cue = !slow ? 'REDUCE SPEED' : 'ALIGN ON DOCK'; }
+    else { level = 0; cue = speed > DOCK_MAX_SPEED * 2 ? 'EXCESSIVE CLOSURE' : 'GO AROUND — REALIGN'; }
+
+    const prox = Math.max(0, 1 - d / st.dockRadius);
+    const beep = level === 2 ? 2 + prox * 6 : level === 1 ? 1 + prox * 2 : 0.4;
+    this.approach = { active: true, level, beep };
+
+    // instrument: label, three lights, cue, and the gauges
+    const y = H * 0.17;
+    ctx.textAlign = 'center';
+    ctx.font = '10px "Lucida Console", monospace';
+    ctx.fillStyle = AMBER_DIM;
+    ctx.fillText(`APPROACH — ${st.name.toUpperCase()}`, cx, y - 16);
+
+    const colours = ['rgba(232,64,42,', 'rgba(224,144,42,', 'rgba(127,201,127,'];
+    const labels = ['R', 'A', 'G'];
+    for (let i = 0; i < 3; i++) {
+      const lx = cx - 24 + i * 24;
+      const onLight = i === level;
+      ctx.beginPath();
+      ctx.arc(lx, y, 7, 0, Math.PI * 2);
+      ctx.fillStyle = colours[i] + (onLight ? '1)' : '0.18)');
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(217,164,65,0.4)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = onLight ? '#0a0a0a' : 'rgba(217,164,65,0.5)';
+      ctx.font = 'bold 9px "Lucida Console", monospace';
+      ctx.fillText(labels[i], lx, y + 1);
+    }
+    const cueCol = level === 2 ? GREEN : level === 1 ? '#e0902a' : RED;
+    ctx.fillStyle = cueCol;
+    ctx.font = '13px "Lucida Console", monospace';
+    ctx.fillText(cue, cx, y + 22);
+    // small align / speed sub-cues
+    ctx.font = '9px "Lucida Console", monospace';
+    ctx.fillStyle = AMBER_DIM;
+    ctx.fillText(`ALIGN ${Math.max(0, Math.round(align * 100))}%   ${Math.round(speed)} m/s   ${fmtDistance(d)}`, cx, y + 36);
   }
 
   // Big combat readout: shield + hull as thick segmented gauges with large
