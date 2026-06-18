@@ -576,7 +576,7 @@ export class BodiesLayer {
   // far-scene sphere toward the local ground tone so the brief cross-fade at the
   // atmosphere interface has nothing to seam against. Reset every other planet to
   // its true surface texture (white tint).
-  setEntryBlend(planetId: string, blend: number): void {
+  setEntryBlend(planetId: string, blend: number, atmoDensity = 0): void {
     if (this.entryBlendId === planetId && (planetId === '' || blend <= 0)) {
       if (planetId === '') return;
     }
@@ -586,8 +586,11 @@ export class BodiesLayer {
       if (def.id === planetId && blend > 0) {
         const g = GROUND_MID[def.kind] ?? GROUND_MID.barren;
         mat.color.setRGB(1, 1, 1).lerp(g, Math.min(1, blend));
-      } else if (mat.color.r !== 1 || mat.color.g !== 1 || mat.color.b !== 1) {
-        mat.color.setRGB(1, 1, 1);
+      } else {
+        if (mat.color.r !== 1 || mat.color.g !== 1 || mat.color.b !== 1) mat.color.setRGB(1, 1, 1);
+        // hide other planets when in thick atmosphere — you can't see them
+        // through a real sky, and the far fog alone can't erase same-hue worlds
+        mesh.visible = atmoDensity < 0.25;
       }
     }
     this.entryBlendId = planetId;

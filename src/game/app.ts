@@ -732,7 +732,7 @@ export class GameApp {
     // gradual ramp so the far sphere fades toward the ground as you descend
     this.sm.setNearFarPlane(surfaceReach);
     const entryBlend = surfacePlanetId ? this.terrain.blend : 0;
-    this.bodies.setEntryBlend(surfacePlanetId, entryBlend);
+    this.bodies.setEntryBlend(surfacePlanetId, entryBlend, atmoDensity);
     this.sm.setAtmosphere(this.skyColor, skyD, atmoDensity);
     if (ship) {
       this.sky.update(w.system, ship.pos, this.skyColor, skyD);
