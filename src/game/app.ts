@@ -728,9 +728,11 @@ export class GameApp {
       surfacePlanetId = this.terrain.active ? this.terrain.planetId : '';
     }
     // fit the near far-plane to the surface's farthest visible ground, and blend
-    // the far-scene planet toward the ground tone so the handoff is seamless
+    // the far-scene planet toward the ground tone so the handoff is seamless —
+    // gradual ramp so the far sphere fades toward the ground as you descend
     this.sm.setNearFarPlane(surfaceReach);
-    this.bodies.setEntryBlend(surfacePlanetId, surfacePlanetId ? 1 : 0);
+    const entryBlend = surfacePlanetId ? this.terrain.blend : 0;
+    this.bodies.setEntryBlend(surfacePlanetId, entryBlend);
     this.sm.setAtmosphere(this.skyColor, skyD, atmoDensity);
     if (ship) {
       this.sky.update(w.system, ship.pos, this.skyColor, skyD);
@@ -794,14 +796,20 @@ export class GameApp {
     // atmospheric re-entry heat: tearing into thickening air at speed lights up a
     // plasma sheath. Peaks fast in the upper-mid atmosphere, fades as you slow or
     // the air thins out — the visual proof you've entered the atmosphere.
+    // Triggers at any speed (cruise or manual) — dropping out of cruise into a
+    // planet's atmosphere is the most dramatic entry path and must read visually.
     let entryHeat = 0;
-    if (ship && ship.cruise === 'off') {
+    if (ship) {
       const sp = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
-      const speedF = Math.max(0, Math.min(1, (sp - 170) / 380));
-      const densF = Math.max(0, Math.min(1, (atmoDensity - 0.015) / 0.32));
+      const speedF = Math.max(0, Math.min(1, (sp - 120) / 330));
+      const densF = Math.max(0, Math.min(1, (atmoDensity - 0.01) / 0.28));
       entryHeat = speedF * densF;
     }
     this.entryHeatSmooth += (entryHeat - this.entryHeatSmooth) * Math.min(1, dt * 3);
+    // atmospheric entry turbulence: the camera shakes as you barrel through
+    // thickening air at speed — the heavier the air and the faster you go,
+    // the worse the buffeting, exactly like ED's "you're committed" moment
+    this.camera.entryTurbulence = this.entryHeatSmooth;
     this.post.render(w.time, Math.min(1, damageLevel), this.skyColor, atmoDensity, this.warpSmooth, this.entryHeatSmooth);
     this.hud.draw(w, this.sm.origin, this.input.cursorX, this.input.cursorY, this.input.uiMode);
     if (this.map.isOpen) this.map.draw();

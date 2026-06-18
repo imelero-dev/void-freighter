@@ -91,12 +91,17 @@ const GritShader = {
       // that you've hit the atmosphere and are committing to the descent.
       if (entryHeat > 0.001) {
         float edge = length(center * vec2(aspect, 1.0));
-        float flick = 0.75 + 0.25 * sin(time * 38.0) * sin(time * 17.0);
-        float sheath = smoothstep(0.3, 0.95, edge) * entryHeat * flick;
-        vec3 plasma = mix(vec3(1.0, 0.42, 0.12), vec3(1.0, 0.85, 0.55), entryHeat);
-        col += plasma * sheath * 0.9;
-        // a brighter leading flare low on screen (the bow shock ahead of you)
-        col += plasma * smoothstep(0.35, 0.0, vUv.y) * entryHeat * 0.5;
+        // multi-frequency flicker: turbulent, not a clean sine
+        float flick = 0.65 + 0.20 * sin(time * 38.0) * sin(time * 17.0)
+                     + 0.15 * sin(time * 63.0 + 2.3);
+        float sheath = smoothstep(0.25, 0.9, edge) * entryHeat * flick;
+        vec3 plasma = mix(vec3(1.0, 0.38, 0.08), vec3(1.0, 0.82, 0.48), entryHeat);
+        col += plasma * sheath * 1.1;
+        // bow shock: bright leading flare below centre (ahead of the cockpit)
+        float bow = smoothstep(0.4, 0.0, vUv.y) * entryHeat;
+        col += plasma * bow * 0.65;
+        // whole-screen warm wash at high heat — the cockpit glows orange
+        col = mix(col, col * vec3(1.12, 0.88, 0.72), entryHeat * 0.25);
       }
 
       // vignette

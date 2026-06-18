@@ -28,6 +28,7 @@ export class CameraRig {
   mode: 'cockpit' | 'chase' = 'cockpit';
   private smoothing: { pos: Vec3; quat: Quat } | null = null;
   private recoil = 0; // transient weapon-fire screen kick, decays fast
+  entryTurbulence = 0; // 0..1 atmospheric entry shake intensity
 
   toggle(): void {
     this.mode = this.mode === 'cockpit' ? 'chase' : 'cockpit';
@@ -47,9 +48,12 @@ export class CameraRig {
     let camQuat: Quat;
     if (this.mode === 'cockpit') {
       const off = { ...(COCKPIT_OFFSETS[ship.hullId] ?? COCKPIT_OFFSETS.shuttle) };
-      // engine rumble: subtle cockpit shake scaling with throttle/cruise
+      // engine rumble + atmospheric entry turbulence
       if (!ship.dockedAt) {
-        const shake = ship.cruise === 'cruise' ? 0.1 : Math.abs(ship.throttle) * 0.07;
+        const engineShake = ship.cruise === 'cruise' ? 0.1 : Math.abs(ship.throttle) * 0.07;
+        const turb = this.entryTurbulence;
+        const atmoShake = turb * (0.35 + 0.15 * Math.sin(Date.now() * 0.023) * Math.sin(Date.now() * 0.011));
+        const shake = Math.max(engineShake, atmoShake);
         off.x += (Math.random() - 0.5) * shake;
         off.y += (Math.random() - 0.5) * shake;
       }
