@@ -122,11 +122,11 @@ export class SceneManager {
       this.farFog.color.copy(this.skyBg);
       // three regimes: a gentle base haze, a mid-depth term that starts burying
       // distant planets once you're well into the air, and a steep surface term
-      // that fully washes everything past ~30 km in thick air — so from a lit
+      // that fully washes everything past ~50 km in thick air — so from a lit
       // surface the rest of the system is gone (as it should be), while a high
       // entry still sees the world's curve and nearby moons.
-      this.farFog.density = Math.pow(hazeD, 1.5) * 5e-3
-        + Math.pow(hazeD, 3) * 0.015 + Math.pow(hazeD, 6) * 0.08;
+      this.farFog.density = Math.pow(hazeD, 1.5) * 8e-3
+        + Math.pow(hazeD, 3) * 0.025 + Math.pow(hazeD, 5) * 0.15;
       this.far.fog = this.farFog;
       // skylight: the bright sky scatters daylight onto the surface so the terrain
       // (near patch AND the far-scene planet) is lit even away from the sun. Warm
