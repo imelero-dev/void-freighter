@@ -16,10 +16,15 @@ import type { PlanetDef } from '../sim/types';
 import { heightField, TERRAIN } from '../sim/terrain';
 import type { SceneManager } from './scene';
 
-const GRID = 16;            // cells per chunk edge (17×17 vertices)
-const SPLIT_RATIO = 0.55;   // split while chunkWorldSize / distance exceeds this (chunk subtends ~30°)
-const MAX_LEVEL = 16;       // deepest subdivision (≈ sub-metre on a big world)
-const MAX_BUILDS_PER_FRAME = 24; // amortise chunk meshing to avoid hitches
+const GRID = 32;            // cells per chunk edge (33×33 vertices) — fine detail per chunk
+const SPLIT_RATIO = 0.42;   // split while chunkWorldSize / distance exceeds this
+const MAX_LEVEL = 10;       // capped: deeper levels starve the build budget and leave
+                            // coarse grazing chunks that streak. 10 + a dense grid gives
+                            // ~30 m cells near the ground without that artifact.
+const MAX_BUILDS_PER_FRAME = 20; // amortise chunk meshing to avoid hitches
+const SKIRTS = false; // skirts on big grazing chunks read as streak-walls; the
+                      // fine LOD gradient keeps T-junction cracks small and haze
+                      // hides the far ones, so we skip them
 
 const WHITE = new THREE.Color(0xffffff);
 
@@ -90,6 +95,7 @@ export class PlanetQuadtree {
     this.mat = new THREE.MeshStandardMaterial({
       vertexColors: true, roughness: 1, metalness: 0, flatShading: true,
       emissive: 0x202020, emissiveIntensity: 0.2,
+      side: THREE.DoubleSide, // robust against any chunk/skirt winding
     });
     this.patchAerialFog(this.mat);
     this.group.renderOrder = -10;
@@ -128,6 +134,16 @@ export class PlanetQuadtree {
   update(camWorld: { x: number; y: number; z: number }, origin: { x: number; y: number; z: number }): void {
     this.camWorld.set(camWorld.x, camWorld.y, camWorld.z);
     this.reach = 0;
+    // altitude drives the far-plane cap: when low, thick haze hides the deep
+    // distance, so we keep the near far-plane tight for sane depth precision
+    // (the wide range from cockpit-near to horizon-far is what tears into
+    // z-fighting streaks); high up in thin air we let it reach the full horizon.
+    const camAlt = Math.max(20, this.tmpA.set(this.camWorld.x - this.planet.pos.x, this.camWorld.y - this.planet.pos.y, this.camWorld.z - this.planet.pos.z).length() - this.planet.radius);
+    // tight far-plane: render the high-detail ground only out to roughly where
+    // the haze swallows it, then let the hazed far-scene sphere carry the
+    // horizon. This clips the coarse grazing-angle chunks that streak, and keeps
+    // depth precision sane. Opens up high in thin air where you must see far.
+    const reachCap = Math.max(13_000, camAlt * 2.4);
     let builtThisFrame = 0;
     const visit = (node: QNode): void => {
       const dist = this.tmpA.copy(node.anchor).sub(this.camWorld).length();
@@ -152,7 +168,7 @@ export class PlanetQuadtree {
       if (node.mesh) {
         node.mesh.visible = facing > -0.35; // drop the far backside of the globe
         node.mesh.position.set(node.anchor.x - origin.x, node.anchor.y - origin.y, node.anchor.z - origin.z);
-        if (node.mesh.visible) this.reach = Math.max(this.reach, dist + node.worldSize);
+        if (node.mesh.visible) this.reach = Math.min(reachCap, Math.max(this.reach, dist + node.worldSize));
       }
     };
     for (const r of this.roots) visit(r);
@@ -198,13 +214,19 @@ export class PlanetQuadtree {
     const heights = new Float32Array(verts);
     const ax = node.anchor;
     const up = node.centerDir;
+    // Relief by LOD level: coarse (low-level = far/grazing) chunks flatten toward
+    // a smooth sphere; fine (near) chunks carry full relief. This kills the streaks
+    // from tall features rendered edge-on at the horizon (coarse cells can't hold a
+    // 2 km ridge without slivering), gives the flat-far / detailed-near read of real
+    // aerial perspective, and the gradual growth as you descend is hidden by haze.
+    const reliefFactor = Math.max(0.12, Math.min(1, (node.level - 3) / 7));
     // pass 1: grid positions (relative to the chunk anchor) + heights
     for (let j = 0; j < n; j++) {
       const v = node.v0 + (node.v1 - node.v0) * (j / GRID);
       for (let i = 0; i < n; i++) {
         const u = node.u0 + (node.u1 - node.u0) * (i / GRID);
         cubeToSphere(F.n.x + F.a.x * u + F.b.x * v, F.n.y + F.a.y * u + F.b.y * v, F.n.z + F.a.z * u + F.b.z * v, dir);
-        const h = heightField(this.planet.pos.x + dir.x * R, this.planet.pos.z + dir.z * R, seed, prm);
+        const h = heightField(this.planet.pos.x + dir.x * R, this.planet.pos.z + dir.z * R, seed, prm) * reliefFactor;
         const k = j * n + i;
         heights[k] = h;
         pos[k * 3] = this.planet.pos.x + dir.x * (R + h) - ax.x;
@@ -216,14 +238,16 @@ export class PlanetQuadtree {
     for (let j = 0; j < GRID; j++) {
       for (let i = 0; i < GRID; i++) {
         const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
-        idx.push(a, c, b, b, c, d);
+        idx.push(a, b, c, b, d, c); // outward winding (normal points away from the planet)
       }
     }
     // skirt: drop a copy of each border vertex down along -up, stitched to the
     // rim, so LOD-boundary cracks are filled by a vertical apron instead of a gap
-    // skirt depth scales with the CHUNK, not the global relief — a small low-
-    // altitude chunk needs only a small apron, or it juts out as a dark wall
-    const skirtDepth = Math.min(prm.amp, node.worldSize * 0.18);
+    // Skirt depth: a SHORT apron — enough to plug the small crack against a
+    // one-level-coarser neighbour, but hard-capped so a big low-LOD chunk never
+    // grows a tall skirt wall that reads as a screen-spanning streak at grazing
+    // angles (that was the bug). Cells at this LOD set the scale; 90 m ceiling.
+    const skirtDepth = Math.min(90, (node.worldSize / GRID) * 2.5);
     let s = gridVerts;
     const skirtOf = new Map<number, number>();
     const addSkirt = (gi: number): number => {
@@ -241,10 +265,12 @@ export class PlanetQuadtree {
       const s0 = addSkirt(g0), s1 = addSkirt(g1);
       idx.push(g0, s0, g1, g1, s0, s1);
     };
-    for (let i = 0; i < GRID; i++) edge(i, i + 1);                                  // top (j=0)
-    for (let i = 0; i < GRID; i++) edge(GRID * n + i + 1, GRID * n + i);            // bottom (j=GRID)
-    for (let j = 0; j < GRID; j++) edge((j + 1) * n, j * n);                        // left (i=0)
-    for (let j = 0; j < GRID; j++) edge(j * n + GRID, (j + 1) * n + GRID);          // right (i=GRID)
+    if (SKIRTS) {
+      for (let i = 0; i < GRID; i++) edge(i, i + 1);                                  // top (j=0)
+      for (let i = 0; i < GRID; i++) edge(GRID * n + i + 1, GRID * n + i);            // bottom (j=GRID)
+      for (let j = 0; j < GRID; j++) edge((j + 1) * n, j * n);                        // left (i=0)
+      for (let j = 0; j < GRID; j++) edge(j * n + GRID, (j + 1) * n + GRID);          // right (i=GRID)
+    }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
