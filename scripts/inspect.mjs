@@ -138,6 +138,19 @@ async function main() {
   await sleep(1200);
   await shot('05_surface_daylight_horizon');
 
+  // terrain relief: ~1.5 km up, nose pitched down toward the ground
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 1500));
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.7))); // pitched down ~35°
+    window.IN.place(pos, look, un);
+  });
+  await sleep(1000);
+  await shot('05b_terrain_relief');
+
   // sweep yaw to scan the sky for any planets bleeding through the fog
   await page.evaluate(() => { window.VF.botInput = { thrustForward: 0, thrustRight: 0, thrustUp: 0, pitch: 0.15, yaw: 0.6, roll: 0, brake: false }; });
   await sleep(1500);

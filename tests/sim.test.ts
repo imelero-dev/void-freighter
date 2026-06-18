@@ -4,7 +4,7 @@ import { DT, emptyShipInput } from '../src/sim/types';
 import { integrateFlight } from '../src/sim/flight';
 import { isLandable } from '../src/sim/system';
 import { hangarFrame, padPoint } from '../src/sim/docking';
-import { qLookAt, vadd, vdist, vlen, vnorm, vscale, vsub, v3 } from '../src/sim/vec';
+import { qLookAt, vadd, vdist, vdot, vlen, vnorm, vscale, vsub, v3 } from '../src/sim/vec';
 
 function makeSim(): Sim {
   return new Sim();
@@ -271,6 +271,29 @@ describe('docking', () => {
     expect(e.dockedAt).toBe('morrow_granary'); // starts docked
     sim.undock(pid);
     expect(e.dockedAt).toBeNull();
+  });
+
+  it('you can fly in through the open hatch into the hangar (#5)', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.undockInvuln = 0;
+    meta.flightAssist = false;
+    const st = sim.system.stations[0];
+    const fr = hangarFrame(st);
+    const mouth = vadd(st.pos, vscale(fr.f, fr.HZ));
+    e.pos = vadd(mouth, vscale(fr.f, 150)); // just outside the slot, lined up
+    e.orient = qLookAt(vscale(fr.f, -1));
+    e.vel = vscale(fr.f, -50); // drift straight in, under the hull
+    runTicks(sim, 20 * 8);
+    const rel = vsub(e.pos, st.pos);
+    const a = vdot(rel, fr.f), pu = vdot(rel, fr.u), pv = vdot(rel, fr.v);
+    expect(a).toBeLessThan(fr.mouthA);     // made it past the mouth plane
+    expect(a).toBeGreaterThan(fr.backA);   // not pushed through the back wall
+    expect(Math.abs(pu)).toBeLessThan(fr.HW); // still within the slot, not ejected
+    expect(Math.abs(pv)).toBeLessThan(fr.HH);
   });
 
   it('will not dock you while still outside the hangar — no auto-suck (#17)', () => {
