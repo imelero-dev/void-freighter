@@ -269,6 +269,8 @@ async function main() {
       e.vel = V.vscale(look, 360); // diving fast → entry heat
     }, altKm);
     await sleep(900);
+    const lc = await page.evaluate(() => { try { return window.VF.app.quadtree?.leafCount ?? -1; } catch (e) { return -2; } });
+    console.log(`  ${altKm}km leafCount=${lc}`);
     await shot(`12_entry_${altKm}km`);
   }
 

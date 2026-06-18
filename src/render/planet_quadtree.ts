@@ -145,9 +145,15 @@ export class PlanetQuadtree {
     // depth precision sane. Opens up high in thin air where you must see far.
     const reachCap = Math.max(13_000, camAlt * 2.4);
     let builtThisFrame = 0;
+    let leaves = 0;
     const visit = (node: QNode): void => {
       const dist = this.tmpA.copy(node.anchor).sub(this.camWorld).length();
-      const wantSplit = node.level < MAX_LEVEL && node.worldSize / Math.max(1, dist) > SPLIT_RATIO;
+      const ratio = node.worldSize / Math.max(1, dist);
+      // hysteresis: a node splits at SPLIT_RATIO but, once split, only merges back
+      // when it falls well under it — so a chunk hovering at the threshold doesn't
+      // flicker between LOD levels frame to frame as you fly
+      const threshold = node.children ? SPLIT_RATIO * 0.6 : SPLIT_RATIO;
+      const wantSplit = node.level < MAX_LEVEL && ratio > threshold;
       // horizon cull: drop nodes on the far backside of the globe (their outward
       // direction points away from the camera's direction off the planet centre)
       const facing = node.centerDir.dot(
@@ -168,12 +174,14 @@ export class PlanetQuadtree {
       if (node.mesh) {
         node.mesh.visible = facing > -0.35; // drop the far backside of the globe
         node.mesh.position.set(node.anchor.x - origin.x, node.anchor.y - origin.y, node.anchor.z - origin.z);
-        if (node.mesh.visible) this.reach = Math.min(reachCap, Math.max(this.reach, dist + node.worldSize));
+        if (node.mesh.visible) { leaves++; this.reach = Math.min(reachCap, Math.max(this.reach, dist + node.worldSize)); }
       }
     };
     for (const r of this.roots) visit(r);
     this.active = true;
+    this.leafCount = leaves;
   }
+  leafCount = 0;
 
   private subdivide(node: QNode): void {
     const { face, u0, v0, u1, v1, level } = node;
