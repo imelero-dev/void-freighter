@@ -255,7 +255,7 @@ async function main() {
 
   // ---- atmospheric entry transition: descend the day side, nose down, fast.
   //      Captures the surface resolving + the re-entry plasma sheath. ----
-  for (const altKm of [52, 28, 9]) {
+  for (const altKm of [70, 45, 22, 9]) {
     await page.evaluate((altKm) => {
       const w = window.VF.world; const V = window.VF.vec;
       const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];

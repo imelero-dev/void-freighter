@@ -15,7 +15,7 @@ import { terrainHeight } from '../sim/terrain';
 import { buildStarfield } from '../render/starfield';
 import { BOLT_SPEED, GOODS, MODULE_NAMES, MODULE_TIER_TAGS } from '../sim/data';
 import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
-import { atmosphereAt } from '../sim/system';
+import { atmosphereAt, skyStrength } from '../sim/system';
 import type { PlanetKind } from '../sim/types';
 import { settings } from '../ui/settings';
 import type { IWorld } from '../world_api';
@@ -684,6 +684,10 @@ export class GameApp {
     // how deep in a planet's air column the ship is (computed above for the
     // headlight)
     const atmoDensity = ship ? this.frameAtmoDensity : 0;
+    // sky brightness ramps in much higher than the (quadratic) physical density,
+    // so you're inside a blue sky moments after entry — not staring at a lit disc
+    // hanging in black space — while the haze still thickens with the real air
+    const skyD = ship ? skyStrength(atmoDensity) : 0;
     if (ship) this.terrain.update(w.system, ship.pos);
     // the ground cap reaches the horizon on descent — fit the near far-plane to
     // it (back to the tight 80 km default in space), and blend the far-scene
@@ -691,9 +695,9 @@ export class GameApp {
     this.sm.setNearFarPlane(this.terrain.active ? this.terrain.reach : 80_000);
     this.bodies.setEntryBlend(this.terrain.active ? this.terrain.planetId : '', this.terrain.blend);
     this.skyColor.setHex(SKY_COLORS[this.frameAtmoKind]);
-    this.sm.setAtmosphere(this.skyColor, atmoDensity);
+    this.sm.setAtmosphere(this.skyColor, skyD, atmoDensity);
     if (ship) {
-      this.sky.update(w.system, ship.pos, this.skyColor, atmoDensity);
+      this.sky.update(w.system, ship.pos, this.skyColor, skyD);
       this.clouds.update(w.system, ship.pos, w.time, atmoDensity);
       // dust kicked up when you hover/land close to the ground
       const gAtmo = atmosphereAt(w.system, ship.pos);
@@ -729,8 +733,9 @@ export class GameApp {
     } else {
       this.sky.update(w.system, this.sm.origin, this.skyColor, 0);
     }
-    // stars wash out in daylight: fade the starfield as the air thickens
-    const starFade = 1 - Math.min(1, atmoDensity * 1.3);
+    // stars wash out in daylight: fade the starfield as the sky brightens (keyed
+    // to the visual sky strength so they're gone once the blue has filled in)
+    const starFade = 1 - Math.min(1, skyD * 1.25);
     this.starfield.traverse((o) => {
       const m = (o as THREE.Mesh).material as THREE.Material & { opacity: number };
       if (m && 'opacity' in m) {

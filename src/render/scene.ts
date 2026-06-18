@@ -96,18 +96,21 @@ export class SceneManager {
   private farFog = new THREE.FogExp2(0x6fa8d6, 0);
   private skyBg = new THREE.Color(0x000000);
   private baseAmbient = new THREE.Color(0x223344);
-  setAtmosphere(color: THREE.Color, density: number): void {
-    if (density > 0.002) {
-      // sky brightens from black (space) to full daylight colour at the surface
-      this.skyBg.copy(color).multiplyScalar(Math.min(1, density * 1.15));
+  // skyD drives how BLUE the sky/background/skylight is (ramps in high, so you're
+  // never staring at a lit disc in black space); hazeD drives how thick the haze
+  // is (grows with real air, so the ground still reads when you're low).
+  setAtmosphere(color: THREE.Color, skyD: number, hazeD: number): void {
+    if (skyD > 0.002 || hazeD > 0.002) {
+      // sky brightens from black (space) to full daylight colour as you enter
+      this.skyBg.copy(color).multiplyScalar(Math.min(1, skyD * 1.1));
       this.far.background = this.skyBg;
       // AERIAL PERSPECTIVE: the haze is the pale HORIZON tone (the sky tint lifted
       // toward white), not a dark blue — so distant terrain fades into a bright,
       // layered sky exactly like a thick-atmosphere world seen from a cockpit,
-      // instead of meeting a hard dark band. Stronger (quadratic) so a few tens of
-      // km of thick air buries the ground in haze the way Earth's does.
+      // instead of meeting a hard dark band. Keyed to the real air so a low pass
+      // still sees the ground, while a high entry already has a blue sky around it.
       this.nearFog.color.copy(color).lerp(WHITE, 0.4);
-      this.nearFog.density = density * density * 1.5e-4;
+      this.nearFog.density = hazeD * hazeD * 1.5e-4;
       this.near.fog = this.nearFog;
       // far-scene haze hides distant worlds in daylight. Far units are km, so a
       // density of ~7e-4 fully washes anything past ~2000 km while leaving the
@@ -120,14 +123,14 @@ export class SceneManager {
       // when you're deep in the atmosphere the far-scene planet sphere dissolves
       // into the sky a few tens of km out — hiding the seam where the near ground
       // patch meets it — while a high, thin-air descent still sees the world's curve.
-      this.farFog.density = Math.pow(density, 1.5) * 9e-4 + Math.pow(density, 4) * 0.02;
+      this.farFog.density = Math.pow(hazeD, 1.5) * 9e-4 + Math.pow(hazeD, 4) * 0.02;
       this.far.fog = this.farFog;
       // skylight: the bright sky scatters daylight onto the surface so the
       // terrain (near patch AND the far-scene planet) is lit even away from the sun
-      this.ambientNear.color.copy(this.baseAmbient).lerp(color, density * 0.7);
-      this.ambientNear.intensity = 0.55 + density * 1.9;
-      this.ambientFar.color.copy(this.baseAmbient).lerp(color, density * 0.7);
-      this.ambientFar.intensity = 0.4 + density * 1.9;
+      this.ambientNear.color.copy(this.baseAmbient).lerp(color, skyD * 0.7);
+      this.ambientNear.intensity = 0.55 + skyD * 1.9;
+      this.ambientFar.color.copy(this.baseAmbient).lerp(color, skyD * 0.7);
+      this.ambientFar.intensity = 0.4 + skyD * 1.9;
     } else {
       this.far.background = null;
       this.near.fog = null;

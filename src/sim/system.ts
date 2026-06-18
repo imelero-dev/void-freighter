@@ -306,6 +306,18 @@ export function isLandable(kind: PlanetDef['kind']): boolean {
 // Atmosphere at a world position: nearest planet, your altitude above its
 // surface, and the air density there (0 in vacuum, 1 at the surface). Shared by
 // the sim (drag), the online client (prediction parity) and the HUD readout.
+
+// Visual sky strength (0..1) for a given physical air density. The physical
+// density is quadratic in depth — near zero through the whole upper atmosphere —
+// which keeps the drag honest but would leave the sky pitch-black until you're
+// nearly on the deck. For RENDERING we want the blue to fill in much higher (you
+// see a sky the moment you enter, like a real atmospheric world from a cockpit),
+// so we take the square root: that turns the quadratic depth back into a linear
+// ramp, present from the top of the air down.
+export function skyStrength(density: number): number {
+  return Math.min(1, Math.sqrt(Math.max(0, density)) * 1.25);
+}
+
 export function atmosphereAt(system: SystemDef, pos: Vec3): { density: number; planet: PlanetDef | null; altitude: number } {
   let planet: PlanetDef | null = null;
   let altitude = Infinity;
