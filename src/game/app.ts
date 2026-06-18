@@ -888,6 +888,8 @@ export class GameApp {
         dead: false,
         turbo: w.turboActive,
         alarm: performance.now() < this.alarmUntil,
+        atmoDensity,
+        entryHeat: this.entryHeatSmooth,
       });
     }
   };

@@ -21,6 +21,8 @@ export class AudioEngine {
   private alarmGain!: GainNode;
   private miningGain!: GainNode;
   private miningOsc!: OscillatorNode;
+  private windGain!: GainNode;
+  private windFilter!: BiquadFilterNode;
   private alarmTimer = 0;
 
   muted = false;
@@ -151,6 +153,18 @@ export class AudioEngine {
     this.miningGain.connect(this.master);
     mOsc.start();
     mTrem.start();
+
+    // --- atmospheric wind ---
+    this.windGain = ctx.createGain();
+    this.windGain.gain.value = 0;
+    this.windFilter = ctx.createBiquadFilter();
+    this.windFilter.type = 'bandpass';
+    this.windFilter.frequency.value = 220;
+    this.windFilter.Q.value = 0.6;
+    const windSrc = this.loopNoise();
+    windSrc.connect(this.windFilter);
+    this.windFilter.connect(this.windGain);
+    this.windGain.connect(this.master);
   }
 
   private loopNoise(): AudioBufferSourceNode {
@@ -177,6 +191,7 @@ export class AudioEngine {
     throttle: number; cruise: 'off' | 'charging' | 'cruise'; cruiseFrac: number;
     docked: boolean; hullFrac: number; mining: boolean; miningHeat: number;
     dead: boolean; turbo: boolean; alarm: boolean;
+    atmoDensity: number; entryHeat: number;
   }): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
@@ -194,6 +209,11 @@ export class AudioEngine {
     ramp(this.miningGain, s.mining ? 0.12 : 0, 0.08);
     // the drone climbs as the drill heats up — an audible overheat warning
     this.miningOsc.frequency.setTargetAtTime(86 + s.miningHeat * 74, t, 0.2);
+    // atmospheric wind: filtered noise rising with air density, higher pitch
+    // and louder with entry heat for the dramatic re-entry roar
+    const windVol = s.atmoDensity * 0.10 + s.entryHeat * 0.18;
+    ramp(this.windGain, flying ? windVol : 0, 0.4);
+    this.windFilter.frequency.setTargetAtTime(180 + s.entryHeat * 600 + s.atmoDensity * 120, t, 0.3);
   }
 
   // ------------------------------------------------------------------
