@@ -839,7 +839,7 @@ export class Sim {
       edge = Math.min(edge, vdist(pos, m.pos) - m.radius * 1.6);
     }
     for (const s of this.system.stations) {
-      edge = Math.min(edge, vdist(pos, s.pos) - 1500);
+      edge = Math.min(edge, vdist(pos, s.pos) - s.radius * 1.3);
     }
     for (const belt of this.system.belts) {
       for (const f of belt.fields) {

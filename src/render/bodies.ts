@@ -278,9 +278,12 @@ function buildStationMesh(def: StationDef): {
     strip.position.set(sx * HW * 0.7, HH - t * 1.5, depthZc);
     group.add(strip);
   }
-  const bayLight = new THREE.PointLight(0x9fd8ff, 0.9, R * 2.4, 1.4);
-  bayLight.position.set(0, 0, padA);
+  const bayLight = new THREE.PointLight(0x9fd8ff, 1.4, R * 2.6, 1.3);
+  bayLight.position.set(0, HH * 0.4, padA);
   group.add(bayLight);
+  const mouthLight = new THREE.PointLight(0xffd9a8, 0.8, R * 1.8, 1.5);
+  mouthLight.position.set(0, 0, HZ * 0.7);
+  group.add(mouthLight);
 
   // sliding hangar doors (two panels closing the slot, tucked into the jambs)
   const hatch: THREE.Object3D[] = [];

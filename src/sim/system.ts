@@ -13,6 +13,11 @@ export const WORLD_SEED = 7741;
 // don't get longer as planets grow.
 export const PLANET_SCALE = 8;
 
+// Planets are huge, so to keep them reading as distant worlds (not giant balls
+// hanging next to each other) the orbits are spread well apart. Combined with
+// the daylight atmospheric haze, you no longer see the neighbours looming.
+export const ORBIT_SCALE = 1.7;
+
 export const FACTIONS: FactionDef[] = [
   { id: 'helion', name: 'Helion Combine', color: 0xcc8833, pirate: false },
   { id: 'meridian', name: 'Meridian Charter', color: 0x5588aa, pirate: false },
@@ -151,8 +156,9 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
 
   for (const spec of PLANETS) {
     const angle = rng.range(0, Math.PI * 2);
-    const y = rng.range(-2e5, 2e5);
-    const pos = v3(Math.cos(angle) * spec.orbit, y, Math.sin(angle) * spec.orbit);
+    const y = rng.range(-2e5, 2e5) * ORBIT_SCALE;
+    const orbit = spec.orbit * ORBIT_SCALE;
+    const pos = v3(Math.cos(angle) * orbit, y, Math.sin(angle) * orbit);
     const radius = spec.radius * PLANET_SCALE;
     const planet: PlanetDef = {
       id: spec.id, name: spec.name, kind: spec.kind, pos, radius,
@@ -180,7 +186,8 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
 
   for (const spec of FREE_STATIONS) {
     const angle = rng.range(0, Math.PI * 2);
-    const spos = v3(Math.cos(angle) * spec.orbit, spec.offPlane, Math.sin(angle) * spec.orbit);
+    const orbit = spec.orbit * ORBIT_SCALE;
+    const spos = v3(Math.cos(angle) * orbit, spec.offPlane * ORBIT_SCALE, Math.sin(angle) * orbit);
     // free stations open their hangar toward the star (sunward) for light
     stations.push(makeStation(spec, spos, rng.int(1, 1e9), vnorm(vscale(spos, -1))));
   }
@@ -188,9 +195,10 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
   const belts: BeltDef[] = BELTS.map((spec) => {
     const fields: FieldDef[] = [];
     const baseAngle = rng.range(0, Math.PI * 2);
+    const ring = spec.ring * ORBIT_SCALE;
     for (let i = 0; i < spec.fieldCount; i++) {
       const angle = baseAngle + (i / spec.fieldCount) * Math.PI * 2 + rng.range(-0.25, 0.25);
-      const r = spec.ring + rng.range(-6e5, 6e5);
+      const r = ring + rng.range(-6e5, 6e5);
       fields.push({
         id: `${spec.id}_f${i}`,
         beltId: spec.id,
@@ -203,7 +211,7 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
       });
     }
     return {
-      id: spec.id, name: spec.name, center: v3(0, 0, 0), ringRadius: spec.ring,
+      id: spec.id, name: spec.name, center: v3(0, 0, 0), ringRadius: ring,
       fields, danger: spec.danger, composition: spec.composition,
     };
   });
