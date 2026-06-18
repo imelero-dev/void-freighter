@@ -201,6 +201,23 @@ async function main() {
     await shot(n);
   }
 
+  // VTOL hover aid: hovering over a planet surface, gear down, drifting a touch
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const sim = w.sim; const meta = sim.meta(w.playerId);
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 600));
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    window.IN.place(pos, horiz, un);
+    meta.vtol = true; meta.gearDown = true;
+    try { window.VF.app.camera.mode = 'cockpit'; } catch (e) { /* best effort */ }
+  });
+  await page.evaluate(() => { window.VF.botInput = { thrustForward: 0, thrustRight: 0.22, thrustUp: -0.25, pitch: 0, yaw: 0, roll: 0, brake: false }; });
+  await sleep(700);
+  await shot('10_vtol_aid');
+  await page.evaluate(() => { delete window.VF.botInput; });
+
   await browser.close();
   server.close();
   if (errors.length) { console.error('PAGE ERRORS:\n' + errors.join('\n')); process.exit(1); }

@@ -5,9 +5,9 @@ import * as THREE from 'three';
 import { isMobile } from '../game/touch';
 import { BOLT_SPEED, GOODS } from '../sim/data';
 import type { Entity } from '../sim/types';
-import { leadPoint, qForward, qRight, qUp, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
+import { leadPoint, qForward, qRight, qUp, vcross, vdist, vlen, vscale, vsub, vnorm, vdot } from '../sim/vec';
 import { atmoHeight, atmosphereAt, SOFT_LAND_SPEED } from '../sim/system';
-import { dockCheck, stationPort } from '../sim/docking';
+import { dockCheck, stationPort, vtolUpRef } from '../sim/docking';
 import type { IWorld } from '../world_api';
 import { fmtDistance, fmtTime } from './dom';
 
@@ -194,6 +194,9 @@ export class Hud {
 
     // ---- altimeter / atmosphere readout (only near a planet) ----
     this.drawAltimeter(world, ship, cx);
+
+    // ---- VTOL hover/landing aid (drift ring + descent rate) ----
+    this.drawVtolAid(world, ship, cx, H);
 
     // ---- world-anchored target bracket + lead pip ----
     const target = ship.targetId !== null ? world.entities.get(ship.targetId) : null;
@@ -679,6 +682,70 @@ export class Hud {
       ctx.font = '9px "Lucida Console", monospace';
       ctx.fillText('ATMOSPHERE', cx, y + 36);
     }
+  }
+
+  // VTOL hover aid (#19): when vertical-flight is engaged, a small ring shows
+  // your horizontal drift relative to where you're pointed (keep the pip
+  // centred to set down clean) plus the descent rate. Makes a precise touchdown
+  // on the pad — or a planet surface — a thing you can actually fly.
+  private drawVtolAid(world: IWorld, ship: Entity, cx: number, H: number): void {
+    if (!world.vtolMode || ship.dockedAt) return;
+    const ctx = this.ctx;
+    const up = vtolUpRef(world.system, ship.pos) ?? qUp(ship.orient);
+    // heading projected onto the horizontal plane, and the matching right axis
+    let heading = vsub(qForward(ship.orient), vscale(up, vdot(qForward(ship.orient), up)));
+    if (vlen(heading) < 1e-4) heading = qRight(ship.orient);
+    heading = vnorm(heading);
+    const right = vnorm(vcross(heading, up));
+    const driftR = vdot(ship.vel, right);
+    const driftF = vdot(ship.vel, heading);
+    const drift = Math.hypot(driftR, driftF);
+    const vUp = vdot(ship.vel, up); // + climbing / - descending
+
+    const cy = H * 0.5 + 4;
+    const r = 44;
+    const good = drift < 3, ok = drift < 8;
+    const col = good ? GREEN : ok ? '#e0902a' : RED;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.85)'; // readable over bright daylight skies
+    ctx.shadowBlur = 4;
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = 'rgba(217,164,65,0.5)';
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.32, 0, Math.PI * 2); ctx.stroke(); // "centred" tolerance
+    // cross ticks
+    ctx.strokeStyle = 'rgba(217,164,65,0.35)';
+    for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * (r - 5), cy + Math.sin(a) * (r - 5));
+      ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+      ctx.stroke();
+    }
+    // drift pip: right = +x on screen, forward = up on screen
+    const scale = 14; // m/s for full deflection
+    const px = cx + Math.max(-1, Math.min(1, driftR / scale)) * r;
+    const py = cy - Math.max(-1, Math.min(1, driftF / scale)) * r;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(px, py, 4.5, 0, Math.PI * 2); ctx.fill();
+    if (!good) { // a line from centre to the pip so the drift direction reads instantly
+      ctx.strokeStyle = col;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(px, py); ctx.stroke();
+    }
+    // labels
+    ctx.textAlign = 'center';
+    ctx.font = '9px "Lucida Console", monospace';
+    ctx.fillStyle = AMBER_DIM;
+    ctx.fillText('VTOL HOVER', cx, cy - r - 8);
+    ctx.fillStyle = col;
+    ctx.fillText(`DRIFT ${drift.toFixed(1)} m/s`, cx, cy + r + 14);
+    // descent rate on the right
+    const vs = -vUp; // + descending
+    const vsSafe = Math.abs(vs) < SOFT_LAND_SPEED;
+    ctx.fillStyle = !world.gearDown ? RED : vsSafe ? GREEN : '#e0902a';
+    ctx.textAlign = 'left';
+    ctx.fillText(`${vs > 0.3 ? '▼' : vs < -0.3 ? '▲' : '•'} ${Math.abs(vs).toFixed(1)}`, cx + r + 8, cy + 3);
+    if (!world.gearDown) { ctx.fillStyle = RED; ctx.fillText('GEAR UP', cx + r + 8, cy + 15); }
+    ctx.restore();
   }
 
   // Approach radar aid (#18): a compact red/amber/green instrument that grades
