@@ -4,3 +4,6 @@ dist-server/
 .env
 *.log
 .DS_Store
+
+# ad-hoc inspection captures (dev-only)
+screenshots/inspect/
