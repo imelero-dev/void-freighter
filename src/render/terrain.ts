@@ -22,6 +22,7 @@ import { atmoHeight, atmosphereAt } from '../sim/system';
 import { heightField, TERRAIN } from '../sim/terrain';
 import type { SceneManager } from './scene';
 
+const WHITE_C = new THREE.Color(0xffffff);
 const SEG = 150;             // grid resolution per cap (constant; span varies)
 const MAX_SPAN_HALF = 260_000; // cap the coarse reach so the near far-plane stays sane (m)
 const REBUILD_MOVE = 55;    // re-noise after the ship moves this far laterally (m)
@@ -70,6 +71,18 @@ export class TerrainPatch {
   blend = 0;        // 0..1 how fully the near ground has taken over from the far sphere
   planetId = '';
 
+  // AERIAL PERSPECTIVE uniforms (shared by both caps). Real atmospheric depth has
+  // two terms: per-channel EXTINCTION (red/green fade faster than blue, so the
+  // distance shifts toward the sky) and INSCATTERING (distant ground gains the
+  // atmosphere's light and brightens toward blue). That separation into receding
+  // luminous layers is what makes terrain read as 3-D from altitude — the key the
+  // grey single-colour fog was missing.
+  private aerial = {
+    uExt: { value: new THREE.Vector3(0, 0, 0) },   // per-channel extinction (1/m, applied to d^2)
+    uIns: { value: 0 },                            // inscatter rate (1/m)
+    uInsCol: { value: new THREE.Color(0x6fa8d6) }, // inscatter (sky) colour
+  };
+
   constructor(private sm: SceneManager) {
     // unit grid in [-0.5, 0.5]; rebuild() scales it to the current span
     const geo = new THREE.PlaneGeometry(1, 1, SEG, SEG);
@@ -91,6 +104,7 @@ export class TerrainPatch {
       // z-fighting where they share ground (same heightfield, same curvature)
       polygonOffset: onTop, polygonOffsetFactor: onTop ? -2 : 0, polygonOffsetUnits: onTop ? -2 : 0,
     });
+    this.patchAerialFog(mat);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.visible = false;
@@ -99,9 +113,40 @@ export class TerrainPatch {
     return { mesh, mat, lastBuild: new THREE.Vector3(Infinity, 0, 0), lastSpan: 0 };
   }
 
-  update(system: SystemDef, shipPos: { x: number; y: number; z: number }): void {
+  // Replace three.js' grey single-colour fog on this material with two-term
+  // aerial perspective (per-channel extinction + blue inscatter), keyed to the
+  // shared uniforms. Keeps the d^2 falloff (crisp near, hazed far) but the
+  // distance now goes luminous blue instead of flat grey — readable depth.
+  private patchAerialFog(mat: THREE.MeshStandardMaterial): void {
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uExt = this.aerial.uExt;
+      shader.uniforms.uIns = this.aerial.uIns;
+      shader.uniforms.uInsCol = this.aerial.uInsCol;
+      shader.fragmentShader = 'uniform vec3 uExt;\nuniform float uIns;\nuniform vec3 uInsCol;\n' + shader.fragmentShader;
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <fog_fragment>',
+        `#ifdef USE_FOG
+          vec3 _de = vFogDepth * uExt;
+          vec3 _ext = exp(-_de * _de);
+          float _di = vFogDepth * uIns;
+          float _ins = 1.0 - exp(-_di * _di);
+          gl_FragColor.rgb = gl_FragColor.rgb * _ext + uInsCol * _ins;
+        #endif`,
+      );
+    };
+    mat.customProgramCacheKey = () => 'vf_aerial_fog';
+  }
+
+  update(system: SystemDef, shipPos: { x: number; y: number; z: number }, skyColor: THREE.Color, hazeD: number): void {
     const atmo = atmosphereAt(system, shipPos);
     const p = atmo.planet;
+    // aerial perspective: red/green extinguish faster than blue (distance shifts
+    // toward the sky) and the inscatter colour is the pale bright horizon, so far
+    // ground glows blue instead of greying out. d^2 falloff keeps near ground crisp.
+    const base = hazeD * 0.62e-4;
+    this.aerial.uExt.value.set(base * 1.3, base * 1.02, base * 0.6);
+    this.aerial.uIns.value = base * 0.95;
+    this.aerial.uInsCol.value.copy(skyColor).lerp(WHITE_C, 0.35).multiplyScalar(1.05);
     if (!p || atmo.altitude > atmoHeight(p)) {
       this.coarse.mesh.visible = false; this.fine.mesh.visible = false;
       this.active = false; this.blend = 0; this.reach = 0;

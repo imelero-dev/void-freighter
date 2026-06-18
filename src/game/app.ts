@@ -688,13 +688,13 @@ export class GameApp {
     // so you're inside a blue sky moments after entry — not staring at a lit disc
     // hanging in black space — while the haze still thickens with the real air
     const skyD = ship ? skyStrength(atmoDensity) : 0;
-    if (ship) this.terrain.update(w.system, ship.pos);
+    this.skyColor.setHex(SKY_COLORS[this.frameAtmoKind]);
+    if (ship) this.terrain.update(w.system, ship.pos, this.skyColor, atmoDensity);
     // the ground cap reaches the horizon on descent — fit the near far-plane to
     // it (back to the tight 80 km default in space), and blend the far-scene
     // planet toward the ground tone so the cross-fade at the interface is seamless
     this.sm.setNearFarPlane(this.terrain.active ? this.terrain.reach : 80_000);
     this.bodies.setEntryBlend(this.terrain.active ? this.terrain.planetId : '', this.terrain.blend);
-    this.skyColor.setHex(SKY_COLORS[this.frameAtmoKind]);
     this.sm.setAtmosphere(this.skyColor, skyD, atmoDensity);
     if (ship) {
       this.sky.update(w.system, ship.pos, this.skyColor, skyD);
