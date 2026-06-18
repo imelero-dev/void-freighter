@@ -19,7 +19,7 @@ import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
 import { ATMO_DRAG, atmosphereAt, dangerAt, generateSystem, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
-import { BAY_DEPTH_FRAC, BAY_MOUTH_FRAC, dockCheck } from './docking';
+import { BAY_DEPTH_FRAC, BAY_MOUTH_FRAC, dockCheck, stationPort } from './docking';
 import { TrafficSystem } from './traffic';
 import {
   DT, emptyShipInput, type CargoItem, type Contract, type Destination, type Entity,
@@ -477,16 +477,19 @@ export class Sim {
       return; // being towed: no control
     }
 
-    // docking autopilot
+    // docking autopilot: ease the ship the short remaining distance into the
+    // dock FEATURE (collar/bay/pad), never through the hull to the centre. The
+    // pilot already flew the approach, so this is a brief final lock-on.
     if (meta.docking) {
       const st = this.station(meta.docking.stationId)!;
-      meta.docking.t += dt / 3.5;
+      const port = stationPort(st);
+      meta.docking.t += dt / 0.8;
       const t = clamp(meta.docking.t, 0, 1);
       const ease = t * t * (3 - 2 * t);
       e.pos = {
-        x: meta.docking.from.x + (st.pos.x - meta.docking.from.x) * ease,
-        y: meta.docking.from.y + (st.pos.y - meta.docking.from.y) * ease,
-        z: meta.docking.from.z + (st.pos.z - meta.docking.from.z) * ease,
+        x: meta.docking.from.x + (port.point.x - meta.docking.from.x) * ease,
+        y: meta.docking.from.y + (port.point.y - meta.docking.from.y) * ease,
+        z: meta.docking.from.z + (port.point.z - meta.docking.from.z) * ease,
       };
       e.vel = v3();
       if (t >= 1) {
@@ -872,12 +875,14 @@ export class Sim {
     for (const m of this.system.moons) {
       this.planetSurface(meta, e, m.pos, m.radius, 'the moon', wasResting);
     }
-    // stations: a solid hull you can scrape along, not a trampoline. Bay
-    // stations carve an open mouth you can fly into (#17).
+    // stations: a compound solid that hugs the visible structure — a core mass
+    // plus the always-vertical central spine — so you stop where you see hull,
+    // not against a big invisible sphere. Bay stations carve an open mouth (#5).
     for (const s of this.system.stations) {
       if (e.dockedAt) break;
       if (s.dockType === 'bay') this.bayCollision(meta, e, s);
-      else this.solidCollision(meta, e, s.pos, s.radius, ZERO_VEL, 0.3);
+      else this.solidCollision(meta, e, s.pos, s.radius * 0.7, ZERO_VEL, 0.3);
+      this.cylinderCollisionY(meta, e, s.pos, s.radius * 0.22, s.radius * 0.92);
     }
     // asteroids (active entities only)
     for (const a of this.entities.values()) {
@@ -916,6 +921,29 @@ export class Sim {
       const impact = -vn; // closing speed along the normal
       if (impact > COLLISION_DAMAGE_SPEED) {
         this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * dmgScale * meta.stats.massFactor, -1, true);
+      }
+      if (e.cruise !== 'off' && impact > 40) this.dropCruise(e, 'collision');
+    }
+  }
+
+  // Solid vertical cylinder (the station's central spine, which is always world
+  // up). Sphere-vs-finite-cylinder: push the ship radially out of the shaft.
+  private cylinderCollisionY(meta: PlayerMeta, e: Entity, center: Vec3, radius: number, halfLen: number): void {
+    if (Math.abs(e.pos.y - center.y) > halfLen + e.radius) return; // past the ends
+    const dx = e.pos.x - center.x, dz = e.pos.z - center.z;
+    const radial = Math.hypot(dx, dz);
+    const minR = radius + e.radius;
+    if (radial >= minR) return;
+    const nx = radial > 1e-6 ? dx / radial : 1, nz = radial > 1e-6 ? dz / radial : 0;
+    e.pos.x = center.x + nx * minR;
+    e.pos.z = center.z + nz * minR;
+    const vn = e.vel.x * nx + e.vel.z * nz;
+    if (vn < 0) {
+      e.vel.x -= nx * vn * 1.04;
+      e.vel.z -= nz * vn * 1.04;
+      const impact = -vn;
+      if (impact > COLLISION_DAMAGE_SPEED) {
+        this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.3 * meta.stats.massFactor, -1, true);
       }
       if (e.cruise !== 'off' && impact > 40) this.dropCruise(e, 'collision');
     }

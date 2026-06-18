@@ -171,6 +171,7 @@ describe('VTOL flight mode (#19)', () => {
 });
 
 describe('solid collision (#21)', () => {
+  // the station's solid core is 0.7x its radius (the rest is the spine + dock)
   const stageAtStation = (sim: Sim, speed: number) => {
     const pid = sim.addPlayer('tester');
     sim.undock(pid);
@@ -179,27 +180,28 @@ describe('solid collision (#21)', () => {
     meta.undockInvuln = 0;
     meta.flightAssist = false; // coast straight in, deterministic
     const st = sim.system.stations[0];
+    const core = st.radius * 0.7;
     const dir = v3(1, 0, 0);
-    e.pos = vadd(st.pos, vscale(dir, st.radius + e.radius + 5));
+    e.pos = vadd(st.pos, vscale(dir, core + e.radius + 5));
     e.vel = vscale(dir, -speed); // straight into the hull
-    return { e, st };
+    return { e, st, core };
   };
 
   it('low-speed contact gently stops/slides — no hard bounce, no clipping', () => {
     const sim = makeSim();
-    const { e, st } = stageAtStation(sim, 20);
+    const { e, st, core } = stageAtStation(sim, 20);
     runTicks(sim, 40);
-    expect(vdist(e.pos, st.pos)).toBeGreaterThanOrEqual(st.radius + e.radius - 1); // never inside
+    expect(vdist(e.pos, st.pos)).toBeGreaterThanOrEqual(core + e.radius - 1); // never inside
     expect(vlen(e.vel)).toBeLessThan(20); // not flung away
   });
 
   it('high-speed impact damages the hull proportionally and still resolves cleanly', () => {
     const sim = makeSim();
-    const { e, st } = stageAtStation(sim, 400);
+    const { e, st, core } = stageAtStation(sim, 400);
     const hull0 = e.hull;
     runTicks(sim, 5);
     expect(e.hull).toBeLessThan(hull0);
-    expect(vdist(e.pos, st.pos)).toBeGreaterThanOrEqual(st.radius + e.radius - 1);
+    expect(vdist(e.pos, st.pos)).toBeGreaterThanOrEqual(core + e.radius - 1);
   });
 
   it('a heavier hull takes more impact damage than a light one at equal speed', () => {
@@ -215,7 +217,7 @@ describe('solid collision (#21)', () => {
       e.maxHull = e.hull = 100_000; // big tank so neither hull dies + resets
       const st = sim.system.stations[0];
       const dir = v3(1, 0, 0);
-      e.pos = vadd(st.pos, vscale(dir, st.radius + e.radius + 5));
+      e.pos = vadd(st.pos, vscale(dir, st.radius * 0.7 + e.radius + 5));
       e.vel = vscale(dir, -300);
       const h0 = e.hull;
       runTicks(sim, 5);
