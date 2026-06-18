@@ -100,6 +100,14 @@ const GritShader = {
         // bow shock: bright leading flare below centre (ahead of the cockpit)
         float bow = smoothstep(0.4, 0.0, vUv.y) * entryHeat;
         col += plasma * bow * 0.65;
+        // plasma streaks: turbulent hot lines rushing past the cockpit,
+        // sparse and random so they read as individual ionised trails
+        float sx = floor(vUv.x * 55.0);
+        float sp = hash(vec2(sx, 0.3)) * 6.28;
+        float ss = 14.0 + hash(vec2(sx, 1.3)) * 22.0;
+        float st = smoothstep(0.97, 1.0, sin(vUv.y * 35.0 + time * ss + sp));
+        float stMask = st * step(0.72, hash(vec2(sx, 2.3))) * smoothstep(0.22, 0.58, edge);
+        col += plasma * stMask * entryHeat * 0.45 * flick;
         // whole-screen warm wash at high heat — the cockpit glows orange
         col = mix(col, col * vec3(1.12, 0.88, 0.72), entryHeat * 0.25);
       }

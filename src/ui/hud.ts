@@ -194,6 +194,7 @@ export class Hud {
 
     // ---- altimeter / atmosphere readout (only near a planet) ----
     this.drawAltimeter(world, ship, cx);
+    this.drawAltitudeTape(world, ship, W, H);
 
     // ---- VTOL hover/landing aid (drift ring + descent rate) ----
     this.drawVtolAid(world, ship, cx, H);
@@ -1178,5 +1179,137 @@ export class Hud {
     ctx.strokeRect(x, y, w, h);
     ctx.fillStyle = color;
     ctx.fillRect(x + 1, y + 1, Math.max(0, Math.min(1, frac)) * (w - 2), h - 2);
+  }
+
+  // ED-style vertical altitude tape: a slim column on the right showing your
+  // position in the atmosphere column with tick marks, a current-altitude
+  // marker, descent mode label and vertical speed. Gives an at-a-glance sense
+  // of how deep you are in the descent — the key instrument during planetary
+  // approach in Elite Dangerous.
+  private drawAltitudeTape(world: IWorld, ship: Entity, W: number, H: number): void {
+    const ctx = this.ctx;
+    const atmo = atmosphereAt(world.system, ship.pos);
+    if (!atmo.planet) return;
+    const shell = atmoHeight(atmo.planet);
+    if (atmo.altitude > shell * 2) return;
+
+    const tapeX = W - 56;
+    const tapeTop = Math.max(80, H * 0.17);
+    const tapeBot = Math.min(H - 210, H * 0.68);
+    const tapeH = tapeBot - tapeTop;
+    if (tapeH < 80) return;
+
+    const altFrac = Math.min(1.1, Math.max(-0.03, atmo.altitude / shell));
+    const markerY = tapeBot - altFrac * tapeH;
+    const clampY = Math.max(tapeTop - 8, Math.min(tapeBot + 8, markerY));
+
+    // descent mode: changes label and colour based on altitude band
+    let mode: string, mCol: string;
+    if (atmo.altitude > shell * 0.65) { mode = 'ORBITAL'; mCol = AMBER; }
+    else if (atmo.altitude > shell * 0.10) { mode = 'GLIDE'; mCol = CYAN; }
+    else { mode = 'SURFACE'; mCol = GREEN; }
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.85)';
+    ctx.shadowBlur = 4;
+
+    // mode label
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 10px "Lucida Console", monospace';
+    ctx.fillStyle = mCol;
+    ctx.fillText(mode, tapeX, tapeTop - 16);
+
+    // tape spine
+    ctx.strokeStyle = 'rgba(217,164,65,0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(tapeX, tapeTop);
+    ctx.lineTo(tapeX, tapeBot);
+    ctx.stroke();
+
+    // filled portion below marker (atmosphere already traversed)
+    if (clampY < tapeBot) {
+      ctx.fillStyle = mCol.replace(')', ',0.08)').replace('rgb', 'rgba').replace('#', '');
+      const fillCol = mode === 'SURFACE' ? 'rgba(127,201,127,0.08)' : mode === 'GLIDE' ? 'rgba(127,177,201,0.08)' : 'rgba(217,164,65,0.06)';
+      ctx.fillStyle = fillCol;
+      ctx.fillRect(tapeX - 6, clampY, 12, tapeBot - clampY);
+    }
+
+    // atmosphere edge endcap
+    ctx.strokeStyle = 'rgba(127,177,201,0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(tapeX - 7, tapeTop);
+    ctx.lineTo(tapeX + 4, tapeTop);
+    ctx.stroke();
+
+    // surface endcap
+    ctx.strokeStyle = 'rgba(127,201,127,0.5)';
+    ctx.beginPath();
+    ctx.moveTo(tapeX - 7, tapeBot);
+    ctx.lineTo(tapeX + 4, tapeBot);
+    ctx.stroke();
+
+    // km tick marks
+    const kmMax = Math.round(shell / 1000);
+    const interval = kmMax > 150 ? 40 : kmMax > 80 ? 20 : 10;
+    ctx.font = '7px "Lucida Console", monospace';
+    ctx.textAlign = 'right';
+    ctx.strokeStyle = 'rgba(217,164,65,0.18)';
+    for (let km = interval; km < kmMax; km += interval) {
+      const f = (km * 1000) / shell;
+      const y = tapeBot - f * tapeH;
+      ctx.beginPath();
+      ctx.moveTo(tapeX - 4, y);
+      ctx.lineTo(tapeX + 2, y);
+      ctx.stroke();
+      ctx.fillStyle = AMBER_DIM;
+      ctx.fillText(`${km}`, tapeX - 7, y + 3);
+    }
+
+    // current altitude marker: horizontal line + triangle
+    ctx.strokeStyle = mCol;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(tapeX - 14, clampY);
+    ctx.lineTo(tapeX + 12, clampY);
+    ctx.stroke();
+
+    // pointer triangle (right side)
+    ctx.fillStyle = mCol;
+    ctx.beginPath();
+    ctx.moveTo(tapeX + 14, clampY);
+    ctx.lineTo(tapeX + 9, clampY - 4);
+    ctx.lineTo(tapeX + 9, clampY + 4);
+    ctx.closePath();
+    ctx.fill();
+
+    // altitude readout next to the marker
+    ctx.textAlign = 'left';
+    ctx.font = '10px "Lucida Console", monospace';
+    ctx.fillStyle = mCol;
+    const altKm = atmo.altitude / 1000;
+    const altTxt = altKm >= 10 ? `${Math.round(altKm)} km` : altKm >= 1 ? `${altKm.toFixed(1)} km` : `${Math.round(Math.max(0, atmo.altitude))} m`;
+    ctx.fillText(altTxt, tapeX + 18, clampY + 3);
+
+    // vertical speed below the tape
+    const upDir = vnorm(vsub(ship.pos, atmo.planet.pos));
+    const vs = -vdot(ship.vel, upDir);
+    const descending = vs > 1;
+    const safe = vs < SOFT_LAND_SPEED;
+    ctx.textAlign = 'center';
+    ctx.font = '9px "Lucida Console", monospace';
+    ctx.fillStyle = !descending ? AMBER_DIM : safe ? GREEN : vs < 100 ? '#e0902a' : RED;
+    const vsTxt = descending ? `▼ ${Math.round(vs)} m/s`
+      : vs < -1 ? `▲ ${Math.round(-vs)} m/s` : '— level —';
+    ctx.fillText(vsTxt, tapeX, tapeBot + 16);
+
+    // gravity indicator
+    ctx.fillStyle = AMBER_DIM;
+    ctx.font = '8px "Lucida Console", monospace';
+    const gFrac = Math.max(0, Math.min(1, (shell - atmo.altitude) / (shell * 0.6)));
+    ctx.fillText(`${(9.81 * gFrac).toFixed(1)} m/s²`, tapeX, tapeBot + 28);
+
+    ctx.restore();
   }
 }

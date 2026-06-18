@@ -335,7 +335,8 @@ export class TerrainPatch {
     const ae = geo.attributes.aEdge as THREE.BufferAttribute;
     const span = spanHalf * 2;
     const rawH = new Float32Array(pos.count); // raw height for LOD-stable colouring
-    const vary = new Float32Array(pos.count); // patchy tone variation
+    const vary = new Float32Array(pos.count); // patchy tone variation (~1.2 km scale)
+    const biome = new Float32Array(pos.count); // continental biome regions (~7 km scale)
     // pass 1: heights. grid is unit [-0.5,0.5]; scale by span. Curvature is the
     // EXACT spherical drop so the rim lands on the real horizon.
     for (let i = 0; i < pos.count; i++) {
@@ -356,6 +357,7 @@ export class TerrainPatch {
       const r = heightField(u, vv, seed, prm);
       rawH[i] = r;
       vary[i] = fbm2(u * 0.00085, vv * 0.00085, seed ^ 0x55a3, 3);
+      biome[i] = fbm2(u * 0.00014, vv * 0.00014, seed ^ 0xb0b1, 2);
       const h = r * relief;
       const drop = R - Math.sqrt(Math.max(0, R * R - s2)); // exact sphere curvature
       pos.setXYZ(i, lx, ly, h - drop);
@@ -381,7 +383,9 @@ export class TerrainPatch {
       // steep faces are bare rock (and snow can't cling to them)
       const slope = 1 - Math.min(1, Math.max(0, nor.getZ(i)));
       this.tmpCol.lerp(def.rock, Math.min(1, slope * 2.2) * 0.9);
-      this.tmpCol.multiplyScalar(0.82 + vary[i] * 0.34);
+      // two-scale tone variation: continental biome (~7 km patches readable from
+      // orbit) and local tone (~1.2 km patches for mid-altitude interest)
+      this.tmpCol.multiplyScalar(0.72 + biome[i] * 0.24 + vary[i] * 0.26);
       if (r > snow) {
         const cap = Math.min(1, (r - snow) / (prm.amp * 0.55)) * (1 - Math.min(1, slope * 1.6)) * 0.92;
         this.tmpCol.lerp(SNOW_C, Math.max(0, cap));
