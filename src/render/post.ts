@@ -17,6 +17,7 @@ const GritShader = {
     damage: { value: 0 },   // 0..1 — red pulse when hull critical
     atmoColor: { value: new THREE.Color(0x6fa8d6) }, // sky tint inside an atmosphere
     atmoDensity: { value: 0 }, // 0..1 how deep in the air column you are
+    warp: { value: 0 }, // 0..1 cruise/hyperjump warp intensity
   },
   vertexShader: `
     varying vec2 vUv;
@@ -31,6 +32,7 @@ const GritShader = {
     uniform float damage;
     uniform vec3 atmoColor;
     uniform float atmoDensity;
+    uniform float warp;
     varying vec2 vUv;
 
     float hash(vec2 p) {
@@ -41,13 +43,30 @@ const GritShader = {
       vec2 uv = vUv;
       vec2 center = uv - 0.5;
 
-      // subtle chromatic aberration, stronger at the edges
-      float ca = 0.0022 * dot(center, center) * 4.0;
+      // hyperjump warp: radial smear toward the centre stretches stars/lights
+      // into speed-streaks rushing past, intensifying with cruise speed
+      vec3 streak = vec3(0.0);
+      if (warp > 0.001) {
+        float steps = 12.0;
+        for (float s = 1.0; s <= 12.0; s += 1.0) {
+          float t = (s / steps) * 0.5 * warp;
+          streak += texture2D(tDiffuse, uv - center * t).rgb;
+        }
+        streak /= steps;
+      }
+
+      // subtle chromatic aberration, stronger at the edges (amped under warp)
+      float ca = 0.0022 * dot(center, center) * 4.0 + warp * 0.012;
       vec2 dir = normalize(center + 1e-6);
       float r = texture2D(tDiffuse, uv + dir * ca).r;
       float g = texture2D(tDiffuse, uv).g;
       float b = texture2D(tDiffuse, uv - dir * ca).b;
       vec3 col = vec3(r, g, b);
+      if (warp > 0.001) {
+        // bright speed lines + a tunnel darkening toward the edges
+        col = max(col, streak * (0.5 + 0.8 * warp));
+        col *= 1.0 - warp * 0.18 * smoothstep(0.12, 0.5, length(center));
+      }
 
       // film grain
       float grain = hash(uv * vec2(1920.0, 1080.0) + fract(time) * 43.0) - 0.5;
@@ -103,11 +122,12 @@ export class PostPipeline {
     this.grit.uniforms.aspect.value = window.innerWidth / window.innerHeight;
   }
 
-  render(time: number, damageLevel: number, atmoColor?: THREE.Color, atmoDensity = 0): void {
+  render(time: number, damageLevel: number, atmoColor?: THREE.Color, atmoDensity = 0, warp = 0): void {
     this.grit.uniforms.time.value = time;
     this.grit.uniforms.damage.value = damageLevel;
     if (atmoColor) (this.grit.uniforms.atmoColor.value as THREE.Color).copy(atmoColor);
     this.grit.uniforms.atmoDensity.value = atmoDensity;
+    this.grit.uniforms.warp.value = warp;
     this.composer.render();
   }
 }

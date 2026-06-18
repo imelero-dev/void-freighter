@@ -76,6 +76,7 @@ export class GameApp {
   private frameAtmoDensity = 0;
   private frameAtmoKind: PlanetKind = 'rocky';
   private starfield!: THREE.Group; // faded out as you descend into daylight
+  private warpSmooth = 0; // eased hyperjump warp intensity
 
   onExit: (() => void) | null = null;
 
@@ -675,7 +676,15 @@ export class GameApp {
 
     const hullFrac = ship ? ship.hull / ship.maxHull : 1;
     const damageLevel = hullFrac < 0.25 ? (0.25 - hullFrac) * 4 : 0;
-    this.post.render(w.time, Math.min(1, damageLevel), this.skyColor, atmoDensity);
+    // hyperjump warp: ramps with cruise speed, with a kick from turbo overburn
+    let warp = 0;
+    if (ship) {
+      if (ship.cruise === 'cruise') warp = 0.55 + 0.45 * Math.min(1, ship.cruiseSpeed / Math.max(1, w.shipStats.cruiseMax));
+      else if (ship.cruise === 'charging') warp = 0.2;
+      else if (w.turboActive) warp = 0.25;
+    }
+    this.warpSmooth += (warp - this.warpSmooth) * Math.min(1, dt * 5);
+    this.post.render(w.time, Math.min(1, damageLevel), this.skyColor, atmoDensity, this.warpSmooth);
     this.hud.draw(w, this.sm.origin, this.input.cursorX, this.input.cursorY, this.input.uiMode);
     if (this.map.isOpen) this.map.draw();
 
