@@ -274,6 +274,25 @@ async function main() {
     await shot(`12_entry_${altKm}km`);
   }
 
+  // ---- GRAZING views: look out toward the horizon from altitude (the angle that
+  //      makes coarse chunks sliver into streaks). Deterministic teleports. ----
+  for (const altKm of [40, 18, 6]) {
+    await page.evaluate((altKm) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+      const sun = V.vnorm(V.vscale(p.pos, -1));
+      const un = V.vnorm({ x: sun.x * 0.6 + 0.2, y: 0.78, z: sun.z * 0.6 + 0.1 });
+      const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
+      const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.18))); // ~10° down — near-level grazing
+      window.IN.place(pos, look, un);
+    }, altKm);
+    await sleep(900);
+    const lc = await page.evaluate(() => { try { return window.VF.app.quadtree?.leafCount ?? -1; } catch (e) { return -2; } });
+    console.log(`  grazing ${altKm}km leafCount=${lc}`);
+    await shot(`13_grazing_${altKm}km`);
+  }
+
   await browser.close();
   server.close();
   if (errors.length) { console.error('PAGE ERRORS:\n' + errors.join('\n')); process.exit(1); }

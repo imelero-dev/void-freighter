@@ -15,17 +15,16 @@ import * as THREE from 'three';
 import type { PlanetDef } from '../sim/types';
 import { heightField, TERRAIN } from '../sim/terrain';
 import { fbm2 } from '../sim/rng';
+import { GROUND_MID } from './terrain';
 import type { SceneManager } from './scene';
 
 const GRID = 32;            // cells per chunk edge (33×33 vertices) — fine detail per chunk
-const SPLIT_RATIO = 0.42;   // split while chunkWorldSize / distance exceeds this
+const SPLIT_RATIO = 0.4;    // split while chunkWorldSize / distance exceeds this
 const MAX_LEVEL = 10;       // capped: deeper levels starve the build budget and leave
                             // coarse grazing chunks that streak. 10 + a dense grid gives
                             // ~30 m cells near the ground without that artifact.
 const MAX_BUILDS_PER_FRAME = 20; // amortise chunk meshing to avoid hitches
-const SKIRTS = false; // skirts on big grazing chunks read as streak-walls; the
-                      // fine LOD gradient keeps T-junction cracks small and haze
-                      // hides the far ones, so we skip them
+const SKIRTS = true;
 
 const WHITE = new THREE.Color(0xffffff);
 const SNOW = new THREE.Color(0xeef2f6);
@@ -97,7 +96,7 @@ export class PlanetQuadtree {
 
   constructor(private sm: SceneManager, private planet: PlanetDef) {
     this.mat = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 1, metalness: 0, flatShading: true,
+      vertexColors: true, roughness: 1, metalness: 0, flatShading: false,
       emissive: 0x202020, emissiveIntensity: 0.2,
       side: THREE.DoubleSide, // robust against any chunk/skirt winding
     });
@@ -147,7 +146,18 @@ export class PlanetQuadtree {
     // the haze swallows it, then let the hazed far-scene sphere carry the
     // horizon. This clips the coarse grazing-angle chunks that streak, and keeps
     // depth precision sane. Opens up high in thin air where you must see far.
-    const reachCap = Math.max(13_000, camAlt * 2.4);
+    // Far-plane ceiling: detailed ground out to roughly the haze line, the smooth
+    // far-scene sphere carries the deep horizon. Smooth shading keeps the flat
+    // coarse chunks from faceting at grazing angles, so this can stay generous.
+    const reachCap = Math.min(90_000, Math.max(13_000, camAlt * 2.4));
+    // Distance-fade FLOOR: regardless of how thin the air is, fade the detailed
+    // terrain into the sky by the far-plane, so the coarse grazing chunks at the
+    // edge dissolve (no streaks) and the hazed far-scene sphere takes over with no
+    // visible cut. Below, the real atmospheric haze is stronger and wins.
+    const fadeFloor = 1.7 / reachCap;
+    const ex = this.aerial.uExt.value;
+    ex.x = Math.max(ex.x, fadeFloor * 1.2); ex.y = Math.max(ex.y, fadeFloor); ex.z = Math.max(ex.z, fadeFloor * 0.72);
+    this.aerial.uIns.value = Math.max(this.aerial.uIns.value, fadeFloor * 0.95);
     let builtThisFrame = 0;
     let leaves = 0;
     const visit = (node: QNode): void => {
@@ -231,9 +241,14 @@ export class PlanetQuadtree {
     // from tall features rendered edge-on at the horizon (coarse cells can't hold a
     // 2 km ridge without slivering), gives the flat-far / detailed-near read of real
     // aerial perspective, and the gradual growth as you descend is hidden by haze.
-    const reliefFactor = Math.max(0.12, Math.min(1, (node.level - 3) / 7));
+    // Coarse/far chunks go FULLY flat (a smooth sphere); relief ramps in only on
+    // the finer near levels. Any relief left on a coarse chunk slivers into streaks
+    // when seen edge-on at the horizon during fast flight, so the far field must be
+    // truly flat — the haze and the ramp hide the transition as you descend.
+    const reliefFactor = Math.max(0, Math.min(1, (node.level - 6) / 3));
     const rawH = new Float32Array(verts); // unattenuated height (LOD-stable colouring)
     const vary = new Float32Array(verts);  // patchy tone variation
+    const dirs = new Float32Array(verts * 3); // radial (sphere) normal per vertex
     // pass 1: grid positions (relative to the chunk anchor) + heights
     for (let j = 0; j < n; j++) {
       const v = node.v0 + (node.v1 - node.v0) * (j / GRID);
@@ -245,6 +260,7 @@ export class PlanetQuadtree {
         const h = r * reliefFactor;
         const k = j * n + i;
         heights[k] = h; rawH[k] = r;
+        dirs[k * 3] = dir.x; dirs[k * 3 + 1] = dir.y; dirs[k * 3 + 2] = dir.z;
         vary[k] = fbm2(wx * 0.00085, wz * 0.00085, seed ^ 0x55a3, 3); // 0..1 patchy
         pos[k * 3] = this.planet.pos.x + dir.x * (R + h) - ax.x;
         pos[k * 3 + 1] = this.planet.pos.y + dir.y * (R + h) - ax.y;
@@ -260,11 +276,11 @@ export class PlanetQuadtree {
     }
     // skirt: drop a copy of each border vertex down along -up, stitched to the
     // rim, so LOD-boundary cracks are filled by a vertical apron instead of a gap
-    // Skirt depth: a SHORT apron — enough to plug the small crack against a
-    // one-level-coarser neighbour, but hard-capped so a big low-LOD chunk never
-    // grows a tall skirt wall that reads as a screen-spanning streak at grazing
-    // angles (that was the bug). Cells at this LOD set the scale; 90 m ceiling.
-    const skirtDepth = Math.min(90, (node.worldSize / GRID) * 2.5);
+    // Skirt depth scales with the chunk's actual RELIEF, not its size: a flat far
+    // chunk's T-junction crack is only the curvature sag (sub-metre), so it gets a
+    // tiny apron (no streak-wall at grazing); a detailed near chunk gets enough to
+    // plug the real relief gap against a coarser neighbour.
+    const skirtDepth = Math.max(8, reliefFactor * 130);
     let s = gridVerts;
     const skirtOf = new Map<number, number>();
     const addSkirt = (gi: number): number => {
@@ -274,7 +290,8 @@ export class PlanetQuadtree {
       pos[si * 3] = pos[gi * 3] - up.x * skirtDepth;
       pos[si * 3 + 1] = pos[gi * 3 + 1] - up.y * skirtDepth;
       pos[si * 3 + 2] = pos[gi * 3 + 2] - up.z * skirtDepth;
-      heights[si] = heights[gi];
+      heights[si] = heights[gi]; rawH[si] = rawH[gi]; vary[si] = vary[gi];
+      dirs[si * 3] = dirs[gi * 3]; dirs[si * 3 + 1] = dirs[gi * 3 + 1]; dirs[si * 3 + 2] = dirs[gi * 3 + 2];
       skirtOf.set(gi, si);
       return si;
     };
@@ -293,11 +310,37 @@ export class PlanetQuadtree {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setIndex(idx);
     geo.computeVertexNormals();
+    // Blend normals toward the CONTINUOUS radial (sphere) normal by (1-relief):
+    // per-chunk computeVertexNormals leaves the edge normals discontinuous between
+    // neighbouring chunks, which paints a lit/dark seam at every boundary — and
+    // those seams stack into streaks at grazing angles. Flat far chunks become pure
+    // sphere normals (seamless); near detailed chunks keep their computed relief.
+    {
+      const na = geo.attributes.normal as THREE.BufferAttribute;
+      const blend = 1 - reliefFactor;
+      if (blend > 0.001) {
+        for (let k = 0; k < verts; k++) {
+          let nx = na.getX(k) * (1 - blend) + dirs[k * 3] * blend;
+          let ny = na.getY(k) * (1 - blend) + dirs[k * 3 + 1] * blend;
+          let nz = na.getZ(k) * (1 - blend) + dirs[k * 3 + 2] * blend;
+          const l = Math.hypot(nx, ny, nz) || 1;
+          na.setXYZ(k, nx / l, ny / l, nz / l);
+        }
+        na.needsUpdate = true;
+      }
+    }
     // pass 2: colour by height + slope (after normals exist). Uses the RAW
     // (unattenuated) height so coastlines/snowlines stay put across LOD levels.
     const water = this.planet.kind === 'terran';
     const sea = prm.amp * 0.16;       // sea level (raw height) on water worlds
     const snow = prm.amp * 0.82;      // snow cap on high peaks
+    // Coarse/far chunks (low reliefFactor) collapse to a uniform mid-tone: the
+    // per-vertex colour variation paints facets onto a big flat chunk that streak
+    // at grazing angles, so the detail (slope rock, patches, water, snow) only
+    // emerges as relief ramps in near the ground. The mid-tone matches the far
+    // sphere's tint, so the terrain↔sphere handoff is seamless too.
+    const midTone = GROUND_MID[this.planet.kind] ?? GROUND_MID.barren;
+    const uniformity = (1 - reliefFactor) * 0.7;
     const nor = geo.attributes.normal as THREE.BufferAttribute;
     for (let k = 0; k < verts; k++) {
       const r = rawH[k];
@@ -307,12 +350,10 @@ export class PlanetQuadtree {
         const slope = 1 - Math.min(1, Math.max(0, nor.getX(k) * up.x + nor.getY(k) * up.y + nor.getZ(k) * up.z));
         tmpCol.lerp(pal.rock, Math.min(1, slope * 2.2) * 0.85);
       }
-      // patchy tone variation so the ground isn't a flat sheet of one colour
-      tmpCol.multiplyScalar(0.82 + vary[k] * 0.34);
-      // snow on the high peaks (gives mountains a readable cap)
-      if (r > snow) tmpCol.lerp(SNOW, Math.min(1, (r - snow) / (prm.amp * 0.18)) * 0.8);
-      // water fills the low basins on terran worlds
-      if (water && r < sea) tmpCol.copy(WATER_DEEP).lerp(WATER_SHALLOW, Math.max(0, r / sea));
+      tmpCol.multiplyScalar(0.82 + vary[k] * 0.34);            // patchy tone variation
+      if (r > snow) tmpCol.lerp(SNOW, Math.min(1, (r - snow) / (prm.amp * 0.18)) * 0.8); // snow caps
+      if (water && r < sea) tmpCol.copy(WATER_DEEP).lerp(WATER_SHALLOW, Math.max(0, r / sea)); // basins
+      if (uniformity > 0.001) tmpCol.lerp(midTone, uniformity); // far chunks → smooth uniform tone
       colArr[k * 3] = tmpCol.r; colArr[k * 3 + 1] = tmpCol.g; colArr[k * 3 + 2] = tmpCol.b;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
@@ -357,6 +398,13 @@ export class PlanetQuadtree {
           vec3 _ext = exp(-_de * _de);
           float _di = vFogDepth * uIns;
           float _ins = 1.0 - exp(-_di * _di);
+          // GRAZING fade: ground seen edge-on (toward the horizon) is where coarse
+          // chunks sliver into streaks — so dissolve it into the sky, while the
+          // ground you look down at (the landing zone) stays crisp and clear.
+          float _graze = 1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition)));
+          float _gz = smoothstep(0.62, 0.985, _graze) * smoothstep(2500.0, 9000.0, vFogDepth);
+          _ext *= (1.0 - _gz);
+          _ins = max(_ins, _gz);
           gl_FragColor.rgb = gl_FragColor.rgb * _ext + uInsCol * _ins;
         #endif`,
       );
