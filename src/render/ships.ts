@@ -70,6 +70,50 @@ function mat(color: number, rough = 0.8, metal = 0.6): THREE.MeshStandardMateria
   });
 }
 
+// Tinted cockpit glass: dark, glossy, a faint inner glow so it reads as a lit
+// canopy rather than a black hole. Returns the glass plus an optional frame.
+function canopy(w: number, h: number, d: number): THREE.Mesh {
+  const glass = new THREE.MeshStandardMaterial({
+    color: 0x0e1820, roughness: 0.12, metalness: 0.95,
+    emissive: 0x16314a, emissiveIntensity: 0.7, flatShading: true,
+  });
+  return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), glass);
+}
+
+// Scatter small hull detail (vents, boxes, conduit) over a region so the
+// primitive forms read as built, lived-in machinery instead of toy blocks.
+function greeble(g: THREE.Group, seed: number, n: number, ext: { x: number; y: number; z: number }): void {
+  const rng = new Rng(seed);
+  for (let i = 0; i < n; i++) {
+    const w = rng.range(0.25, 0.9), h = rng.range(0.15, 0.5), d = rng.range(0.3, 1.4);
+    const b = new THREE.Mesh(
+      new THREE.BoxGeometry(w, h, d),
+      mat(rng.chance(0.5) ? HULL_DARK : HULL_GRAY, rng.range(0.7, 0.95), 0.55),
+    );
+    b.position.set(rng.range(-ext.x, ext.x), ext.y + h * 0.5, rng.range(-ext.z, ext.z));
+    b.rotation.y = rng.chance(0.3) ? rng.range(-0.3, 0.3) : 0;
+    g.add(b);
+  }
+  // a couple of thin antennae/whip aerials
+  for (let i = 0; i < 2; i++) {
+    const len = rng.range(1.2, 2.6);
+    const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, len, 4), mat(0x1c1e20, 0.6, 0.7));
+    ant.position.set(rng.range(-ext.x, ext.x), ext.y + len * 0.5, rng.range(-ext.z, ext.z));
+    ant.rotation.x = rng.range(-0.15, 0.15);
+    g.add(ant);
+  }
+}
+
+// A flared engine intake ring set just ahead of a nacelle's thruster.
+function intakeRing(radius: number, z: number, x: number, y: number): THREE.Mesh {
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(radius, radius * 0.22, 8, 14),
+    mat(0x303336, 0.5, 0.85),
+  );
+  ring.position.set(x, y, z);
+  return ring;
+}
+
 export interface ShipView {
   group: THREE.Group;
   thrusters: THREE.Mesh[];
@@ -165,8 +209,8 @@ function addLights(view: ShipView): void {
     }));
     glow.position.copy(t.position);
     glow.position.z += sz * 1.5;
-    glow.scale.setScalar(sz * 7);
-    glow.userData.baseScale = sz * 7;
+    glow.scale.setScalar(sz * 5.5);
+    glow.userData.baseScale = sz * 5.5;
     view.group.add(glow);
     view.glows.push(glow);
   }
@@ -174,23 +218,49 @@ function addLights(view: ShipView): void {
 
 function buildShuttle(): ShipView {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.4, 8.5), mat(HULL_GRAY));
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(1.7, 3.2, 4), mat(HULL_DARK));
+  // tapered fuselage: a wider aft body stepping down to a narrow forebody, with
+  // a layered belly — a real airframe silhouette, not a single block
+  const aft = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.5, 4.6), mat(HULL_GRAY));
+  aft.position.z = 1.6;
+  const mid = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.2, 3.4), mat(HULL_GRAY));
+  mid.position.z = -1.4;
+  const fore = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.7, 3.0), mat(HULL_DARK));
+  fore.position.set(0, -0.15, -4.0);
+  const belly = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.9, 8.2), mat(HULL_DARK, 0.9, 0.5));
+  belly.position.set(0, -1.2, 0.4);
+  // chiselled nose (6-sided, flat top) instead of a 4-sided toy cone
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(1.35, 2.8, 6), mat(HULL_DARK));
   nose.rotation.x = -Math.PI / 2;
-  nose.rotation.y = Math.PI / 4;
-  nose.position.z = -5.5;
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.1, 2.2), mat(0x222a30, 0.3, 0.9));
-  cabin.position.set(0, 1.4, -2.2);
-  const engL = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.1, 3.6, 6), mat(RUST));
-  engL.rotation.x = Math.PI / 2;
-  engL.position.set(-2.4, -0.2, 2.6);
-  const engR = engL.clone();
-  engR.position.x = 2.4;
-  const tL = thruster(0.8);
-  tL.position.set(-2.4, -0.2, 4.8);
-  const tR = thruster(0.8);
-  tR.position.set(2.4, -0.2, 4.8);
-  g.add(body, nose, cabin, engL, engR, tL, tR);
+  nose.position.set(0, -0.2, -6.2);
+  // raked cockpit canopy + a thin frame brow
+  const glass = canopy(2.0, 0.95, 2.4);
+  glass.position.set(0, 1.05, -2.7);
+  glass.rotation.x = -0.22;
+  const brow = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.25, 0.4), mat(HULL_DARK));
+  brow.position.set(0, 1.55, -3.9);
+  // dorsal spine + winglets
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 5.2), mat(HULL_DARK));
+  spine.position.set(0, 1.35, 0.8);
+  for (const side of [-1, 1]) {
+    const winglet = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.22, 1.8), mat(HULL_DARK, 0.9, 0.45));
+    winglet.position.set(side * 2.7, -0.2, 2.6);
+    winglet.rotation.z = side * 0.18;
+    g.add(winglet);
+  }
+  // twin engine nacelles with intake rings; thrusters at their tails
+  const eng: THREE.Mesh[] = [];
+  const tL = thruster(0.8), tR = thruster(0.8);
+  const ts = [tL, tR];
+  [-1, 1].forEach((side, i) => {
+    const nac = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.05, 4.2, 10), mat(RUST, 0.85, 0.55));
+    nac.rotation.x = Math.PI / 2;
+    nac.position.set(side * 2.3, -0.15, 2.4);
+    eng.push(nac);
+    g.add(intakeRing(0.95, 0.2, side * 2.3, -0.15));
+    ts[i].position.set(side * 2.3, -0.15, 4.7);
+  });
+  g.add(aft, mid, fore, belly, nose, glass, brow, spine, ...eng, tL, tR);
+  greeble(g, 0x5117, 7, { x: 1.4, y: 1.05, z: 2.4 });
   return { group: g, thrusters: [tL, tR], kind: 'shuttle', glows: [] };
 }
 
@@ -199,13 +269,18 @@ function buildHauler(): ShipView {
   const spine = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 18), mat(HULL_DARK));
   const cab = new THREE.Mesh(new THREE.BoxGeometry(4.6, 3.6, 4), mat(HULL_GRAY));
   cab.position.z = -10;
-  const window = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1, 0.4), mat(0x223038, 0.3, 0.9));
-  window.position.set(0, 0.8, -12);
+  const glass = canopy(3.6, 1.1, 0.5);
+  glass.position.set(0, 0.8, -12);
+  glass.rotation.x = -0.12;
   for (let i = 0; i < 3; i++) {
     const box = new THREE.Mesh(new THREE.BoxGeometry(5.4, 4.2, 4.6), mat(i % 2 ? 0x5a4f3a : 0x4a5560, 0.95, 0.3));
     box.position.z = -3.5 + i * 5.4;
     box.position.y = 0.5;
     g.add(box);
+    // cargo strap ribs across each container
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(5.7, 0.3, 0.5), mat(0x2a2c2e, 0.9, 0.4));
+    rib.position.set(0, 0.5, box.position.z);
+    g.add(rib);
   }
   const eng = new THREE.Mesh(new THREE.BoxGeometry(5, 4, 3), mat(RUST));
   eng.position.z = 10;
@@ -213,16 +288,22 @@ function buildHauler(): ShipView {
   t1.position.set(-1.4, 0, 12.2);
   const t2 = thruster(1.1);
   t2.position.set(1.4, 0, 12.2);
-  g.add(spine, cab, window, eng, t1, t2);
+  g.add(intakeRing(1.1, 11, -1.4, 0), intakeRing(1.1, 11, 1.4, 0));
+  g.add(spine, cab, glass, eng, t1, t2);
+  greeble(g, 0x4a17, 6, { x: 1.8, y: 1.5, z: 4 });
   return { group: g, thrusters: [t1, t2], kind: 'hauler', glows: [] };
 }
 
 function buildProspector(): ShipView {
   const g = new THREE.Group();
-  const pod = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 7, 8), mat(HULL_GRAY));
+  const pod = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 7, 10), mat(HULL_GRAY));
   pod.rotation.x = Math.PI / 2;
-  const cab = new THREE.Mesh(new THREE.SphereGeometry(1.9, 10, 8), mat(0x2a3238, 0.4, 0.8));
+  const cab = new THREE.Mesh(new THREE.SphereGeometry(1.9, 12, 9), mat(0x2a3238, 0.4, 0.8));
   cab.position.z = -4.2;
+  const visor = canopy(2.0, 1.0, 1.4);
+  visor.position.set(0, 0.7, -4.6);
+  visor.rotation.x = -0.25;
+  g.add(visor);
   // drill arms
   for (const side of [-1, 1]) {
     const arm = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 6.5), mat(HULL_DARK));
@@ -232,33 +313,40 @@ function buildProspector(): ShipView {
     drill.position.set(side * 3.1, -0.6, -6.6);
     g.add(arm, drill);
   }
-  const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 4, 8), mat(RUST));
+  const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 4, 10), mat(RUST));
   tank.rotation.z = Math.PI / 2;
   tank.position.set(0, 2.4, 1);
   const t1 = thruster(1.0);
   t1.position.set(0, 0, 4.8);
-  g.add(pod, cab, tank, t1);
+  g.add(pod, cab, tank, t1, intakeRing(1.0, 3.0, 0, 0));
+  greeble(g, 0x9317, 5, { x: 1.6, y: 2.6, z: 2 });
   return { group: g, thrusters: [t1], kind: 'prospector', glows: [] };
 }
 
 function buildInterceptor(): ShipView {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.ConeGeometry(1.8, 11, 5), mat(HULL_GRAY));
+  const body = new THREE.Mesh(new THREE.ConeGeometry(1.8, 11, 6), mat(HULL_GRAY));
   body.rotation.x = -Math.PI / 2;
-  const cab = new THREE.Mesh(new THREE.SphereGeometry(1.1, 8, 6), mat(0x202c34, 0.3, 0.9));
-  cab.position.set(0, 0.9, -1);
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 7), mat(HULL_DARK));
+  spine.position.set(0, 0.7, 1.5);
+  const glass = canopy(1.3, 0.8, 2.0);
+  glass.position.set(0, 0.85, -1.2);
+  glass.rotation.x = -0.3;
   for (const side of [-1, 1]) {
     const wingShape = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.3, 3.4), mat(HULL_DARK));
     wingShape.position.set(side * 3.6, 0, 1.8);
     wingShape.rotation.z = side * 0.12;
+    // wingtip + cannon
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 2.2), mat(0x6e3326, 0.8, 0.5));
+    tip.position.set(side * 6.4, 0.1, 1.6);
     const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 3.4, 6), mat(0x303336, 0.4, 0.9));
     gun.rotation.x = Math.PI / 2;
     gun.position.set(side * 5.6, -0.2, -0.6);
-    g.add(wingShape, gun);
+    g.add(wingShape, tip, gun);
   }
   const t1 = thruster(1.0);
   t1.position.set(0, 0, 5.9);
-  g.add(body, cab, t1);
+  g.add(body, spine, glass, t1);
   return { group: g, thrusters: [t1], kind: 'interceptor', glows: [] };
 }
 
@@ -267,11 +355,18 @@ function buildFreighter(): ShipView {
   const spine = new THREE.Mesh(new THREE.BoxGeometry(5, 5, 34), mat(HULL_DARK));
   const bridge = new THREE.Mesh(new THREE.BoxGeometry(7, 6, 5), mat(HULL_GRAY));
   bridge.position.set(0, 1.5, -17);
+  const glass = canopy(5.4, 1.2, 0.6);
+  glass.position.set(0, 2.6, -19.4);
+  glass.rotation.x = -0.15;
   for (let i = 0; i < 4; i++) {
     for (const side of [-1, 1]) {
       const rack = new THREE.Mesh(new THREE.BoxGeometry(5.5, 6.5, 6.5), mat(i % 2 ? 0x55492f : 0x3f4c58, 0.95, 0.25));
       rack.position.set(side * 5.4, 0, -9 + i * 6.9);
       g.add(rack);
+      // container locking ribs
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(5.8, 6.8, 0.5), mat(0x26282a, 0.9, 0.4));
+      rib.position.set(side * 5.4, 0, rack.position.z);
+      g.add(rib);
     }
   }
   const eng = new THREE.Mesh(new THREE.BoxGeometry(9, 7, 5), mat(RUST));
@@ -281,9 +376,10 @@ function buildFreighter(): ShipView {
     const t = thruster(1.5);
     t.position.set(x, 0, 22.5);
     ts.push(t);
-    g.add(t);
+    g.add(t, intakeRing(1.5, 20, x, 0));
   }
-  g.add(spine, bridge, eng);
+  g.add(spine, bridge, glass, eng);
+  greeble(g, 0xf317, 9, { x: 2.2, y: 2.5, z: 14 });
   return { group: g, thrusters: ts, kind: 'freighter', glows: [] };
 }
 
@@ -391,6 +487,6 @@ export function updateThrusters(view: ShipView, e: Entity): void {
     const flicker = 0.88 + Math.random() * 0.24;
     const base = glow.userData.baseScale as number;
     glow.scale.setScalar(base * (0.5 + power * 0.9) * flicker);
-    (glow.material as THREE.SpriteMaterial).opacity = Math.min(0.95, 0.12 + power * 0.7);
+    (glow.material as THREE.SpriteMaterial).opacity = Math.min(0.8, 0.1 + power * 0.6);
   }
 }

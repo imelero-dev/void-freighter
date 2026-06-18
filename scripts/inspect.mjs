@@ -71,6 +71,23 @@ async function main() {
     };
   });
 
+  // ---- player ship beauty shot: daylit terran surface, chase cam ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const e = w.sim.entities.get(w.playerId);
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 900));
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    window.IN.place(pos, horiz, un);
+    e.throttle = 0.5;
+  });
+  await page.keyboard.press('KeyV'); // chase
+  await sleep(900);
+  await shot('00_ship_chase');
+  await page.keyboard.press('KeyV');
+  await sleep(300);
+
   // ---- station: morrow_granary (terran neighbour, lit) ----
   const stInfo = await page.evaluate(() => {
     const w = window.VF.world; const V = window.VF.vec;
