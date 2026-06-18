@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import type { PlanetDef } from '../sim/types';
 import { heightField, TERRAIN } from '../sim/terrain';
+import { fbm2 } from '../sim/rng';
 import type { SceneManager } from './scene';
 
 const GRID = 32;            // cells per chunk edge (33×33 vertices) — fine detail per chunk
@@ -27,6 +28,9 @@ const SKIRTS = false; // skirts on big grazing chunks read as streak-walls; the
                       // hides the far ones, so we skip them
 
 const WHITE = new THREE.Color(0xffffff);
+const SNOW = new THREE.Color(0xeef2f6);
+const WATER_DEEP = new THREE.Color(0x1c3a5e);
+const WATER_SHALLOW = new THREE.Color(0x2f6f86);
 
 const GROUND: Record<string, { lo: THREE.Color; hi: THREE.Color; rock: THREE.Color }> = {
   rocky:  { lo: new THREE.Color(0x4a4138), hi: new THREE.Color(0x9c8d76), rock: new THREE.Color(0x332c25) },
@@ -228,15 +232,20 @@ export class PlanetQuadtree {
     // 2 km ridge without slivering), gives the flat-far / detailed-near read of real
     // aerial perspective, and the gradual growth as you descend is hidden by haze.
     const reliefFactor = Math.max(0.12, Math.min(1, (node.level - 3) / 7));
+    const rawH = new Float32Array(verts); // unattenuated height (LOD-stable colouring)
+    const vary = new Float32Array(verts);  // patchy tone variation
     // pass 1: grid positions (relative to the chunk anchor) + heights
     for (let j = 0; j < n; j++) {
       const v = node.v0 + (node.v1 - node.v0) * (j / GRID);
       for (let i = 0; i < n; i++) {
         const u = node.u0 + (node.u1 - node.u0) * (i / GRID);
         cubeToSphere(F.n.x + F.a.x * u + F.b.x * v, F.n.y + F.a.y * u + F.b.y * v, F.n.z + F.a.z * u + F.b.z * v, dir);
-        const h = heightField(this.planet.pos.x + dir.x * R, this.planet.pos.z + dir.z * R, seed, prm) * reliefFactor;
+        const wx = this.planet.pos.x + dir.x * R, wz = this.planet.pos.z + dir.z * R;
+        const r = heightField(wx, wz, seed, prm);
+        const h = r * reliefFactor;
         const k = j * n + i;
-        heights[k] = h;
+        heights[k] = h; rawH[k] = r;
+        vary[k] = fbm2(wx * 0.00085, wz * 0.00085, seed ^ 0x55a3, 3); // 0..1 patchy
         pos[k * 3] = this.planet.pos.x + dir.x * (R + h) - ax.x;
         pos[k * 3 + 1] = this.planet.pos.y + dir.y * (R + h) - ax.y;
         pos[k * 3 + 2] = this.planet.pos.z + dir.z * (R + h) - ax.z;
@@ -284,17 +293,26 @@ export class PlanetQuadtree {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setIndex(idx);
     geo.computeVertexNormals();
-    // pass 2: colour by height + slope (after normals exist)
+    // pass 2: colour by height + slope (after normals exist). Uses the RAW
+    // (unattenuated) height so coastlines/snowlines stay put across LOD levels.
+    const water = this.planet.kind === 'terran';
+    const sea = prm.amp * 0.16;       // sea level (raw height) on water worlds
+    const snow = prm.amp * 0.82;      // snow cap on high peaks
     const nor = geo.attributes.normal as THREE.BufferAttribute;
     for (let k = 0; k < verts; k++) {
-      const t = Math.min(1, Math.max(0, heights[k] / prm.amp));
+      const r = rawH[k];
+      const t = Math.min(1, Math.max(0, r / prm.amp));
       tmpCol.copy(pal.lo).lerp(pal.hi, Math.pow(t, 0.7));
-      // skirt vertices (k >= gridVerts) skip the slope→rock term: their sideways
-      // normal would read as cliff and paint a dark wall, defeating the hide
       if (k < gridVerts) {
         const slope = 1 - Math.min(1, Math.max(0, nor.getX(k) * up.x + nor.getY(k) * up.y + nor.getZ(k) * up.z));
         tmpCol.lerp(pal.rock, Math.min(1, slope * 2.2) * 0.85);
       }
+      // patchy tone variation so the ground isn't a flat sheet of one colour
+      tmpCol.multiplyScalar(0.82 + vary[k] * 0.34);
+      // snow on the high peaks (gives mountains a readable cap)
+      if (r > snow) tmpCol.lerp(SNOW, Math.min(1, (r - snow) / (prm.amp * 0.18)) * 0.8);
+      // water fills the low basins on terran worlds
+      if (water && r < sea) tmpCol.copy(WATER_DEEP).lerp(WATER_SHALLOW, Math.max(0, r / sea));
       colArr[k * 3] = tmpCol.r; colArr[k * 3 + 1] = tmpCol.g; colArr[k * 3 + 2] = tmpCol.b;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
