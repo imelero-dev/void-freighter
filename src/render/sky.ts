@@ -43,13 +43,18 @@ export class SkyDome {
         void main() {
           vec3 d = normalize(vDir);
           float h = clamp(dot(d, uUp), 0.0, 1.0);
-          vec3 sky = mix(uHorizon, uZenith, pow(h, 0.55));
-          // hazy band right at the horizon
-          sky = mix(sky, uHorizon * 1.08, smoothstep(0.18, 0.0, h));
+          // deep gradient: rich overhead, paling to a bright hazy horizon — the
+          // aerial-perspective sky of a thick atmosphere
+          vec3 sky = mix(uHorizon, uZenith, pow(h, 0.42));
+          // a luminous haze band hugging the horizon, brightest toward the sun
+          float sunAz = max(dot(normalize(d - uUp * dot(d, uUp)), normalize(uSun - uUp * dot(uSun, uUp))), 0.0);
+          float band = smoothstep(0.32, 0.0, h);
+          sky = mix(sky, uHorizon * (1.05 + 0.5 * sunAz), band * (0.5 + 0.5 * sunAz));
+          // the sun: a soft disc with a tight inner flare and a broad scatter glow
           float s = max(dot(d, uSun), 0.0);
-          float disc = smoothstep(0.9965, 0.9992, s);        // the sun's disc
-          float glow = pow(s, 7.0) * 0.5 + pow(s, 120.0) * 1.2; // bloom around it
-          vec3 col = sky + uSunCol * (glow + disc * 6.0);
+          float disc = smoothstep(0.9990, 0.99975, s);
+          float glow = pow(s, 6.0) * 0.35 + pow(s, 60.0) * 0.7;
+          vec3 col = sky + uSunCol * (glow + disc * 3.0);
           gl_FragColor = vec4(col, uOpacity);
         }`,
     });
@@ -70,10 +75,11 @@ export class SkyDome {
     const u = this.mat.uniforms;
     (u.uUp.value as THREE.Vector3).copy(tmpUp);
     (u.uSun.value as THREE.Vector3).copy(tmpSun);
-    // horizon pale wash of the sky tint; zenith a deeper version of it
-    (u.uHorizon.value as THREE.Color).copy(skyColor).lerp(new THREE.Color(0xffffff), 0.35);
-    (u.uZenith.value as THREE.Color).copy(skyColor).multiplyScalar(0.6);
-    u.uOpacity.value = Math.min(1, density * 1.2);
+    // horizon pale wash of the sky tint; zenith a deeper, richer version of it —
+    // the contrast is what gives the sky atmospheric depth
+    (u.uHorizon.value as THREE.Color).copy(skyColor).lerp(new THREE.Color(0xffffff), 0.45);
+    (u.uZenith.value as THREE.Color).copy(skyColor).multiplyScalar(0.42);
+    u.uOpacity.value = Math.min(1, density * 1.35);
     this.mesh.visible = true;
   }
 }

@@ -18,7 +18,7 @@ import { integrateFlight } from './flight';
 import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
-import { ATMO_DRAG, atmoGravity, atmosphereAt, dangerAt, generateSystem, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
+import { ATMO_DRAG, atmoGravity, atmoHeight, atmosphereAt, dangerAt, generateSystem, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
 import { dockCheck, hangarFrame, insideHangar, padPoint, vtolUpRef } from './docking';
 import { terrainHeight, terrainNormal, type TerrainBody } from './terrain';
 import { TrafficSystem } from './traffic';
@@ -41,9 +41,9 @@ const FRAGMENT_TTL = 150;
 const VTOL_SPEED_FACTOR = 0.22;  // forward-speed envelope in VTOL hover mode
 const ZERO_VEL: Vec3 = { x: 0, y: 0, z: 0 }; // stationary collider reference
 const LAVA_HEAT_DPS = 55;        // hull heat per second in a lava world's air
-const CRUISE_PLANET_STANDOFF = 160_000; // m above a planet surface where cruise drops you (~2.7 min at full turbo)
+const CRUISE_PLANET_STANDOFF = 95_000;  // hard cap on the drop altitude; the real standoff is the planet's own atmosphere height (~3 min powered descent at full turbo)
 const DOCK_SETTLE_S = 0.7;       // settle dwell on the pad before the dock menu opens
-const CRUISE_MOON_STANDOFF = 60_000;    // m above a moon surface
+const CRUISE_MOON_STANDOFF = 35_000;    // m above a moon surface (airless, so a closer drop)
 const LOOT_TTL = 240;
 const MISSILE_SPEED = 700;
 const MISSILE_TURN = 2.8;        // rad/s
@@ -840,15 +840,17 @@ export class Sim {
 
   // Max cruise speed allowed at a position: distance to the nearest mass edge
   // divided by 3 (so you always have ~3 s of braking room), floored near zero.
-  // Planets/moons use a FIXED low-altitude standoff (not a fraction of their
-  // radius) so the cruise drops you a sane ~150 km above the surface no matter
-  // how big the world is — a couple of minutes' burn from the ground, not the
-  // ~450 km a radius-proportional lock gave on the (now huge) planets.
+  // A planet's standoff is its OWN atmosphere height (capped) so the cruise
+  // drops you right at the atmospheric interface — the edge of the air, a
+  // ~3-minute powered descent from the deck — and the entry/transition begins
+  // exactly where the drive can no longer push. Moons (airless) keep a small
+  // fixed standoff.
   private massSpeedCap(pos: Vec3): number {
     let edge = Infinity;
     edge = Math.min(edge, vlen(pos) - this.system.starRadius * 2.2);
     for (const p of this.system.planets) {
-      edge = Math.min(edge, vdist(pos, p.pos) - p.radius - CRUISE_PLANET_STANDOFF);
+      const standoff = Math.min(atmoHeight(p), CRUISE_PLANET_STANDOFF);
+      edge = Math.min(edge, vdist(pos, p.pos) - p.radius - standoff);
     }
     for (const m of this.system.moons) {
       edge = Math.min(edge, vdist(pos, m.pos) - m.radius - CRUISE_MOON_STANDOFF);

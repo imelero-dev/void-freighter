@@ -237,6 +237,41 @@ async function main() {
   await shot('11_landing_dust');
   await page.evaluate(() => { delete window.VF.botInput; });
 
+  // ---- approach from space: the atmospheric halo arcing the planet's limb ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    // the lit hemisphere faces the star at the origin: sit on that side, well
+    // back, so the planet is a 3/4 disc with the glowing limb clearly arcing it
+    const toSun = V.vnorm(V.vscale(p.pos, -1));
+    const side = V.vnorm(V.vcross(toSun, { x: 0, y: 1, z: 0 }));
+    const dir = V.vnorm(V.vadd(V.vscale(toSun, 0.7), V.vadd(V.vscale(side, 0.5), { x: 0, y: 0.35, z: 0 })));
+    const pos = V.vadd(p.pos, V.vscale(dir, p.radius + 900_000)); // ~900 km out
+    const look = V.vnorm(V.vsub(p.pos, pos));
+    window.IN.place(pos, look, { x: 0, y: 1, z: 0 });
+  });
+  await sleep(1000);
+  await shot('12_entry_space');
+
+  // ---- atmospheric entry transition: descend the day side, nose down, fast.
+  //      Captures the surface resolving + the re-entry plasma sheath. ----
+  for (const altKm of [52, 28, 9]) {
+    await page.evaluate((altKm) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+      const sun = V.vnorm(V.vscale(p.pos, -1)); // lit hemisphere
+      const un = V.vnorm({ x: sun.x * 0.6 + 0.2, y: 0.78, z: sun.z * 0.6 + 0.1 });
+      const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
+      const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.9))); // steep dive
+      window.IN.place(pos, look, un);
+      const e = w.sim.entities.get(w.playerId);
+      e.vel = V.vscale(look, 360); // diving fast → entry heat
+    }, altKm);
+    await sleep(900);
+    await shot(`12_entry_${altKm}km`);
+  }
+
   await browser.close();
   server.close();
   if (errors.length) { console.error('PAGE ERRORS:\n' + errors.join('\n')); process.exit(1); }

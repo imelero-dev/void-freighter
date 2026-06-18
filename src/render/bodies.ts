@@ -6,7 +6,9 @@ import * as THREE from 'three';
 import { Rng, fbm2, fbm3 } from '../sim/rng';
 import type { PlanetDef, StationDef, SystemDef } from '../sim/types';
 import { hangarFrame } from '../sim/docking';
+import { atmoHeight } from '../sim/system';
 import { FAR_SCALE, SceneManager } from './scene';
+import { GROUND_MID } from './terrain';
 
 const tmp = new THREE.Vector3();
 
@@ -116,7 +118,9 @@ function cloudTexture(seed: number): THREE.CanvasTexture {
   return tex;
 }
 
-// rim-glow atmosphere shader
+// Rim-glow atmosphere shader — the bright limb halo you see ringing an
+// atmospheric world from space (the signature blue arc on a planet's edge). A
+// soft inner falloff plus a hot thin rim, brightened on the sun-lit side.
 function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     transparent: true,
@@ -125,18 +129,26 @@ function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
     depthWrite: false,
     uniforms: { c: { value: color } },
     vertexShader: `
-      varying vec3 vN; varying vec3 vV;
+      varying vec3 vN; varying vec3 vV; varying vec3 vWN; varying vec3 vWorld;
       void main() {
         vN = normalize(normalMatrix * normal);
+        vWN = normalize(mat3(modelMatrix) * normal);
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         vV = normalize(-mv.xyz);
+        vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `
-      uniform vec3 c; varying vec3 vN; varying vec3 vV;
+      uniform vec3 c; varying vec3 vN; varying vec3 vV; varying vec3 vWN; varying vec3 vWorld;
       void main() {
-        float rim = pow(1.0 - abs(dot(vN, vV)), 2.6);
-        gl_FragColor = vec4(c, rim * 0.55);
+        float f = 1.0 - abs(dot(vN, vV));
+        // broad scatter haze across the disc + a hot thin limb at the very edge
+        float halo = pow(f, 1.7) * 0.85 + pow(f, 5.5) * 1.4;
+        // the star sits at the world origin: brighten the sun-lit hemisphere of
+        // the shell and fade the night side, so the halo arcs like real scatter
+        vec3 sunDir = normalize(-vWorld);
+        float lit = clamp(0.35 + 0.75 * dot(vWN, sunDir), 0.0, 1.0);
+        gl_FragColor = vec4(c, clamp(halo * lit, 0.0, 1.0));
       }`,
   });
 }
@@ -425,6 +437,7 @@ export class BodiesLayer {
   private planetMeshes: { def: PlanetDef; mesh: THREE.Mesh }[] = [];
   private clouds: THREE.Mesh[] = [];
   private starMesh: THREE.Group;
+  private entryBlendId = '';
 
   constructor(private sm: SceneManager, system: SystemDef) {
     // star
@@ -455,13 +468,23 @@ export class BodiesLayer {
       if (solid) displacePlanet(geo, p.colorSeed, p.kind, p.radius * FAR_SCALE * 0.004);
       const mesh = new THREE.Mesh(
         geo,
-        new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0, flatShading: false }),
+        // a faint self-glow from the surface texture keeps the night side from
+        // reading as a black hole punched in the starfield during a dark-side
+        // descent — lava glows hot, the rest just barely lifts off pure black
+        new THREE.MeshStandardMaterial({
+          map: tex, roughness: 1, metalness: 0, flatShading: false,
+          emissiveMap: tex, emissive: 0xffffff,
+          emissiveIntensity: p.kind === 'lava' ? 0.35 : 0.06,
+        }),
       );
       if (p.kind !== 'barren' && p.kind !== 'rocky') {
         const atmoColor = p.kind === 'lava' ? new THREE.Color(0xcc4422)
           : p.kind === 'gas' ? new THREE.Color(0xcc9966)
             : p.kind === 'ice' ? new THREE.Color(0x88bbdd) : new THREE.Color(0x6699cc);
-        const atmo = new THREE.Mesh(new THREE.SphereGeometry(p.radius * FAR_SCALE * 1.04, 48, 24), atmosphereMaterial(atmoColor));
+        // the halo shell stands off the surface by the real atmosphere height so
+        // the glowing arc reads at the right scale from space
+        const shellR = (p.radius + atmoHeight(p) * 1.6) * FAR_SCALE;
+        const atmo = new THREE.Mesh(new THREE.SphereGeometry(shellR, 64, 32), atmosphereMaterial(atmoColor));
         mesh.add(atmo);
       }
       // weather: a drifting broken-cloud shell on worlds that have an ocean/ice
@@ -529,6 +552,27 @@ export class BodiesLayer {
       sm.far.add(marker);
       this.stations.push({ def, group, ring, blinkers, marker, hatch, guides, chevrons });
     }
+  }
+
+  // As the near ground cap fades in on a descent, tint the descended planet's
+  // far-scene sphere toward the local ground tone so the brief cross-fade at the
+  // atmosphere interface has nothing to seam against. Reset every other planet to
+  // its true surface texture (white tint).
+  setEntryBlend(planetId: string, blend: number): void {
+    if (this.entryBlendId === planetId && (planetId === '' || blend <= 0)) {
+      if (planetId === '') return;
+    }
+    for (const { def, mesh } of this.planetMeshes) {
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      if (!mat || !mat.color) continue;
+      if (def.id === planetId && blend > 0) {
+        const g = GROUND_MID[def.kind] ?? GROUND_MID.barren;
+        mat.color.setRGB(1, 1, 1).lerp(g, Math.min(1, blend));
+      } else if (mat.color.r !== 1 || mat.color.g !== 1 || mat.color.b !== 1) {
+        mat.color.setRGB(1, 1, 1);
+      }
+    }
+    this.entryBlendId = planetId;
   }
 
   update(time: number): void {

@@ -9,6 +9,8 @@ import type { Vec3 } from '../sim/vec';
 
 export const FAR_SCALE = 1 / 1000;
 
+const WHITE = new THREE.Color(0xffffff);
+
 export class SceneManager {
   renderer: THREE.WebGLRenderer;
   near = new THREE.Scene();
@@ -99,8 +101,13 @@ export class SceneManager {
       // sky brightens from black (space) to full daylight colour at the surface
       this.skyBg.copy(color).multiplyScalar(Math.min(1, density * 1.15));
       this.far.background = this.skyBg;
-      this.nearFog.color.copy(color);
-      this.nearFog.density = density * density * 9e-5;
+      // AERIAL PERSPECTIVE: the haze is the pale HORIZON tone (the sky tint lifted
+      // toward white), not a dark blue — so distant terrain fades into a bright,
+      // layered sky exactly like a thick-atmosphere world seen from a cockpit,
+      // instead of meeting a hard dark band. Stronger (quadratic) so a few tens of
+      // km of thick air buries the ground in haze the way Earth's does.
+      this.nearFog.color.copy(color).lerp(WHITE, 0.4);
+      this.nearFog.density = density * density * 1.5e-4;
       this.near.fog = this.nearFog;
       // far-scene haze hides distant worlds in daylight. Far units are km, so a
       // density of ~7e-4 fully washes anything past ~2000 km while leaving the
@@ -108,7 +115,12 @@ export class SceneManager {
       // Ramps super-linearly so a thin high-altitude haze barely dims the view
       // but the thick air at the surface buries the rest of the system.
       this.farFog.color.copy(this.skyBg);
-      this.farFog.density = Math.pow(density, 1.5) * 9e-4;
+      // two regimes: a gentle base haze (buries the rest of the system from a lit
+      // surface) plus a steep near-surface term that only bites in thick air, so
+      // when you're deep in the atmosphere the far-scene planet sphere dissolves
+      // into the sky a few tens of km out — hiding the seam where the near ground
+      // patch meets it — while a high, thin-air descent still sees the world's curve.
+      this.farFog.density = Math.pow(density, 1.5) * 9e-4 + Math.pow(density, 4) * 0.02;
       this.far.fog = this.farFog;
       // skylight: the bright sky scatters daylight onto the surface so the
       // terrain (near patch AND the far-scene planet) is lit even away from the sun
@@ -125,6 +137,19 @@ export class SceneManager {
       this.ambientFar.color.copy(this.baseAmbient);
       this.ambientFar.intensity = 0.4;
     }
+  }
+
+  // Dynamic near far-plane. In space the near scene only needs ~80 km (stations,
+  // rocks). On atmospheric descent the ground cap reaches the horizon — hundreds
+  // of km — so we push the far plane out to clear it. Distant terrain detail is
+  // buried in haze, so the coarser depth precision out there never shows.
+  private nearFarPlane = 80_000;
+  setNearFarPlane(far: number): void {
+    const want = Math.max(80_000, Math.min(520_000, far));
+    if (Math.abs(this.nearFarPlane - want) < 1_000) return;
+    this.nearFarPlane = want;
+    this.camera.far = want;
+    this.camera.updateProjectionMatrix();
   }
 
   // dynamic FOV: widens with speed for a stronger sense of velocity

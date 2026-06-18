@@ -87,6 +87,7 @@ export class GameApp {
   private frameAtmoKind: PlanetKind = 'rocky';
   private starfield!: THREE.Group; // faded out as you descend into daylight
   private warpSmooth = 0; // eased hyperjump warp intensity
+  private entryHeatSmooth = 0; // eased atmospheric re-entry plasma intensity
 
   onExit: (() => void) | null = null;
 
@@ -684,6 +685,11 @@ export class GameApp {
     // headlight)
     const atmoDensity = ship ? this.frameAtmoDensity : 0;
     if (ship) this.terrain.update(w.system, ship.pos);
+    // the ground cap reaches the horizon on descent — fit the near far-plane to
+    // it (back to the tight 80 km default in space), and blend the far-scene
+    // planet toward the ground tone so the cross-fade at the interface is seamless
+    this.sm.setNearFarPlane(this.terrain.active ? this.terrain.reach : 80_000);
+    this.bodies.setEntryBlend(this.terrain.active ? this.terrain.planetId : '', this.terrain.blend);
     this.skyColor.setHex(SKY_COLORS[this.frameAtmoKind]);
     this.sm.setAtmosphere(this.skyColor, atmoDensity);
     if (ship) {
@@ -744,7 +750,18 @@ export class GameApp {
       else if (w.turboActive) warp = 0.25;
     }
     this.warpSmooth += (warp - this.warpSmooth) * Math.min(1, dt * 5);
-    this.post.render(w.time, Math.min(1, damageLevel), this.skyColor, atmoDensity, this.warpSmooth);
+    // atmospheric re-entry heat: tearing into thickening air at speed lights up a
+    // plasma sheath. Peaks fast in the upper-mid atmosphere, fades as you slow or
+    // the air thins out — the visual proof you've entered the atmosphere.
+    let entryHeat = 0;
+    if (ship && ship.cruise === 'off') {
+      const sp = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
+      const speedF = Math.max(0, Math.min(1, (sp - 170) / 380));
+      const densF = Math.max(0, Math.min(1, (atmoDensity - 0.015) / 0.32));
+      entryHeat = speedF * densF;
+    }
+    this.entryHeatSmooth += (entryHeat - this.entryHeatSmooth) * Math.min(1, dt * 3);
+    this.post.render(w.time, Math.min(1, damageLevel), this.skyColor, atmoDensity, this.warpSmooth, this.entryHeatSmooth);
     this.hud.draw(w, this.sm.origin, this.input.cursorX, this.input.cursorY, this.input.uiMode);
     if (this.map.isOpen) this.map.draw();
 

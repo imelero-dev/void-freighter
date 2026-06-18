@@ -18,6 +18,7 @@ const GritShader = {
     atmoColor: { value: new THREE.Color(0x6fa8d6) }, // sky tint inside an atmosphere
     atmoDensity: { value: 0 }, // 0..1 how deep in the air column you are
     warp: { value: 0 }, // 0..1 cruise/hyperjump warp intensity
+    entryHeat: { value: 0 }, // 0..1 atmospheric re-entry plasma glow
   },
   vertexShader: `
     varying vec2 vUv;
@@ -33,6 +34,7 @@ const GritShader = {
     uniform vec3 atmoColor;
     uniform float atmoDensity;
     uniform float warp;
+    uniform float entryHeat;
     varying vec2 vUv;
 
     float hash(vec2 p) {
@@ -55,8 +57,10 @@ const GritShader = {
         streak /= steps;
       }
 
-      // subtle chromatic aberration, stronger at the edges (amped under warp)
-      float ca = 0.0022 * dot(center, center) * 4.0 + warp * 0.012;
+      // subtle chromatic aberration, stronger at the edges (amped under warp).
+      // Kept gentle so high-contrast edges (a planet limb against space) don't
+      // fringe into a rainbow that reads as a rendering fault.
+      float ca = 0.0014 * dot(center, center) + warp * 0.011;
       vec2 dir = normalize(center + 1e-6);
       float r = texture2D(tDiffuse, uv + dir * ca).r;
       float g = texture2D(tDiffuse, uv).g;
@@ -80,6 +84,19 @@ const GritShader = {
       if (atmoDensity > 0.001) {
         float horizon = smoothstep(0.4, 0.05, vUv.y) * atmoDensity * 0.18;
         col = mix(col, atmoColor * 1.25, horizon);
+      }
+
+      // atmospheric re-entry: a hot plasma sheath glows up from the screen edges
+      // and flickers when you tear into thick air at speed — the unmistakable cue
+      // that you've hit the atmosphere and are committing to the descent.
+      if (entryHeat > 0.001) {
+        float edge = length(center * vec2(aspect, 1.0));
+        float flick = 0.75 + 0.25 * sin(time * 38.0) * sin(time * 17.0);
+        float sheath = smoothstep(0.3, 0.95, edge) * entryHeat * flick;
+        vec3 plasma = mix(vec3(1.0, 0.42, 0.12), vec3(1.0, 0.85, 0.55), entryHeat);
+        col += plasma * sheath * 0.9;
+        // a brighter leading flare low on screen (the bow shock ahead of you)
+        col += plasma * smoothstep(0.35, 0.0, vUv.y) * entryHeat * 0.5;
       }
 
       // vignette
@@ -122,12 +139,13 @@ export class PostPipeline {
     this.grit.uniforms.aspect.value = window.innerWidth / window.innerHeight;
   }
 
-  render(time: number, damageLevel: number, atmoColor?: THREE.Color, atmoDensity = 0, warp = 0): void {
+  render(time: number, damageLevel: number, atmoColor?: THREE.Color, atmoDensity = 0, warp = 0, entryHeat = 0): void {
     this.grit.uniforms.time.value = time;
     this.grit.uniforms.damage.value = damageLevel;
     if (atmoColor) (this.grit.uniforms.atmoColor.value as THREE.Color).copy(atmoColor);
     this.grit.uniforms.atmoDensity.value = atmoDensity;
     this.grit.uniforms.warp.value = warp;
+    this.grit.uniforms.entryHeat.value = entryHeat;
     this.composer.render();
   }
 }
