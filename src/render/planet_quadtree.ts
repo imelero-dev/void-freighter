@@ -18,13 +18,13 @@ import { fbm2 } from '../sim/rng';
 import { GROUND_MID } from './terrain';
 import type { SceneManager } from './scene';
 
-const GRID = 32;            // cells per chunk edge (33×33 vertices) — fine detail per chunk
-const SPLIT_RATIO = 0.4;    // split while chunkWorldSize / distance exceeds this
-const MAX_LEVEL = 10;       // capped: deeper levels starve the build budget and leave
-                            // coarse grazing chunks that streak. 10 + a dense grid gives
-                            // ~30 m cells near the ground without that artifact.
-const MAX_BUILDS_PER_FRAME = 20; // amortise chunk meshing to avoid hitches
-const SKIRTS = true;
+const GRID = 64;            // cells per chunk edge — MUST be a power of two for edge stitching
+const SPLIT_RATIO = 0.5;    // split while chunkWorldSize / distance exceeds this
+const MAX_LEVEL = 13;       // continuous LOD now stitches its own boundaries, so we can go deep
+const MAX_BUILDS_PER_FRAME = 14; // amortise chunk meshing to avoid hitches (64² is heavier)
+const SKIRTS = false; // replaced by edge stitching — matched edges, no T-junctions
+// worldSize(level) = R * WS_K / 2^level — used to invert distance → ideal LOD level
+const WS_K = (Math.PI / 4) * Math.SQRT2 * 2; // span of a whole face's quadtree root
 
 const WHITE = new THREE.Color(0xffffff);
 const SNOW = new THREE.Color(0xeef2f6);
@@ -72,6 +72,8 @@ interface QNode {
   centerDir: THREE.Vector3;  // unit sphere direction at the chunk centre
   worldSize: number;         // approximate chunk span on the surface (m)
   built: boolean;
+  edgeKey: number;           // packed stitch steps of the 4 edges at last build (-1 = none)
+  edgeSteps: number[];       // [S,N,W,E] stitch step per edge (power of two ≤ GRID)
 }
 
 export class PlanetQuadtree {
@@ -82,6 +84,7 @@ export class PlanetQuadtree {
   private tmpA = new THREE.Vector3();
   private tmpB = new THREE.Vector3();
   private tmpDir = new THREE.Vector3();
+  private tmpMid = new THREE.Vector3();
   private camWorld = new THREE.Vector3();
 
   // aerial-perspective uniforms (per-channel extinction + blue inscatter)
@@ -130,7 +133,29 @@ export class PlanetQuadtree {
     );
     // span ≈ great-circle arc across the node
     const worldSize = (u1 - u0) * R * (Math.PI / 4) * Math.SQRT2;
-    return { face, u0, v0, u1, v1, level, children: null, mesh: null, anchor, centerDir: dir, worldSize, built: false };
+    return { face, u0, v0, u1, v1, level, children: null, mesh: null, anchor, centerDir: dir, worldSize, built: false, edgeKey: -1, edgeSteps: [1, 1, 1, 1] };
+  }
+
+  // The ideal LOD level the distance-based metric assigns at a world distance.
+  // Both a chunk and its neighbour evaluate this at their SHARED edge midpoint, so
+  // they agree on the edge's resolution → stitched edges match with no T-junction.
+  private idealLevel(dist: number): number {
+    return Math.log2((this.planet.radius * WS_K) / (SPLIT_RATIO * Math.max(1, dist)));
+  }
+
+  // Stitch step (a power of two ≤ GRID) for one edge of a chunk: how many fine
+  // cells collapse into one coarse segment so the edge matches a coarser neighbour.
+  private edgeStep(level: number, midWorld: THREE.Vector3): number {
+    const d = this.tmpB.copy(midWorld).sub(this.camWorld).length();
+    const target = Math.max(0, Math.min(level, Math.round(this.idealLevel(d))));
+    return 1 << Math.min(6, level - target); // GRID=64 → max step 64
+  }
+
+  // world position of a cube-face (u,v) at the mean-radius sphere (for edge mids)
+  private faceMid(face: number, u: number, v: number, out: THREE.Vector3): THREE.Vector3 {
+    const F = FACES[face];
+    cubeToSphere(F.n.x + F.a.x * u + F.b.x * v, F.n.y + F.a.y * u + F.b.y * v, F.n.z + F.a.z * u + F.b.z * v, out);
+    return out.set(this.planet.pos.x + out.x * this.planet.radius, this.planet.pos.y + out.y * this.planet.radius, this.planet.pos.z + out.z * this.planet.radius);
   }
 
   // Decide split/merge against the camera each frame, then place visible leaves.
@@ -181,9 +206,17 @@ export class PlanetQuadtree {
       }
       // leaf: collapse any children, show this chunk
       if (node.children) this.collapse(node);
-      if (!node.built) {
+      // edge stitch steps from the shared edge midpoints (so neighbours agree)
+      const cu = (node.u0 + node.u1) / 2, cv = (node.v0 + node.v1) / 2;
+      const sS = this.edgeStep(node.level, this.faceMid(node.face, cu, node.v0, this.tmpMid));
+      const sN = this.edgeStep(node.level, this.faceMid(node.face, cu, node.v1, this.tmpMid));
+      const sW = this.edgeStep(node.level, this.faceMid(node.face, node.u0, cv, this.tmpMid));
+      const sE = this.edgeStep(node.level, this.faceMid(node.face, node.u1, cv, this.tmpMid));
+      const key = sS + sN * 128 + sW * 16384 + sE * 2097152;
+      if (!node.built || node.edgeKey !== key) {
+        node.edgeSteps[0] = sS; node.edgeSteps[1] = sN; node.edgeSteps[2] = sW; node.edgeSteps[3] = sE;
         if (builtThisFrame < MAX_BUILDS_PER_FRAME) { this.build(node); builtThisFrame++; }
-        else { this.buildQueue.push(node); }
+        else if (!node.built) { this.buildQueue.push(node); }
       }
       if (node.mesh) {
         node.mesh.visible = facing > -0.35; // drop the far backside of the globe
@@ -227,7 +260,7 @@ export class PlanetQuadtree {
     const F = FACES[node.face];
     const n = GRID + 1;
     const gridVerts = n * n;
-    const border = 4 * GRID;               // perimeter vertices that get a skirt
+    const border = SKIRTS ? 4 * GRID : 0;  // perimeter vertices that get a skirt
     const verts = gridVerts + border;
     const pos = new Float32Array(verts * 3);
     const colArr = new Float32Array(verts * 3);
@@ -267,6 +300,26 @@ export class PlanetQuadtree {
         pos[k * 3 + 2] = this.planet.pos.z + dir.z * (R + h) - ax.z;
       }
     }
+    // EDGE STITCH: collapse each border edge to its neighbour's coarser resolution
+    // by snapping the in-between vertices onto the straight segment between the kept
+    // (step-multiple) vertices. The neighbour samples the same coarse points, so the
+    // two edges become the same polyline — no T-junction, no crack, no skirt needed.
+    const snapEdge = (step: number, vk: (idx: number) => number) => {
+      if (step <= 1) return;
+      for (let a = 0; a < GRID; a += step) {
+        const k0 = vk(a), k1 = vk(a + step);
+        for (let o = 1; o < step; o++) {
+          const k = vk(a + o), f = o / step;
+          pos[k * 3] = pos[k0 * 3] + (pos[k1 * 3] - pos[k0 * 3]) * f;
+          pos[k * 3 + 1] = pos[k0 * 3 + 1] + (pos[k1 * 3 + 1] - pos[k0 * 3 + 1]) * f;
+          pos[k * 3 + 2] = pos[k0 * 3 + 2] + (pos[k1 * 3 + 2] - pos[k0 * 3 + 2]) * f;
+        }
+      }
+    };
+    snapEdge(node.edgeSteps[0], (i) => i);              // S: j=0 row
+    snapEdge(node.edgeSteps[1], (i) => GRID * n + i);   // N: j=GRID row
+    snapEdge(node.edgeSteps[2], (j) => j * n);          // W: i=0 column
+    snapEdge(node.edgeSteps[3], (j) => j * n + GRID);   // E: i=GRID column
     const idx: number[] = [];
     for (let j = 0; j < GRID; j++) {
       for (let i = 0; i < GRID; i++) {
@@ -357,7 +410,11 @@ export class PlanetQuadtree {
       colArr[k * 3] = tmpCol.r; colArr[k * 3 + 1] = tmpCol.g; colArr[k * 3 + 2] = tmpCol.b;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+    geo.setAttribute('aUp', new THREE.BufferAttribute(dirs, 3)); // smooth radial up for the grazing fade
     geo.computeBoundingSphere();
+    node.edgeKey = node.edgeSteps[0] + node.edgeSteps[1] * 128 + node.edgeSteps[2] * 16384 + node.edgeSteps[3] * 2097152;
+    // dispose the previous mesh when re-stitching this chunk (edge steps changed)
+    if (node.mesh) { this.group.remove(node.mesh); node.mesh.geometry.dispose(); }
     const mesh = new THREE.Mesh(geo, this.mat);
     mesh.receiveShadow = true;
     node.mesh = mesh;
@@ -390,7 +447,13 @@ export class PlanetQuadtree {
       shader.uniforms.uExt = this.aerial.uExt;
       shader.uniforms.uIns = this.aerial.uIns;
       shader.uniforms.uInsCol = this.aerial.uInsCol;
-      shader.fragmentShader = 'uniform vec3 uExt;\nuniform float uIns;\nuniform vec3 uInsCol;\n' + shader.fragmentShader;
+      // carry the smooth radial up + camera-relative world position to the fragment
+      shader.vertexShader = 'attribute vec3 aUp;\nvarying vec3 vUp;\nvarying vec3 vWPos;\n' + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <project_vertex>',
+        '#include <project_vertex>\n vUp = aUp;\n vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+      );
+      shader.fragmentShader = 'uniform vec3 uExt;\nuniform float uIns;\nuniform vec3 uInsCol;\nvarying vec3 vUp;\nvarying vec3 vWPos;\n' + shader.fragmentShader;
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <fog_fragment>',
         `#ifdef USE_FOG
@@ -398,11 +461,12 @@ export class PlanetQuadtree {
           vec3 _ext = exp(-_de * _de);
           float _di = vFogDepth * uIns;
           float _ins = 1.0 - exp(-_di * _di);
-          // GRAZING fade: ground seen edge-on (toward the horizon) is where coarse
-          // chunks sliver into streaks — so dissolve it into the sky, while the
+          // GRAZING fade keyed to the SMOOTH radial up (not the bumpy relief
+          // normal): ground seen edge-on toward the horizon — where the
+          // tessellation slivers into streaks — dissolves into the sky, while the
           // ground you look down at (the landing zone) stays crisp and clear.
-          float _graze = 1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition)));
-          float _gz = smoothstep(0.62, 0.985, _graze) * smoothstep(2500.0, 9000.0, vFogDepth);
+          float _graze = 1.0 - abs(dot(normalize(vWPos), normalize(vUp)));
+          float _gz = smoothstep(0.55, 0.93, _graze) * smoothstep(3000.0, 11000.0, vFogDepth);
           _ext *= (1.0 - _gz);
           _ins = max(_ins, _gz);
           gl_FragColor.rgb = gl_FragColor.rgb * _ext + uInsCol * _ins;

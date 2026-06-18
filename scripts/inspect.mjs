@@ -274,6 +274,24 @@ async function main() {
     await shot(`12_entry_${altKm}km`);
   }
 
+  // ---- LAVA world (Cinder) entry, grazing-ish — the world the player tested ----
+  for (const altKm of [30, 8]) {
+    await page.evaluate((altKm) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.kind === 'lava') || w.system.planets[0];
+      const sun = V.vnorm(V.vscale(p.pos, -1));
+      const un = V.vnorm({ x: sun.x * 0.5 + 0.3, y: 0.7, z: sun.z * 0.5 + 0.2 });
+      const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
+      const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.3))); // shallow, toward the horizon
+      window.IN.place(pos, look, un);
+      const e = w.sim.entities.get(w.playerId);
+      e.vel = V.vscale(look, 290);
+    }, altKm);
+    await sleep(900);
+    await shot(`14_lava_${altKm}km`);
+  }
+
   // ---- GRAZING views: look out toward the horizon from altitude (the angle that
   //      makes coarse chunks sliver into streaks). Deterministic teleports. ----
   for (const altKm of [40, 18, 6]) {
