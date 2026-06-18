@@ -163,9 +163,10 @@ export class TerrainPatch {
         '#include <normal_fragment_begin>',
         `#include <normal_fragment_begin>
          if (uDetail > 0.001) {
+           float _wb = step(vColor.r * 1.4, vColor.b) * step(0.04, vColor.b);
            vec2 ew = vec2(vfNoise(vWorldXZ * 0.005 + 13.0), vfNoise(vWorldXZ * 0.005 + 37.0));
            float H = (vfFbm(vWorldXZ * 0.085) + 0.45 * vfFbm(vWorldXZ * 0.35)
-                     + 0.3 * vfNoise(vWorldXZ * 0.018 + ew * 8.0)) * uDetail;
+                     + 0.3 * vfNoise(vWorldXZ * 0.018 + ew * 8.0)) * uDetail * (1.0 - _wb);
            vec2 dH = vec2(dFdx(H), dFdy(H));
            vec3 sx = dFdx(-vViewPosition); vec3 sy = dFdy(-vViewPosition);
            vec3 R1 = cross(sy, normal); vec3 R2 = cross(normal, sx);
@@ -189,6 +190,17 @@ export class TerrainPatch {
            float spk = vfFbm(vWorldXZ * 0.6) * vfFbm(vWorldXZ * 0.13 + 19.0);
            float grain = vfNoise(vWorldXZ * 2.3);
            diffuseColor.rgb *= 0.58 + 0.16 * biome + 0.12 * erosion + 0.45 * spk + 0.09 * grain;
+         }`,
+      );
+
+      // water specular: water areas (detected by blue-dominant vertex colour) get
+      // low roughness so they catch sunlight as a bright glint on the ocean
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+         {
+           float _waterB = step(diffuseColor.r * 1.4, diffuseColor.b) * step(0.04, diffuseColor.b);
+           roughnessFactor = mix(roughnessFactor, 0.08, _waterB);
          }`,
       );
 
