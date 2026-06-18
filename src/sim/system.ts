@@ -333,7 +333,7 @@ export function atmosphereAt(system: SystemDef, pos: Vec3): { density: number; p
 // nearest planet's centre, full near the surface and easing to nothing at the
 // top of the air shell (so it fades in as you enter, not a sudden jolt). null
 // in vacuum. Shared by the Sim and the online client so prediction matches.
-export const GRAVITY = 10; // m/s²
+export const GRAVITY = 9.81; // m/s² — Earth-normal weight in atmosphere
 export function atmoGravity(system: SystemDef, pos: Vec3): Vec3 | null {
   const a = atmosphereAt(system, pos);
   if (!a.planet) return null;

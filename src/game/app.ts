@@ -10,6 +10,7 @@ import { FxLayer } from '../render/fx';
 import { PostPipeline } from '../render/post';
 import { SceneManager } from '../render/scene';
 import { TerrainPatch } from '../render/terrain';
+import { SkyDome, CloudDeck } from '../render/sky';
 import { buildStarfield } from '../render/starfield';
 import { BOLT_SPEED, GOODS, MODULE_NAMES, MODULE_TIER_TAGS } from '../sim/data';
 import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
@@ -49,6 +50,8 @@ export class GameApp {
   private fx: FxLayer;
   private dust: DustLayer;
   private terrain: TerrainPatch;
+  private sky: SkyDome;
+  private clouds: CloudDeck;
   private cockpit: THREE.Group;
   private gamepad = new GamepadManager();
   private gpFireWas: boolean | null = null;
@@ -93,6 +96,8 @@ export class GameApp {
     this.fx = new FxLayer(this.sm, world, this.entities);
     this.dust = new DustLayer(this.sm, world);
     this.terrain = new TerrainPatch(this.sm);
+    this.sky = new SkyDome(this.sm);
+    this.clouds = new CloudDeck(this.sm);
     // first-person cockpit interior rides on the camera
     this.sm.near.add(this.sm.camera);
     this.cockpit = buildCockpit();
@@ -678,6 +683,12 @@ export class GameApp {
     if (ship) this.terrain.update(w.system, ship.pos);
     this.skyColor.setHex(SKY_COLORS[this.frameAtmoKind]);
     this.sm.setAtmosphere(this.skyColor, atmoDensity);
+    if (ship) {
+      this.sky.update(w.system, ship.pos, this.skyColor, atmoDensity);
+      this.clouds.update(w.system, ship.pos, w.time, atmoDensity);
+    } else {
+      this.sky.update(w.system, this.sm.origin, this.skyColor, 0);
+    }
     // stars wash out in daylight: fade the starfield as the air thickens
     const starFade = 1 - Math.min(1, atmoDensity * 1.3);
     this.starfield.traverse((o) => {

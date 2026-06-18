@@ -433,6 +433,12 @@ export class BodiesLayer {
     this.starMesh.add(glowSprite('rgb(255,238,210)', starR * 3.2)); // hot inner core
     this.starMesh.add(glowSprite('rgb(255,176,80)', starR * 9));    // main glow
     this.starMesh.add(glowSprite('rgb(255,130,54)', starR * 22));   // wide faint corona
+    // the sun burns through the daylight haze — exempt it from the far fog so
+    // it stays visible in the sky from a planet surface
+    this.starMesh.traverse((o) => {
+      const m = (o as THREE.Mesh).material as (THREE.Material & { fog?: boolean }) | undefined;
+      if (m) m.fog = false;
+    });
     sm.far.add(this.starMesh);
 
     // planets + moons
