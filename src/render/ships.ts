@@ -2,17 +2,70 @@
 // Forward is -Z. Thruster cones glow with throttle.
 
 import * as THREE from 'three';
+import { Rng } from '../sim/rng';
 import type { Entity, HullId, PirateTier } from '../sim/types';
 
 const HULL_GRAY = 0x6b6f73;
 const HULL_DARK = 0x44474a;
 const RUST = 0x7a4a30;
 
+// Procedural hull plating: panel seams, rivets, weld lines and grime, so the
+// primitive hulls read as built spacecraft instead of toy blocks (#8). One
+// shared greyscale map + roughness map, tinted per material by its colour.
+let hullMap: THREE.CanvasTexture | null = null;
+let hullRough: THREE.CanvasTexture | null = null;
+function buildHullTextures(): void {
+  const S = 256;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const r = document.createElement('canvas'); r.width = r.height = S;
+  const ctx = c.getContext('2d')!, rx = r.getContext('2d')!;
+  ctx.fillStyle = '#b8bcc0'; ctx.fillRect(0, 0, S, S);
+  rx.fillStyle = '#9a9a9a'; rx.fillRect(0, 0, S, S);
+  const rng = new Rng(0x5eed);
+  // panels: a grid of plates with slightly different shade + a darker seam
+  for (let gy = 0; gy < 6; gy++) {
+    for (let gx = 0; gx < 6; gx++) {
+      const x = gx * (S / 6), y = gy * (S / 6), w = S / 6, h = S / 6;
+      const shade = 150 + rng.int(0, 70);
+      ctx.fillStyle = `rgb(${shade},${shade + 4},${shade + 8})`;
+      ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+      // roughness varies per panel (some scuffed)
+      const rr = 120 + rng.int(0, 90);
+      rx.fillStyle = `rgb(${rr},${rr},${rr})`;
+      rx.fillRect(x + 1, y + 1, w - 2, h - 2);
+    }
+  }
+  // seams
+  ctx.strokeStyle = 'rgba(40,44,48,0.7)'; ctx.lineWidth = 1.5;
+  for (let i = 0; i <= 6; i++) {
+    const p = i * (S / 6);
+    ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, S); ctx.moveTo(0, p); ctx.lineTo(S, p); ctx.stroke();
+  }
+  // rivets along the seams
+  ctx.fillStyle = 'rgba(60,64,68,0.8)';
+  for (let i = 0; i <= 6; i++) for (let j = 0; j < S; j += 14) {
+    ctx.fillRect(i * (S / 6) - 1, j, 2, 2); ctx.fillRect(j, i * (S / 6) - 1, 2, 2);
+  }
+  // grime streaks + scratches
+  for (let i = 0; i < 60; i++) {
+    const x = rng.range(0, S), y = rng.range(0, S);
+    ctx.fillStyle = `rgba(30,28,26,${rng.range(0.05, 0.2)})`;
+    ctx.fillRect(x, y, rng.range(1, 3), rng.range(6, 40));
+  }
+  hullMap = new THREE.CanvasTexture(c);
+  hullMap.colorSpace = THREE.SRGBColorSpace;
+  hullMap.wrapS = hullMap.wrapT = THREE.RepeatWrapping;
+  hullRough = new THREE.CanvasTexture(r);
+  hullRough.wrapS = hullRough.wrapT = THREE.RepeatWrapping;
+}
+
 function mat(color: number, rough = 0.8, metal = 0.6): THREE.MeshStandardMaterial {
+  if (!hullMap) buildHullTextures();
   // a faint emissive keeps hulls from reading as pure-black silhouettes in the
-  // dark — ships were nearly invisible until point-blank (issue #9)
+  // dark (#9); the plating map + roughness map make them read as real hull (#8)
   return new THREE.MeshStandardMaterial({
     color, roughness: rough, metalness: metal, flatShading: true,
+    map: hullMap, roughnessMap: hullRough,
     emissive: 0x0a0c10, emissiveIntensity: 1,
   });
 }
@@ -87,6 +140,20 @@ function addLights(view: ShipView): void {
   lights[0].position.set(box.min.x, cy, nose + size.z * 0.25);
   lights[1].position.set(box.max.x, cy, nose + size.z * 0.25);
   for (const l of lights) view.group.add(l);
+
+  // engine nozzles: a dark flared ring around each thruster so the drives read
+  // as real engine bells, not bare glowing cones (#8)
+  for (const t of view.thrusters) {
+    const sz = (t.userData.size as number) ?? 1;
+    const nozzle = new THREE.Mesh(
+      new THREE.CylinderGeometry(sz * 1.5, sz * 1.15, sz * 1.6, 10, 1, true),
+      new THREE.MeshStandardMaterial({ color: 0x26282b, roughness: 0.6, metalness: 0.8, side: THREE.DoubleSide, emissive: 0x140805, emissiveIntensity: 1 }),
+    );
+    nozzle.rotation.x = Math.PI / 2;
+    nozzle.position.copy(t.position);
+    nozzle.position.z += sz * 0.4;
+    view.group.add(nozzle);
+  }
 
   // engine bloom: a fat additive sprite behind each thruster, pulsing with
   // throttle in updateThrusters — this is what makes a burning ship pop
