@@ -165,7 +165,7 @@ function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
         gl_FragColor = vec4(col, clamp(halo * lit, 0.0, 1.0));
         #ifdef USE_FOG
           float fogFactor = 1.0 - exp( -fogDensity * fogDensity * vFogDepth * vFogDepth );
-          gl_FragColor.a *= 1.0 - fogFactor;
+          gl_FragColor *= 1.0 - fogFactor;
         #endif
       }`,
   });
