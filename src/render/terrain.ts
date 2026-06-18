@@ -19,7 +19,7 @@ import { atmoHeight, atmosphereAt } from '../sim/system';
 import { heightField, TERRAIN } from '../sim/terrain';
 import type { SceneManager } from './scene';
 
-const SEG = 128;            // grid resolution (constant; the cap's span varies with altitude)
+const SEG = 168;            // grid resolution (constant; the cap's span varies with altitude)
 const MAX_SPAN_HALF = 260_000; // cap the reach so the near far-plane stays sane (m)
 const REBUILD_MOVE = 50;   // re-noise after the ship moves this far laterally (m)
 const REBUILD_SPAN = 0.05; // ...or after the LOD span changes this fraction
@@ -91,20 +91,17 @@ export class TerrainPatch {
     const shell = atmoHeight(p);
     const alt = Math.max(20, atmo.altitude);
 
-    // --- cap span: reach the true horizon ONLY as far as you can actually see.
-    //     High up the air is thin, the horizon is hundreds of km out and must be
-    //     reached (a wide, coarse cap). Low down, thick haze swallows everything
-    //     past a few tens of km — so the cap shrinks to the haze-visibility range
-    //     and the SAME grid then resolves far finer relief. That is the gradual
-    //     "detail ramps up as you descend" the entry is supposed to have, while
-    //     the haze (and the ground-tinted far sphere) hide the rim either way. ---
+    // --- cap span is ALTITUDE-driven, not haze-driven. The cap stays just big
+    //     enough that its grid keeps fine quads near the ship (so hills hold real
+    //     relief and you can read where to set down), scaling up with altitude.
+    //     Whatever lies past the rim is swallowed by haze and the ground-tinted
+    //     far sphere, so the rim never reads as an edge. Capped by the true
+    //     horizon (no point drawing ground that's over the curve) and a hard max
+    //     that keeps the near far-plane sane. ---
     const cosH = R / (R + alt);
     const horizonPlanar = R * Math.sqrt(Math.max(0, 1 - cosH * cosH));
-    // matches the near-fog model in scene.ts (density^2 * 1.5e-4 per metre): the
-    // distance at which the air has hazed the ground to near the sky colour.
-    const fogD = atmo.density * atmo.density * 1.5e-4;
-    const hazeReach = fogD > 1e-7 ? (2.0 / fogD) : Infinity;
-    const spanHalf = Math.min(MAX_SPAN_HALF, horizonPlanar * 1.04, Math.max(7_000, hazeReach));
+    const detailReach = alt * 2.2 + 7_000; // ~3x altitude: a readable landing bowl
+    const spanHalf = Math.min(MAX_SPAN_HALF, horizonPlanar * 1.04, detailReach);
     const span = spanHalf * 2;
 
     // local horizon frame, centred on the sub-ship point on the sphere
@@ -142,10 +139,13 @@ export class TerrainPatch {
     const fade = Math.min(1, (shell - atmo.altitude) / (shell * 0.45));
     this.mat.opacity = Math.max(0, fade);
     this.blend = fade;
-    // self-illuminate with depth so the ground reads even on the night side
+    // a gentle floor-glow so the ground never goes pure black on the night side,
+    // but kept LOW so the directional sun keeps its light-and-shadow — that
+    // contrast across slopes is what lets you read hills and pick a landing spot
+    // from altitude instead of seeing a flat washed plate.
     const deep = 1 - Math.min(1, atmo.altitude / shell);
-    this.mat.emissiveIntensity = 0.2 + 0.5 * deep;
-    this.mat.emissive.copy(GROUND[p.kind].lo).multiplyScalar(0.7);
+    this.mat.emissiveIntensity = 0.08 + 0.22 * deep;
+    this.mat.emissive.copy(GROUND[p.kind].lo).multiplyScalar(0.6);
     this.mesh.visible = true;
     this.active = true;
     this.planetId = p.id;
@@ -160,9 +160,11 @@ export class TerrainPatch {
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const col = geo.attributes.color as THREE.BufferAttribute;
     const span = spanHalf * 2;
-    // relief flattens at coarse (high) LOD so a wide cap isn't a spiky mess; it
-    // sharpens back to full strength as the cap tightens near the ground
-    const reliefScale = Math.min(1, 24_000 / span);
+    // relief flattens at coarse (high) LOD so a wide cap isn't a spiky aliased
+    // mess; it sharpens back to full strength as the cap tightens near the ground.
+    // Generous, so hills keep their form (and their light/shadow) from altitude —
+    // that's what lets you actually read where to set down on the way down.
+    const reliefScale = Math.min(1, 50_000 / span);
     // pass 1: heights. grid is unit [-0.5,0.5]; scale by span here so one mesh
     // serves every LOD level. Curvature is the EXACT spherical drop so the rim
     // lands on the real horizon.
@@ -188,9 +190,11 @@ export class TerrainPatch {
       const drop = R - Math.sqrt(Math.max(0, R * R - s2));
       const h = (pos.getZ(i) + drop) / Math.max(0.01, reliefScale);
       const t = Math.min(1, Math.max(0, h / prm.amp));
-      this.tmpCol.copy(def.lo).lerp(def.hi, t * t);
+      // lowland -> highland with a brighter, snappier high so ridges and valleys
+      // separate visibly from altitude (lit peaks vs shadowed lows = readable form)
+      this.tmpCol.copy(def.lo).lerp(def.hi, Math.pow(t, 0.7));
       const slope = 1 - Math.min(1, Math.max(0, nor.getZ(i)));
-      this.tmpCol.lerp(def.rock, Math.min(1, slope * 1.8) * 0.8);
+      this.tmpCol.lerp(def.rock, Math.min(1, slope * 2.0) * 0.85);
       col.setXYZ(i, this.tmpCol.r, this.tmpCol.g, this.tmpCol.b);
     }
     col.needsUpdate = true;

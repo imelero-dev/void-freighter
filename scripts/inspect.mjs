@@ -263,7 +263,7 @@ async function main() {
       const un = V.vnorm({ x: sun.x * 0.6 + 0.2, y: 0.78, z: sun.z * 0.6 + 0.1 });
       const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
       const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
-      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.9))); // steep dive
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.45))); // ~25° descent view, like a pilot picking a spot
       window.IN.place(pos, look, un);
       const e = w.sim.entities.get(w.playerId);
       e.vel = V.vscale(look, 360); // diving fast → entry heat

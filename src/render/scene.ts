@@ -110,7 +110,7 @@ export class SceneManager {
       // instead of meeting a hard dark band. Keyed to the real air so a low pass
       // still sees the ground, while a high entry already has a blue sky around it.
       this.nearFog.color.copy(color).lerp(WHITE, 0.4);
-      this.nearFog.density = hazeD * hazeD * 1.5e-4;
+      this.nearFog.density = hazeD * hazeD * 0.65e-4;
       this.near.fog = this.nearFog;
       // far-scene haze hides distant worlds in daylight. Far units are km, so a
       // density of ~7e-4 fully washes anything past ~2000 km while leaving the
