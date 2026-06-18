@@ -29,7 +29,7 @@ const WATER_SHALLOW_C = new THREE.Color(0x2f6f86);
 
 const WHITE_C = new THREE.Color(0xffffff);
 const SEG = 192;             // grid resolution per cap (constant; span varies) — finer cells, more detail at altitude
-const MAX_SPAN_HALF = 260_000; // cap the coarse reach so the near far-plane stays sane (m)
+const MAX_SPAN_HALF = 380_000; // cap the coarse reach so the near far-plane stays sane (m)
 const REBUILD_MOVE = 55;    // re-noise after the ship moves this far laterally (m)
 const REBUILD_SPAN = 0.05;  // ...or after a cap's LOD span changes this fraction
 
@@ -105,6 +105,9 @@ export class TerrainPatch {
     // world XZ of each vertex, so the fragment shader can add WORLD-LOCKED micro
     // detail (bump + speckle) that doesn't swim when the patch recentres
     geo.setAttribute('aWorld', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
+    // circular edge fade: 1 at center, 0 at the boundary of an inscribed circle,
+    // so the square grid fades to a soft disc and no straight edges cross the horizon
+    geo.setAttribute('aEdge', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count), 1));
     const mat = new THREE.MeshStandardMaterial({
       // smooth shading: the base mesh carries the macro relief, a procedural
       // detail-normal in the shader adds the per-pixel rock texture (no facets)
@@ -135,18 +138,18 @@ export class TerrainPatch {
       shader.uniforms.uInsCol = this.aerial.uInsCol;
       shader.uniforms.uDetail = this.aerial.uDetail; // bump amplitude, fades with distance
 
-      // --- vertex: carry the world XZ through so detail is world-locked ---
-      shader.vertexShader = 'attribute vec2 aWorld;\nvarying vec2 vWorldXZ;\n' + shader.vertexShader;
+      // --- vertex: carry world XZ + circular edge fade through ---
+      shader.vertexShader = 'attribute vec2 aWorld;\nattribute float aEdge;\nvarying vec2 vWorldXZ;\nvarying float vEdgeFade;\n' + shader.vertexShader;
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
-        '#include <begin_vertex>\n  vWorldXZ = aWorld;',
+        '#include <begin_vertex>\n  vWorldXZ = aWorld;\n  vEdgeFade = aEdge;',
       );
 
       // --- fragment: procedural value-noise FBM, a detail bump-normal (tangent-
       //     free, from screen-space derivatives) and an albedo speckle, so the
       //     ground reads as textured rock per-pixel instead of flat vertex colour.
       shader.fragmentShader =
-        'uniform vec3 uExt;\nuniform float uIns;\nuniform vec3 uInsCol;\nuniform float uDetail;\nvarying vec2 vWorldXZ;\n' +
+        'uniform vec3 uExt;\nuniform float uIns;\nuniform vec3 uInsCol;\nuniform float uDetail;\nvarying vec2 vWorldXZ;\nvarying float vEdgeFade;\n' +
         `float vfHash(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.21); return fract(p.x * p.y); }
          float vfNoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
            float a = vfHash(i), b = vfHash(i + vec2(1.0, 0.0)), c = vfHash(i + vec2(0.0, 1.0)), d = vfHash(i + vec2(1.0, 1.0));
@@ -197,7 +200,9 @@ export class TerrainPatch {
           float _di = vFogDepth * uIns;
           float _ins = 1.0 - exp(-_di * _di);
           gl_FragColor.rgb = gl_FragColor.rgb * _ext + uInsCol * _ins;
-        #endif`,
+        #endif
+        gl_FragColor.a *= vEdgeFade;
+        if (gl_FragColor.a < 0.004) discard;`,
       );
     };
     mat.customProgramCacheKey = () => 'vf_aerial_detail';
@@ -250,7 +255,7 @@ export class TerrainPatch {
     //     stay small and hills keep readable relief from altitude. ---
     const cosH = R / (R + alt);
     const horizonPlanar = R * Math.sqrt(Math.max(0, 1 - cosH * cosH));
-    const coarseHalf = Math.min(MAX_SPAN_HALF, horizonPlanar * 1.08);
+    const coarseHalf = Math.min(MAX_SPAN_HALF, horizonPlanar * 1.22);
     const fineHalf = Math.min(coarseHalf * 0.5, alt * 0.7 + 3_000, 16_000);
     // amplitude the coarse cap carries at the fine patch's rim, so the fine relief
     // can fade down to exactly that and the two meet without a step. Kept off the
@@ -315,6 +320,7 @@ export class TerrainPatch {
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const col = geo.attributes.color as THREE.BufferAttribute;
     const aw = geo.attributes.aWorld as THREE.BufferAttribute;
+    const ae = geo.attributes.aEdge as THREE.BufferAttribute;
     const span = spanHalf * 2;
     const rawH = new Float32Array(pos.count); // raw height for LOD-stable colouring
     const vary = new Float32Array(pos.count); // patchy tone variation
@@ -326,6 +332,12 @@ export class TerrainPatch {
       const vv = wz + this.t1.z * lx + this.t2.z * ly;
       const s2 = lx * lx + ly * ly;
       const edge = Math.sqrt(s2) / spanHalf;
+      // circular fade (coarse cap only): inscribed circle of the square grid →
+      // smooth disc shape so no straight edges ever cross the curved horizon.
+      // Fine cap sits inside the coarse and doesn't need fading.
+      const coarseFade = reliefRim === 0;
+      const ef = !coarseFade ? 1 : edge < 0.88 ? 1 : edge > 1.02 ? 0 : 1 - Math.pow((edge - 0.88) / 0.14, 2);
+      ae.setX(i, Math.max(0, ef));
       // relief amplitude: center value, easing to the rim value over the outer 25%
       const k = edge < 0.75 ? 0 : (edge - 0.75) / 0.25;
       const relief = reliefCenter + (reliefRim - reliefCenter) * (k * k * (3 - 2 * k));
@@ -339,6 +351,7 @@ export class TerrainPatch {
     }
     pos.needsUpdate = true;
     aw.needsUpdate = true;
+    ae.needsUpdate = true;
     geo.computeVertexNormals();
     // pass 2: shade by RAW height (LOD-stable coastlines/snowlines) + slope, with
     // patchy tone variation, water in the basins, bare rock on the steeps and

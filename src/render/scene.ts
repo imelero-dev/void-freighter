@@ -153,7 +153,7 @@ export class SceneManager {
   // buried in haze, so the coarser depth precision out there never shows.
   private nearFarPlane = 80_000;
   setNearFarPlane(far: number): void {
-    const want = Math.max(80_000, Math.min(520_000, far));
+    const want = Math.max(80_000, Math.min(700_000, far));
     if (Math.abs(this.nearFarPlane - want) < 1_000) return;
     this.nearFarPlane = want;
     this.camera.far = want;
