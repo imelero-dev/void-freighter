@@ -160,7 +160,9 @@ export class TerrainPatch {
         '#include <normal_fragment_begin>',
         `#include <normal_fragment_begin>
          if (uDetail > 0.001) {
-           float H = (vfFbm(vWorldXZ * 0.085) + 0.45 * vfFbm(vWorldXZ * 0.35)) * uDetail;
+           vec2 ew = vec2(vfNoise(vWorldXZ * 0.005 + 13.0), vfNoise(vWorldXZ * 0.005 + 37.0));
+           float H = (vfFbm(vWorldXZ * 0.085) + 0.45 * vfFbm(vWorldXZ * 0.35)
+                     + 0.3 * vfNoise(vWorldXZ * 0.018 + ew * 8.0)) * uDetail;
            vec2 dH = vec2(dFdx(H), dFdy(H));
            vec3 sx = dFdx(-vViewPosition); vec3 sy = dFdy(-vViewPosition);
            vec3 R1 = cross(sy, normal); vec3 R2 = cross(normal, sx);
@@ -170,14 +172,20 @@ export class TerrainPatch {
          }`,
       );
 
-      // albedo speckle: fine rock mottling on top of the vertex colour
+      // albedo: multi-scale texture from biome patches (km scale, readable from
+      // altitude) through erosion-like streaks (100 m scale, mid-distance interest)
+      // to fine rock mottling (close-up detail). Together these break up the
+      // mid-distance wash so plains between mountain ranges read as varied terrain.
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <color_fragment>',
         `#include <color_fragment>
          {
+           float biome = vfFbm(vWorldXZ * 0.003 + 41.0);
+           vec2 warp = vec2(vfNoise(vWorldXZ * 0.005 + 13.0), vfNoise(vWorldXZ * 0.005 + 37.0));
+           float erosion = vfNoise(vWorldXZ * 0.018 + warp * 8.0);
            float spk = vfFbm(vWorldXZ * 0.6) * vfFbm(vWorldXZ * 0.13 + 19.0);
-           float grain = vfNoise(vWorldXZ * 2.3);          // fine rock grain
-           diffuseColor.rgb *= 0.70 + 0.55 * spk + 0.10 * grain;
+           float grain = vfNoise(vWorldXZ * 2.3);
+           diffuseColor.rgb *= 0.58 + 0.16 * biome + 0.12 * erosion + 0.45 * spk + 0.09 * grain;
          }`,
       );
 

@@ -119,8 +119,11 @@ function cloudTexture(seed: number): THREE.CanvasTexture {
 }
 
 // Rim-glow atmosphere shader — the bright limb halo you see ringing an
-// atmospheric world from space (the signature blue arc on a planet's edge). A
-// soft inner falloff plus a hot thin rim, brightened on the sun-lit side.
+// atmospheric world from space (the signature blue arc on a planet's edge).
+// Three layers of scatter: a wide soft outer Rayleigh glow, the main body of
+// scattered light, and a thin hot limb at the very edge. The inner scatter
+// whitens where the optical path is longest (like real atmosphere). A warm
+// terminator band glows where low-angle sunlight threads through thick air.
 function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     transparent: true,
@@ -142,13 +145,17 @@ function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
       uniform vec3 c; varying vec3 vN; varying vec3 vV; varying vec3 vWN; varying vec3 vWorld;
       void main() {
         float f = 1.0 - abs(dot(vN, vV));
-        // broad scatter haze across the disc + a hot thin limb at the very edge
-        float halo = pow(f, 1.7) * 0.85 + pow(f, 5.5) * 1.4;
-        // the star sits at the world origin: brighten the sun-lit hemisphere of
-        // the shell and fade the night side, so the halo arcs like real scatter
+        float outer = pow(f, 1.5) * 0.20;
+        float body  = pow(f, 2.2) * 0.72;
+        float limb  = pow(f, 5.5) * 1.5;
+        float halo  = outer + body + limb;
+        vec3 col = mix(c, vec3(1.0), smoothstep(0.4, 0.95, f) * 0.4);
         vec3 sunDir = normalize(-vWorld);
-        float lit = clamp(0.35 + 0.75 * dot(vWN, sunDir), 0.0, 1.0);
-        gl_FragColor = vec4(c, clamp(halo * lit, 0.0, 1.0));
+        float sunDot = dot(vWN, sunDir);
+        float lit = max(0.08, clamp(0.3 + 0.8 * sunDot, 0.0, 1.0));
+        float termBand = exp(-8.0 * (sunDot + 0.1) * (sunDot + 0.1));
+        col = mix(col, vec3(1.0, 0.72, 0.38), termBand * 0.35);
+        gl_FragColor = vec4(col, clamp(halo * lit, 0.0, 1.0));
       }`,
   });
 }
@@ -483,7 +490,7 @@ export class BodiesLayer {
             : p.kind === 'ice' ? new THREE.Color(0x88bbdd) : new THREE.Color(0x6699cc);
         // the halo shell stands off the surface by the real atmosphere height so
         // the glowing arc reads at the right scale from space
-        const shellR = (p.radius + atmoHeight(p) * 1.6) * FAR_SCALE;
+        const shellR = (p.radius + atmoHeight(p) * 1.8) * FAR_SCALE;
         const atmo = new THREE.Mesh(new THREE.SphereGeometry(shellR, 64, 32), atmosphereMaterial(atmoColor));
         mesh.add(atmo);
       }

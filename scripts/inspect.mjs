@@ -403,6 +403,55 @@ async function main() {
     await shot(`13_grazing_${altKm}km`);
   }
 
+  // ---- SUNSET: position on the terminator (sun at the horizon) so the sky
+  //      shows gold/orange sunset tones and the atmosphere rim is warm. ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const toSun = V.vnorm(V.vscale(p.pos, -1));
+    // place on the terminator: tangent to the sun direction (sun at the horizon)
+    const tangent = V.vnorm(V.vcross(toSun, { x: 0, y: 1, z: 0 }));
+    const un = V.vnorm(V.vadd(tangent, V.vscale(toSun, 0.05))); // just barely on the lit side
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 200));
+    // look toward the sun (low on the horizon)
+    const look = V.vnorm(V.vadd(toSun, V.vscale(un, -0.15)));
+    window.IN.place(pos, look, un);
+    w.sim.entities.get(w.playerId).vel = { x: 0, y: 0, z: 0 };
+  });
+  await sleep(1200);
+  await shot('18_sunset');
+
+  // ---- ORBIT ATMOSPHERE: 3/4 view of the terran planet from ~400 km out,
+  //      showing the enhanced rim glow halo from orbit ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const toSun = V.vnorm(V.vscale(p.pos, -1));
+    const side = V.vnorm(V.vcross(toSun, { x: 0, y: 1, z: 0 }));
+    // 3/4 lit view: mostly lit hemisphere with one terminator edge visible
+    const dir = V.vnorm(V.vadd(V.vscale(toSun, 0.55), V.vadd(V.vscale(side, 0.7), { x: 0, y: 0.3, z: 0 })));
+    const pos = V.vadd(p.pos, V.vscale(dir, p.radius + 400_000));
+    const look = V.vnorm(V.vsub(p.pos, pos));
+    window.IN.place(pos, look, { x: 0, y: 1, z: 0 });
+  });
+  await sleep(1000);
+  await shot('19_orbit_atmosphere');
+
+  // ---- TERMINATOR from orbit: dark side with the atmosphere rim arcing ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const toSun = V.vnorm(V.vscale(p.pos, -1));
+    const side = V.vnorm(V.vcross(toSun, { x: 0, y: 1, z: 0 }));
+    // mostly dark side with the terminator's rim glow visible
+    const dir = V.vnorm(V.vadd(V.vscale(toSun, -0.35), V.vadd(V.vscale(side, 0.8), { x: 0, y: 0.25, z: 0 })));
+    const pos = V.vadd(p.pos, V.vscale(dir, p.radius + 500_000));
+    const look = V.vnorm(V.vsub(p.pos, pos));
+    window.IN.place(pos, look, { x: 0, y: 1, z: 0 });
+  });
+  await sleep(1000);
+  await shot('20_terminator_orbit');
+
   await browser.close();
   server.close();
   if (errors.length) { console.error('PAGE ERRORS:\n' + errors.join('\n')); process.exit(1); }

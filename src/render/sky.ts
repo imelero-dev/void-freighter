@@ -43,18 +43,26 @@ export class SkyDome {
         void main() {
           vec3 d = normalize(vDir);
           float h = clamp(dot(d, uUp), 0.0, 1.0);
-          // deep gradient: rich overhead, paling to a bright hazy horizon — the
-          // aerial-perspective sky of a thick atmosphere
-          vec3 sky = mix(uHorizon, uZenith, pow(h, 0.42));
+          // sun elevation: low sun warms the sky toward gold/orange (Rayleigh
+          // reddening through a longer atmospheric path)
+          float sunElev = dot(uSun, uUp);
+          float sunset = smoothstep(0.35, -0.05, sunElev);
+          // deep gradient with sunset warming: zenith stays cool even at sunset,
+          // horizon warms strongly
+          vec3 zenith = mix(uZenith, uZenith * vec3(1.1, 0.7, 0.55), sunset * 0.4);
+          vec3 horizon = mix(uHorizon, vec3(1.0, 0.62, 0.32), sunset * 0.55);
+          vec3 sky = mix(horizon, zenith, pow(h, 0.42));
           // a luminous haze band hugging the horizon, brightest toward the sun
           float sunAz = max(dot(normalize(d - uUp * dot(d, uUp)), normalize(uSun - uUp * dot(uSun, uUp))), 0.0);
           float band = smoothstep(0.32, 0.0, h);
-          sky = mix(sky, uHorizon * (1.05 + 0.5 * sunAz), band * (0.5 + 0.5 * sunAz));
-          // the sun: a soft disc with a tight inner flare and a broad scatter glow
+          vec3 bandCol = mix(horizon * (1.05 + 0.5 * sunAz), vec3(1.0, 0.55, 0.22), sunset * sunAz * 0.6);
+          sky = mix(sky, bandCol, band * (0.5 + 0.5 * sunAz));
+          // the sun: colour shifts warm at sunset
+          vec3 sunTint = mix(uSunCol, vec3(1.0, 0.5, 0.18), sunset * 0.7);
           float s = max(dot(d, uSun), 0.0);
           float disc = smoothstep(0.9990, 0.99975, s);
           float glow = pow(s, 6.0) * 0.35 + pow(s, 60.0) * 0.7;
-          vec3 col = sky + uSunCol * (glow + disc * 3.0);
+          vec3 col = sky + sunTint * (glow + disc * 3.0);
           gl_FragColor = vec4(col, uOpacity);
         }`,
     });
