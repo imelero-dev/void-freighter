@@ -285,6 +285,40 @@ function buildStationMesh(def: StationDef): {
   mouthLight.position.set(0, 0, HZ * 0.7);
   group.add(mouthLight);
 
+  // --- hangar interior furniture: makes the bay a working dock, not a box ---
+  const crateMat = (i: number) => new THREE.MeshStandardMaterial({ color: i % 2 ? 0x5a4f3a : 0x3f4c58, roughness: 0.92, metalness: 0.3 });
+  // cargo stacks tucked into the two back corners, clear of the pad
+  for (const sx of [-1, 1]) {
+    const baseX = sx * HW * 0.66, baseZ = backA + R * 0.14;
+    const cs = R * 0.1;
+    for (let i = 0; i < 4; i++) {
+      const cr = new THREE.Mesh(new THREE.BoxGeometry(cs, cs, cs), crateMat(i));
+      cr.position.set(baseX + (i % 2 ? cs * 0.9 : 0), floorV + cs * 0.5 + (i > 1 ? cs : 0), baseZ + (i % 2 ? cs * 0.6 : 0));
+      group.add(cr);
+    }
+  }
+  // a lit control-room window set into the +u wall, overlooking the pad
+  const ctrl = new THREE.Mesh(new THREE.BoxGeometry(t * 1.5, HH * 0.5, R * 0.34), new THREE.MeshStandardMaterial({ color: 0x1a2630, emissive: 0xffcf87, emissiveIntensity: 0.7, roughness: 0.5 }));
+  ctrl.position.set(HW - t, HH * 0.35, padA);
+  group.add(ctrl);
+  const ctrlFrame = new THREE.Mesh(new THREE.BoxGeometry(t * 2.2, HH * 0.62, R * 0.4), dark);
+  ctrlFrame.position.set(HW - t * 1.4, HH * 0.35, padA);
+  group.add(ctrlFrame);
+  // overhead gantry beam across the bay near the back, with a hanging hoist
+  const gantry = new THREE.Mesh(new THREE.BoxGeometry(2 * HW * 0.9, R * 0.05, R * 0.06), dark);
+  gantry.position.set(0, HH - R * 0.06, backA + R * 0.32);
+  group.add(gantry);
+  const hoist = new THREE.Mesh(new THREE.BoxGeometry(R * 0.05, R * 0.16, R * 0.05), dark);
+  hoist.position.set(-HW * 0.3, HH - R * 0.16, backA + R * 0.32);
+  group.add(hoist);
+  // conduit runs along the lower side walls
+  for (const sx of [-1, 1]) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.018, R * 0.018, depthLen * 0.8, 8), new THREE.MeshStandardMaterial({ color: 0x6e6a60, roughness: 0.7, metalness: 0.6 }));
+    pipe.rotation.x = Math.PI / 2;
+    pipe.position.set(sx * (HW - t * 2), floorV + HH * 0.5, depthZc);
+    group.add(pipe);
+  }
+
   // sliding hangar doors (two panels closing the slot, tucked into the jambs)
   const hatch: THREE.Object3D[] = [];
   for (const side of [-1, 1]) {
@@ -360,10 +394,12 @@ export class BodiesLayer {
     const starR = system.starRadius * FAR_SCALE;
     const core = new THREE.Mesh(
       new THREE.SphereGeometry(starR, 32, 16),
-      new THREE.MeshBasicMaterial({ color: 0xffc070 }),
+      new THREE.MeshBasicMaterial({ color: 0xfff0d8 }),
     );
     this.starMesh.add(core);
-    this.starMesh.add(glowSprite('rgb(255,176,80)', starR * 9));
+    this.starMesh.add(glowSprite('rgb(255,238,210)', starR * 3.2)); // hot inner core
+    this.starMesh.add(glowSprite('rgb(255,176,80)', starR * 9));    // main glow
+    this.starMesh.add(glowSprite('rgb(255,130,54)', starR * 22));   // wide faint corona
     sm.far.add(this.starMesh);
 
     // planets + moons
