@@ -147,6 +147,17 @@ describe('VTOL flight mode (#19)', () => {
     expect(vlen(e.vel)).toBeLessThanOrEqual(meta.stats.maxSpeed * 0.25);
   });
 
+  it('VTOL hovers: releasing the stick snaps a drifting ship to a near-stop', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    sim.toggleVtol(pid);
+    e.vel = v3(40, 0, 10); // drifting, hands off the controls
+    runTicks(sim, 20 * 3);
+    expect(vlen(e.vel)).toBeLessThan(5); // hovered to a stop
+  });
+
   it('engaging the cruise drive exits VTOL (mutually exclusive)', () => {
     const sim = makeSim();
     const pid = sim.addPlayer('tester');

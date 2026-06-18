@@ -552,7 +552,7 @@ export class Sim {
       if (meta.vtol) turbo = false;
       meta.turboActive = turbo;
       const perf = meta.vtol
-        ? { maxSpeed: meta.stats.maxSpeed * VTOL_SPEED_FACTOR, accel: meta.stats.accel, turnRate: meta.stats.turnRate * 0.85, massFactor: meta.stats.massFactor }
+        ? { maxSpeed: meta.stats.maxSpeed * VTOL_SPEED_FACTOR, accel: meta.stats.accel * 1.4, turnRate: meta.stats.turnRate * 0.8, massFactor: meta.stats.massFactor, vtol: true }
         : turbo
           ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate, massFactor: meta.stats.massFactor }
           : meta.stats;

@@ -222,7 +222,7 @@ export class ClientWorld implements IWorld {
         // mirroring the server's perf calculation)
         const stats = this.shipStats;
         const perf = this.vtolMode
-          ? { maxSpeed: stats.maxSpeed * 0.22, accel: stats.accel, turnRate: stats.turnRate * 0.85, massFactor: stats.massFactor }
+          ? { maxSpeed: stats.maxSpeed * 0.22, accel: stats.accel * 1.4, turnRate: stats.turnRate * 0.8, massFactor: stats.massFactor, vtol: true }
           : this.turboActive
             ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate, massFactor: stats.massFactor }
             : stats;

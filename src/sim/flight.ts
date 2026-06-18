@@ -17,6 +17,7 @@ export interface FlightPerf {
   accel: number;
   turnRate: number;
   massFactor?: number; // inertia multiplier; heavier hulls ramp/settle slower
+  vtol?: boolean;      // hover mode: snap-to-stop damping + crisp vertical/lateral
 }
 
 export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPerf, dt: number, assist: boolean): void {
@@ -57,17 +58,20 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
 
   b.throttle = clamp(input.thrustForward, -0.3, 1);
   if (assist && !input.brake) {
+    // VTOL gives crisp vertical/lateral authority for precise hovering
+    const lat = perf.vtol ? 1.0 : 0.85;
     const desiredLocal = v3(
-      clamp(input.thrustRight, -1, 1) * 0.85,
-      clamp(input.thrustUp, -1, 1) * 0.85,
+      clamp(input.thrustRight, -1, 1) * lat,
+      clamp(input.thrustUp, -1, 1) * lat,
       -b.throttle,
     );
     const desired = vscale(qrot(b.orient, desiredLocal), perf.maxSpeed);
     const delta = vsub(desired, b.vel);
     const dl = vlen(delta);
     // assist corrects the velocity vector much faster than raw thrust — a
-    // futuristic ship should feel planted, not like a barge
-    const maxDelta = perf.accel * 1.6 * dt;
+    // futuristic ship should feel planted, not like a barge. VTOL hovers hard:
+    // it snaps to a dead stop when you release, so you hang in place.
+    const maxDelta = perf.accel * (perf.vtol ? 4.5 : 1.6) * dt;
     if (dl > 1e-6) {
       const f = Math.min(1, maxDelta / dl);
       b.vel.x += delta.x * f;
