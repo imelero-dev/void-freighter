@@ -11,6 +11,7 @@ import { PostPipeline } from '../render/post';
 import { SceneManager } from '../render/scene';
 import { TerrainPatch } from '../render/terrain';
 import { SkyDome, CloudDeck } from '../render/sky';
+import { terrainHeight } from '../sim/terrain';
 import { buildStarfield } from '../render/starfield';
 import { BOLT_SPEED, GOODS, MODULE_NAMES, MODULE_TIER_TAGS } from '../sim/data';
 import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
@@ -52,6 +53,8 @@ export class GameApp {
   private terrain: TerrainPatch;
   private sky: SkyDome;
   private clouds: CloudDeck;
+  private dustAcc = 0;
+  private smokeAcc = 0;
   private cockpit: THREE.Group;
   private gamepad = new GamepadManager();
   private gpFireWas: boolean | null = null;
@@ -686,6 +689,37 @@ export class GameApp {
     if (ship) {
       this.sky.update(w.system, ship.pos, this.skyColor, atmoDensity);
       this.clouds.update(w.system, ship.pos, w.time, atmoDensity);
+      // dust kicked up when you hover/land close to the ground
+      const gAtmo = atmosphereAt(w.system, ship.pos);
+      if (gAtmo.planet && gAtmo.density > 0.08) {
+        const pl = gAtmo.planet;
+        const agl = gAtmo.altitude - terrainHeight({ pos: pl.pos, radius: pl.radius, kind: pl.kind, colorSeed: pl.colorSeed }, ship.pos);
+        const thr = Math.abs(ship.throttle);
+        const spd = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
+        if (agl < 85 && (thr > 0.08 || w.vtolMode || spd > 2)) {
+          this.dustAcc += dt * (0.6 + thr * 2 + (w.vtolMode ? 1.2 : 0));
+          if (this.dustAcc > 0.05) {
+            this.dustAcc = 0;
+            const ux = ship.pos.x - pl.pos.x, uy = ship.pos.y - pl.pos.y, uz = ship.pos.z - pl.pos.z;
+            const ul = Math.hypot(ux, uy, uz) || 1;
+            const up = new THREE.Vector3(ux / ul, uy / ul, uz / ul);
+            const g = new THREE.Vector3(ship.pos.x - this.sm.origin.x, ship.pos.y - this.sm.origin.y, ship.pos.z - this.sm.origin.z).addScaledVector(up, -agl);
+            this.fx.groundDust(g, up, Math.min(1, 0.4 + thr + spd / 25));
+          }
+        }
+      }
+      // smoke venting from heavily damaged ships nearby (own ship only in chase)
+      this.smokeAcc += dt;
+      if (this.smokeAcc > 0.09) {
+        this.smokeAcc = 0;
+        for (const en of w.entities.values()) {
+          if (en.kind !== 'ship' || en.dead || en.maxHull <= 0 || en.hull / en.maxHull >= 0.4) continue;
+          if (en.id === w.playerId && this.camera.mode !== 'chase') continue;
+          const dx = en.pos.x - this.sm.origin.x, dy = en.pos.y - this.sm.origin.y, dz = en.pos.z - this.sm.origin.z;
+          if (dx * dx + dy * dy + dz * dz > 4000 * 4000) continue;
+          this.fx.damageSmoke(new THREE.Vector3(dx, dy, dz), new THREE.Vector3(0, 1, 0));
+        }
+      }
     } else {
       this.sky.update(w.system, this.sm.origin, this.skyColor, 0);
     }

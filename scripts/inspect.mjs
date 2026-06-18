@@ -220,6 +220,23 @@ async function main() {
   await shot('10_vtol_aid');
   await page.evaluate(() => { delete window.VF.botInput; });
 
+  // landing dust: sit just over the terrain in VTOL with some throttle
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const sim = w.sim; const meta = sim.meta(w.playerId);
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 30)); // below the terrain → lands on it
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    meta.vtol = true; meta.gearDown = true;
+    window.IN.place(pos, horiz, un);
+    try { window.VF.app.camera.mode = 'chase'; } catch (e) { /* */ }
+  });
+  await page.evaluate(() => { window.VF.botInput = { thrustForward: 0.5, thrustRight: 0, thrustUp: 0, pitch: 0, yaw: 0, roll: 0, brake: false }; });
+  await sleep(900);
+  await shot('11_landing_dust');
+  await page.evaluate(() => { delete window.VF.botInput; });
+
   await browser.close();
   server.close();
   if (errors.length) { console.error('PAGE ERRORS:\n' + errors.join('\n')); process.exit(1); }

@@ -10,7 +10,7 @@ interface Effect {
   obj: THREE.Object3D;
   ttl: number;
   life: number;
-  kind: 'beam' | 'flash' | 'explosion' | 'sparks' | 'ring';
+  kind: 'beam' | 'flash' | 'explosion' | 'sparks' | 'ring' | 'smoke';
   grow?: number; // ring: final scale multiple relative to start
 }
 
@@ -311,6 +311,50 @@ export class FxLayer {
     this.effects.push({ obj: points, ttl: 0.32, life: 0.32, kind: 'sparks' });
   }
 
+  // Dust kicked up under a ship hovering or setting down close to the ground:
+  // a low puff of motes that spread out along the surface and settle. `near` is
+  // the ground point in near-scene coords, `up` the local vertical.
+  groundDust(near: THREE.Vector3, up: THREE.Vector3, intensity: number): void {
+    const count = 11;
+    const positions = new Float32Array(count * 3);
+    const velocities: THREE.Vector3[] = [];
+    const t1 = new THREE.Vector3(Math.abs(up.x) > 0.9 ? 0 : 1, Math.abs(up.x) > 0.9 ? 1 : 0, 0).cross(up).normalize();
+    const t2 = new THREE.Vector3().crossVectors(up, t1);
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = near.x; positions[i * 3 + 1] = near.y; positions[i * 3 + 2] = near.z;
+      const a = Math.random() * Math.PI * 2;
+      const out = t1.clone().multiplyScalar(Math.cos(a)).addScaledVector(t2, Math.sin(a));
+      velocities.push(out.multiplyScalar(10 + Math.random() * 22 * intensity).addScaledVector(up, 2 + Math.random() * 7));
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      color: 0xc8bba2, map: glowTex!, size: 7, transparent: true, opacity: 0.7,
+      depthWrite: false, sizeAttenuation: true,
+    });
+    const points = new THREE.Points(geo, mat);
+    points.userData.velocities = velocities;
+    this.sm.near.add(points);
+    // `grow` doubles here as the opacity scale for sparks-kind effects (dust is
+    // softer than combat sparks, which leave it undefined → full)
+    this.effects.push({ obj: points, ttl: 0.9, life: 0.9, kind: 'sparks', grow: 0.8 });
+  }
+
+  // Dark smoke venting from a battered hull, rising and expanding as it fades.
+  damageSmoke(near: THREE.Vector3, up: THREE.Vector3): void {
+    const mat = new THREE.SpriteMaterial({
+      map: glowTex!, color: 0x26211d, transparent: true, opacity: 0.5, depthWrite: false,
+    });
+    const s = new THREE.Sprite(mat);
+    s.position.copy(near);
+    s.scale.setScalar(3);
+    s.userData.drift = up.clone().multiplyScalar(7 + Math.random() * 5)
+      .add(new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(3));
+    s.userData.grow = 16;
+    this.sm.near.add(s);
+    this.effects.push({ obj: s, ttl: 1.2, life: 1.2, kind: 'smoke' });
+  }
+
   update(dt: number): void {
     this.updateMiningBeam(dt);
     for (let i = this.effects.length - 1; i >= 0; i--) {
@@ -337,7 +381,16 @@ export class FxLayer {
           pos.setXYZ(j, pos.getX(j) + vels[j].x * dt, pos.getY(j) + vels[j].y * dt, pos.getZ(j) + vels[j].z * dt);
         }
         pos.needsUpdate = true;
-        (points.material as THREE.PointsMaterial).opacity = t;
+        (points.material as THREE.PointsMaterial).opacity = t * (fx.grow ?? 1);
+      } else if (fx.kind === 'smoke') {
+        const sp = fx.obj as THREE.Sprite;
+        const drift = sp.userData.drift as THREE.Vector3;
+        sp.position.addScaledVector(drift, dt);
+        const start = (sp.userData.startScale ??= sp.scale.x);
+        const prog = 1 - t;
+        const sc = start + ((sp.userData.grow as number) - start) * prog;
+        sp.scale.set(sc, sc, 1);
+        (sp.material as THREE.SpriteMaterial).opacity = t * 0.5;
       }
       if (fx.ttl <= 0) {
         this.sm.near.remove(fx.obj);
