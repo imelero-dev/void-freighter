@@ -319,7 +319,7 @@ describe('planetary atmosphere & landing (#16)', () => {
     const meta = sim.meta(pid)!;
     meta.flightAssist = false;
     const p = landablePlanet(sim);
-    e.pos = vadd(p.pos, vscale(v3(0, 1, 0), p.radius * 1.1)); // inside the shell
+    e.pos = vadd(p.pos, vscale(v3(0, 1, 0), p.radius + 10_000)); // inside the air shell
     e.vel = v3(300, 0, 0); // tangential, so we don't hit the surface
     const v0 = vlen(e.vel);
     runTicks(sim, 20 * 3);

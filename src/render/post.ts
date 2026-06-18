@@ -15,6 +15,8 @@ const GritShader = {
     time: { value: 0 },
     aspect: { value: 1 },
     damage: { value: 0 },   // 0..1 — red pulse when hull critical
+    atmoColor: { value: new THREE.Color(0x6fa8d6) }, // sky tint inside an atmosphere
+    atmoDensity: { value: 0 }, // 0..1 how deep in the air column you are
   },
   vertexShader: `
     varying vec2 vUv;
@@ -27,6 +29,8 @@ const GritShader = {
     uniform float time;
     uniform float aspect;
     uniform float damage;
+    uniform vec3 atmoColor;
+    uniform float atmoDensity;
     varying vec2 vUv;
 
     float hash(vec2 p) {
@@ -51,6 +55,13 @@ const GritShader = {
 
       // scanlines (very faint)
       col *= 1.0 - 0.05 * (0.5 + 0.5 * sin(uv.y * 900.0));
+
+      // atmosphere: the sky itself is drawn as the far-scene background; here we
+      // just add a soft horizon brightening low on screen for depth.
+      if (atmoDensity > 0.001) {
+        float horizon = smoothstep(0.4, 0.05, vUv.y) * atmoDensity * 0.18;
+        col = mix(col, atmoColor * 1.25, horizon);
+      }
 
       // vignette
       float vig = smoothstep(0.95, 0.35, length(center * vec2(aspect, 1.0) * 0.9));
@@ -92,9 +103,11 @@ export class PostPipeline {
     this.grit.uniforms.aspect.value = window.innerWidth / window.innerHeight;
   }
 
-  render(time: number, damageLevel: number): void {
+  render(time: number, damageLevel: number, atmoColor?: THREE.Color, atmoDensity = 0): void {
     this.grit.uniforms.time.value = time;
     this.grit.uniforms.damage.value = damageLevel;
+    if (atmoColor) (this.grit.uniforms.atmoColor.value as THREE.Color).copy(atmoColor);
+    this.grit.uniforms.atmoDensity.value = atmoDensity;
     this.composer.render();
   }
 }

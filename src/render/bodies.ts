@@ -3,7 +3,7 @@
 // station mesh lives in the near scene and is positioned every frame.
 
 import * as THREE from 'three';
-import { Rng, fbm2 } from '../sim/rng';
+import { Rng, fbm2, fbm3 } from '../sim/rng';
 import type { PlanetDef, StationDef, SystemDef } from '../sim/types';
 import { FAR_SCALE, SceneManager } from './scene';
 
@@ -109,6 +109,28 @@ function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
         gl_FragColor = vec4(c, rim * 0.55);
       }`,
   });
+}
+
+// Displace a planet sphere's vertices into real terrain relief: ridged
+// multi-octave noise for mountains on solid worlds, gentler for ice.
+function displacePlanet(geo: THREE.BufferGeometry, seed: number, kind: PlanetDef['kind'], relief: number): void {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const ridged = kind !== 'ice';
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const len = Math.hypot(x, y, z) || 1;
+    const nx = x / len, ny = y / len, nz = z / len;
+    let h = 0, amp = 1, freq = 2.0, norm = 0;
+    for (let o = 0; o < 6; o++) {
+      let n = fbm3(nx * freq, ny * freq, nz * freq, seed + o * 97, 2);
+      if (ridged) n = 1 - Math.abs(n * 2 - 1);
+      h += n * amp; norm += amp; amp *= 0.5; freq *= 2.0;
+    }
+    const d = (h / norm - 0.5) * 2 * relief;
+    pos.setXYZ(i, x + nx * d, y + ny * d, z + nz * d);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
 }
 
 function glowSprite(color: string, size: number): THREE.Sprite {
@@ -359,9 +381,13 @@ export class BodiesLayer {
     // planets + moons
     for (const p of system.planets) {
       const tex = planetTexture(p);
+      // solid worlds get real geometric relief so mountains read during descent
+      const solid = p.kind !== 'gas';
+      const geo = new THREE.SphereGeometry(p.radius * FAR_SCALE, solid ? 200 : 64, solid ? 100 : 32);
+      if (solid) displacePlanet(geo, p.colorSeed, p.kind, p.radius * FAR_SCALE * 0.012);
       const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(p.radius * FAR_SCALE, 48, 24),
-        new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0 }),
+        geo,
+        new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0, flatShading: false }),
       );
       if (p.kind !== 'barren' && p.kind !== 'rocky') {
         const atmoColor = p.kind === 'lava' ? new THREE.Color(0xcc4422)

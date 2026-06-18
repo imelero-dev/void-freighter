@@ -6,7 +6,7 @@ import { isMobile } from '../game/touch';
 import { BOLT_SPEED, GOODS } from '../sim/data';
 import type { Entity } from '../sim/types';
 import { leadPoint, qForward, qRight, qUp, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
-import { atmosphereAt, SOFT_LAND_SPEED } from '../sim/system';
+import { atmoHeight, atmosphereAt, SOFT_LAND_SPEED } from '../sim/system';
 import { dockCheck, stationPort } from '../sim/docking';
 import type { IWorld } from '../world_api';
 import { fmtDistance, fmtTime } from './dom';
@@ -652,7 +652,7 @@ export class Hud {
     const ctx = this.ctx;
     const atmo = atmosphereAt(world.system, ship.pos);
     if (!atmo.planet) return;
-    const near = atmo.altitude < atmo.planet.radius * 0.5;
+    const near = atmo.altitude < atmoHeight(atmo.planet) * 2.5;
     if (!near && atmo.density <= 0) return;
 
     const y = 52;

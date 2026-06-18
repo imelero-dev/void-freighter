@@ -18,6 +18,7 @@ export class SceneManager {
   sunLightNear: THREE.DirectionalLight;
   sunLightFar: THREE.DirectionalLight;
   ambientNear: THREE.AmbientLight;
+  ambientFar!: THREE.AmbientLight;
   origin: Vec3 = { x: 0, y: 0, z: 0 }; // camera world position (floating origin)
 
   constructor(canvas: HTMLCanvasElement) {
@@ -49,7 +50,8 @@ export class SceneManager {
     this.near.add(this.sunLightNear, this.ambientNear);
 
     this.sunLightFar = new THREE.DirectionalLight(0xffd9b0, 2.2);
-    this.far.add(this.sunLightFar, new THREE.AmbientLight(0x223344, 0.4));
+    this.ambientFar = new THREE.AmbientLight(0x223344, 0.4);
+    this.far.add(this.sunLightFar, this.ambientFar);
 
     this.resize();
   }
@@ -78,6 +80,36 @@ export class SceneManager {
       else if (mat) mat.needsUpdate = true;
     });
     if (on) this.renderer.shadowMap.needsUpdate = true;
+  }
+
+  // Atmosphere: the empty sky becomes the far-scene background colour (so lit
+  // geometry renders over a real sky, not a post wash), plus near-scene haze so
+  // distant terrain fades into the air — which also hides the terrain patch edge.
+  private nearFog = new THREE.FogExp2(0x6fa8d6, 0);
+  private skyBg = new THREE.Color(0x000000);
+  private baseAmbient = new THREE.Color(0x223344);
+  setAtmosphere(color: THREE.Color, density: number): void {
+    if (density > 0.002) {
+      // sky brightens from black (space) to full daylight colour at the surface
+      this.skyBg.copy(color).multiplyScalar(Math.min(1, density * 1.15));
+      this.far.background = this.skyBg;
+      this.nearFog.color.copy(color);
+      this.nearFog.density = density * density * 5e-5;
+      this.near.fog = this.nearFog;
+      // skylight: the bright sky scatters daylight onto the surface so the
+      // terrain (near patch AND the far-scene planet) is lit even away from the sun
+      this.ambientNear.color.copy(this.baseAmbient).lerp(color, density * 0.7);
+      this.ambientNear.intensity = 0.55 + density * 1.9;
+      this.ambientFar.color.copy(this.baseAmbient).lerp(color, density * 0.7);
+      this.ambientFar.intensity = 0.4 + density * 1.9;
+    } else {
+      this.far.background = null;
+      this.near.fog = null;
+      this.ambientNear.color.copy(this.baseAmbient);
+      this.ambientNear.intensity = 0.55;
+      this.ambientFar.color.copy(this.baseAmbient);
+      this.ambientFar.intensity = 0.4;
+    }
   }
 
   // dynamic FOV: widens with speed for a stronger sense of velocity

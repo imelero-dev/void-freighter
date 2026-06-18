@@ -70,7 +70,7 @@ export function buildStarfield(seed: number): THREE.Group {
   tex.colorSpace = THREE.SRGBColorSpace;
   const sphere = new THREE.Mesh(
     new THREE.SphereGeometry(345_000, 32, 16),
-    new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, depthWrite: false, fog: false }),
+    new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, depthWrite: false, fog: false, transparent: true, opacity: 1 }),
   );
   sphere.frustumCulled = false;
   group.add(sphere);

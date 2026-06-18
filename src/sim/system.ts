@@ -7,6 +7,12 @@ import { v3, type Vec3 } from './vec';
 
 export const WORLD_SEED = 7741;
 
+// Planets in the source topology are sized for a compact map; this scales them
+// up to feel like real worlds (a ship is a speck against them) without changing
+// the orbital layout. Atmosphere height stays absolute (below) so descents
+// don't get longer as planets grow.
+export const PLANET_SCALE = 8;
+
 export const FACTIONS: FactionDef[] = [
   { id: 'helion', name: 'Helion Combine', color: 0xcc8833, pirate: false },
   { id: 'meridian', name: 'Meridian Charter', color: 0x5588aa, pirate: false },
@@ -147,26 +153,27 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
     const angle = rng.range(0, Math.PI * 2);
     const y = rng.range(-2e5, 2e5);
     const pos = v3(Math.cos(angle) * spec.orbit, y, Math.sin(angle) * spec.orbit);
+    const radius = spec.radius * PLANET_SCALE;
     const planet: PlanetDef = {
-      id: spec.id, name: spec.name, kind: spec.kind, pos, radius: spec.radius,
+      id: spec.id, name: spec.name, kind: spec.kind, pos, radius,
       ringed: spec.ringed, colorSeed: rng.int(1, 1e9), stationId: spec.station?.id ?? null,
     };
     planets.push(planet);
     for (let m = 0; m < spec.moons; m++) {
       const ma = rng.range(0, Math.PI * 2);
-      const md = spec.radius * rng.range(3.5, 6);
+      const md = radius * rng.range(3.5, 6);
       moons.push({
         id: `${spec.id}_moon${m}`, planetId: spec.id,
-        pos: v3(pos.x + Math.cos(ma) * md, pos.y + rng.range(-0.4, 0.4) * spec.radius, pos.z + Math.sin(ma) * md),
-        radius: spec.radius * rng.range(0.12, 0.25), colorSeed: rng.int(1, 1e9),
+        pos: v3(pos.x + Math.cos(ma) * md, pos.y + rng.range(-0.4, 0.4) * radius, pos.z + Math.sin(ma) * md),
+        radius: radius * rng.range(0.12, 0.25), colorSeed: rng.int(1, 1e9),
       });
     }
     if (spec.station) {
       // Station orbits just outside the planet, offset sunward-ish for light.
       const sa = rng.range(0, Math.PI * 2);
-      const sd = spec.radius * 2.2;
+      const sd = radius + 1.6e6; // a fixed standoff above the (now large) surface
       stations.push(makeStation(spec.station, v3(
-        pos.x + Math.cos(sa) * sd, pos.y + spec.radius * 0.3, pos.z + Math.sin(sa) * sd,
+        pos.x + Math.cos(sa) * sd, pos.y + radius * 0.1, pos.z + Math.sin(sa) * sd,
       ), rng.int(1, 1e9)));
     }
   }
@@ -278,11 +285,18 @@ export function stationInfoCost(from: Vec3, st: StationDef): number {
 
 // Atmospheric shell thickness as a fraction of planet radius. Drag ramps from
 // zero at the top of the shell to peak at the surface.
-export const ATMO_THICKNESS = 0.28;
-export const ATMO_DRAG = 0.3;          // peak per-second drag: felt, but you can still reach the ground
+export const ATMO_DRAG = 0.45;         // peak per-second drag: felt, but you can still reach the ground
 export const SOFT_LAND_SPEED = 35;     // m/s closing speed for a clean touchdown
 
-// Gas giants and lava worlds have no surface you can set down on.
+// Atmosphere shell height in metres (absolute, not a fraction of radius) so the
+// descent stays a sane length on a huge planet. Thicker on gas giants.
+export function atmoHeight(p: PlanetDef): number {
+  const base = p.kind === 'gas' ? 220_000 : p.kind === 'terran' ? 90_000 : 55_000;
+  return base;
+}
+
+// Gas giants and lava worlds have no firm ground; we give them a dense cloud
+// deck / molten crust you still rest on, so every body is landable.
 export function isLandable(kind: PlanetDef['kind']): boolean {
   return kind !== 'gas' && kind !== 'lava';
 }
@@ -303,8 +317,12 @@ export function atmosphereAt(system: SystemDef, pos: Vec3): { density: number; p
   }
   let density = 0;
   if (planet) {
-    const shell = planet.radius * ATMO_THICKNESS;
-    if (altitude < shell) density = Math.min(1, Math.max(0, 1 - altitude / shell));
+    const shell = atmoHeight(planet);
+    if (altitude < shell) {
+      // denser low down (quadratic) like a real column of air
+      const t = Math.max(0, 1 - altitude / shell);
+      density = Math.min(1, t * t);
+    }
   }
   return { density, planet, altitude };
 }

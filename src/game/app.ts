@@ -13,6 +13,8 @@ import { TerrainPatch } from '../render/terrain';
 import { buildStarfield } from '../render/starfield';
 import { BOLT_SPEED, GOODS, MODULE_NAMES, MODULE_TIER_TAGS } from '../sim/data';
 import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
+import { atmosphereAt } from '../sim/system';
+import type { PlanetKind } from '../sim/types';
 import { settings } from '../ui/settings';
 import type { IWorld } from '../world_api';
 import { ChatUi } from '../ui/chat';
@@ -28,6 +30,13 @@ import { bindAxis, bindButton, clearHotasBind, describeAxis, describeButton, Gam
 import { InputManager } from './input';
 import { isMobile, TouchControls } from './touch';
 import { BINDABLE, binds, HOTAS_AXES, HOTAS_BUTTONS, keyLabel, resetBinds, setBind } from '../ui/keybinds';
+
+// Sky / atmosphere tint per planet kind — the colour space fills with as you
+// descend into the air column.
+const SKY_COLORS: Record<PlanetKind, number> = {
+  terran: 0x6fa8d6, rocky: 0xc09a6a, barren: 0xb7a890,
+  ice: 0xbcd6ea, lava: 0xd2541e, gas: 0x8a7fb8,
+};
 
 export class GameApp {
   private sm: SceneManager;
@@ -63,12 +72,17 @@ export class GameApp {
   private fovCurrent = 68;
   private alarmUntil = 0;   // hull klaxon bursts on damage, then shuts up
   private approachBeepAcc = 0; // accumulates toward the next approach-aid beep
+  private skyColor = new THREE.Color(0x6fa8d6); // reused per-frame atmosphere tint
+  private frameAtmoDensity = 0;
+  private frameAtmoKind: PlanetKind = 'rocky';
+  private starfield!: THREE.Group; // faded out as you descend into daylight
 
   onExit: (() => void) | null = null;
 
   constructor(private world: IWorld, canvas: HTMLCanvasElement) {
     this.sm = new SceneManager(canvas);
-    this.sm.far.add(buildStarfield(world.system.seed));
+    this.starfield = buildStarfield(world.system.seed);
+    this.sm.far.add(this.starfield);
     this.bodies = new BodiesLayer(this.sm, world.system);
     this.entities = new EntitiesLayer(this.sm, world);
     this.fx = new FxLayer(this.sm, world, this.entities);
@@ -618,8 +632,15 @@ export class GameApp {
         const sd = vdist(en.pos, ship.pos) - en.radius;
         if (sd < nearSurf) nearSurf = sd;
       }
-      // target illuminance ≈ sunlight: intensity = k · distance, clamped
-      this.headlight.intensity = Math.max(180, Math.min(2200, nearSurf * 3.5));
+      // target illuminance ≈ sunlight: intensity = k · distance, clamped, and
+      // fade it right down inside a lit atmosphere (it's daylight, and it only
+      // smears the haze otherwise)
+      const atmoNow = atmosphereAt(w.system, ship.pos);
+      this.frameAtmoDensity = atmoNow.density;
+      this.frameAtmoKind = atmoNow.planet?.kind ?? 'rocky';
+      const base = Math.max(180, Math.min(2200, nearSurf * 3.5));
+      // off in lit atmosphere — it's daylight and only smears the haze
+      this.headlight.intensity = base * Math.max(0, 1 - this.frameAtmoDensity * 2.2);
       // speed-based FOV: subtle at maneuver, pronounced under cruise
       const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
       const maneuverKick = Math.min(1.1, speed / Math.max(1, w.shipStats.maxSpeed)) * 6;
@@ -632,11 +653,27 @@ export class GameApp {
     this.entities.update(w.time);
     this.fx.update(dt);
     this.dust.update();
+    // atmosphere: terrain patch, near-scene haze and the sky tint all key off
+    // how deep in a planet's air column the ship is (computed above for the
+    // headlight)
+    const atmoDensity = ship ? this.frameAtmoDensity : 0;
     if (ship) this.terrain.update(w.system, ship.pos);
+    this.skyColor.setHex(SKY_COLORS[this.frameAtmoKind]);
+    this.sm.setAtmosphere(this.skyColor, atmoDensity);
+    // stars wash out in daylight: fade the starfield as the air thickens
+    const starFade = 1 - Math.min(1, atmoDensity * 1.3);
+    this.starfield.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.Material & { opacity: number };
+      if (m && 'opacity' in m) {
+        const ud = (m as THREE.Material).userData;
+        ud.baseOpacity ??= m.opacity;
+        m.opacity = ud.baseOpacity * starFade;
+      }
+    });
 
     const hullFrac = ship ? ship.hull / ship.maxHull : 1;
     const damageLevel = hullFrac < 0.25 ? (0.25 - hullFrac) * 4 : 0;
-    this.post.render(w.time, Math.min(1, damageLevel));
+    this.post.render(w.time, Math.min(1, damageLevel), this.skyColor, atmoDensity);
     this.hud.draw(w, this.sm.origin, this.input.cursorX, this.input.cursorY, this.input.uiMode);
     if (this.map.isOpen) this.map.draw();
 
