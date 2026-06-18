@@ -10,8 +10,10 @@ import { FxLayer } from '../render/fx';
 import { PostPipeline } from '../render/post';
 import { SceneManager } from '../render/scene';
 import { TerrainPatch } from '../render/terrain';
+import { PlanetQuadtree } from '../render/planet_quadtree';
 import { SkyDome, CloudDeck } from '../render/sky';
 import { terrainHeight } from '../sim/terrain';
+import { atmoHeight } from '../sim/system';
 import { buildStarfield } from '../render/starfield';
 import { BOLT_SPEED, GOODS, MODULE_NAMES, MODULE_TIER_TAGS } from '../sim/data';
 import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
@@ -51,6 +53,14 @@ export class GameApp {
   private fx: FxLayer;
   private dust: DustLayer;
   private terrain: TerrainPatch;
+  // cube-sphere quadtree planet (the real continuous-LOD surface). Built lazily
+  // for whichever planet you're descending to; replaces the patch terrain there.
+  private quadtree: PlanetQuadtree | null = null;
+  private quadtreePlanetId = '';
+  // The cube-sphere quadtree is the real technique but still WIP (low-altitude
+  // geometry artifacts); kept gated OFF so the proven patch terrain ships, and
+  // flipped on for development. TODO: fix close-range skirts/precision, then flip.
+  private static readonly USE_QUADTREE = false;
   private sky: SkyDome;
   private clouds: CloudDeck;
   private dustAcc = 0;
@@ -689,12 +699,38 @@ export class GameApp {
     // hanging in black space — while the haze still thickens with the real air
     const skyD = ship ? skyStrength(atmoDensity) : 0;
     this.skyColor.setHex(SKY_COLORS[this.frameAtmoKind]);
-    if (ship) this.terrain.update(w.system, ship.pos, this.skyColor, atmoDensity);
-    // the ground cap reaches the horizon on descent — fit the near far-plane to
-    // it (back to the tight 80 km default in space), and blend the far-scene
-    // planet toward the ground tone so the cross-fade at the interface is seamless
-    this.sm.setNearFarPlane(this.terrain.active ? this.terrain.reach : 80_000);
-    this.bodies.setEntryBlend(this.terrain.active ? this.terrain.planetId : '', this.terrain.blend);
+    // Pick the surface renderer. The cube-sphere quadtree takes over for the
+    // planet you're descending to (continuous LOD, orbit-to-ground); the patch
+    // terrain is the fallback everywhere else.
+    let surfaceReach = 80_000;
+    let surfacePlanetId = '';
+    const nearPlanet = ship ? atmosphereAt(w.system, ship.pos) : null;
+    const useQuad = GameApp.USE_QUADTREE && nearPlanet?.planet
+      && nearPlanet.altitude < atmoHeight(nearPlanet.planet) * 1.4;
+    if (useQuad && ship && nearPlanet?.planet) {
+      const pl = nearPlanet.planet;
+      if (!this.quadtree || this.quadtreePlanetId !== pl.id) {
+        this.quadtree?.dispose();
+        this.quadtree = new PlanetQuadtree(this.sm, pl);
+        this.quadtreePlanetId = pl.id;
+      }
+      const emis = 0.08 + 0.22 * (1 - Math.min(1, nearPlanet.altitude / atmoHeight(pl)));
+      this.quadtree.setAtmosphere(this.skyColor, atmoDensity, emis);
+      this.quadtree.update(this.sm.origin, this.sm.origin);
+      this.quadtree.drainBuilds();
+      this.terrain.update(w.system, { x: 1e12, y: 1e12, z: 1e12 }, this.skyColor, 0); // park the patch
+      surfaceReach = this.quadtree.reach;
+      surfacePlanetId = pl.id;
+    } else {
+      if (this.quadtree) { this.quadtree.dispose(); this.quadtree = null; this.quadtreePlanetId = ''; }
+      if (ship) this.terrain.update(w.system, ship.pos, this.skyColor, atmoDensity);
+      surfaceReach = this.terrain.active ? this.terrain.reach : 80_000;
+      surfacePlanetId = this.terrain.active ? this.terrain.planetId : '';
+    }
+    // fit the near far-plane to the surface's farthest visible ground, and blend
+    // the far-scene planet toward the ground tone so the handoff is seamless
+    this.sm.setNearFarPlane(surfaceReach);
+    this.bodies.setEntryBlend(surfacePlanetId, surfacePlanetId ? 1 : 0);
     this.sm.setAtmosphere(this.skyColor, skyD, atmoDensity);
     if (ship) {
       this.sky.update(w.system, ship.pos, this.skyColor, skyD);
