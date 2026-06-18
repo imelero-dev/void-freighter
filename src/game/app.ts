@@ -993,6 +993,24 @@ export class GameApp {
         this.audio.interdiction();
         this.hud.flashAlert('INTERDICTION — CRUISE DROPPED', '#e8402a', 3200);
         break;
+      case 'touchdown': {
+        // dust kick + camera settle on the rising edge of contact
+        const pl = atmosphereAt(this.world.system, { x: ev.x, y: ev.y, z: ev.z }).planet;
+        if (pl) {
+          const ux = ev.x - pl.pos.x, uy = ev.y - pl.pos.y, uz = ev.z - pl.pos.z;
+          const ul = Math.hypot(ux, uy, uz) || 1;
+          const up = new THREE.Vector3(ux / ul, uy / ul, uz / ul);
+          const g = new THREE.Vector3(ev.x - this.sm.origin.x, ev.y - this.sm.origin.y, ev.z - this.sm.origin.z);
+          const burst = Math.min(1, 0.5 + ev.impact / 30);
+          for (let b = 0; b < 5; b++) this.fx.groundDust(g, up, burst);
+        }
+        this.camera.kick(Math.min(1.1, 0.25 + ev.impact / 40));
+        this.audio.explosion(false);
+        if (ev.entityId === this.world.playerId) {
+          this.hud.flashAlert(ev.hard ? 'HARD LANDING' : 'TOUCHDOWN', ev.hard ? '#f6a23a' : '#8fdc9a', 1500);
+        }
+        break;
+      }
       case 'death':
         this.hud.flashAlert('SHIP DESTROYED', '#e8402a', 5000);
         this.hud.pushLog(`Insurance recovered your hull. Cargo lost: ${ev.lostCargo} units. Deductible: ${fmtCredits(ev.deductible)}.`, '#e8402a');

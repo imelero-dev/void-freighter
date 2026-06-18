@@ -274,6 +274,25 @@ async function main() {
     await shot(`12_entry_${altKm}km`);
   }
 
+  // ---- look STRAIGHT DOWN from altitude: this is the view the player reported
+  //      as "a square on a bare sphere" — verify the ground now fills the disc. ----
+  for (const altKm of [40, 18, 8]) {
+    await page.evaluate((altKm) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+      const sun = V.vnorm(V.vscale(p.pos, -1));
+      const un = V.vnorm({ x: sun.x * 0.6 + 0.2, y: 0.78, z: sun.z * 0.6 + 0.1 });
+      const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
+      const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -1.0))); // ~45° down: ground fills the lower frame
+      window.IN.place(pos, look, un);
+      const e = w.sim.entities.get(w.playerId);
+      e.vel = { x: 0, y: 0, z: 0 }; // no dive → no plasma sheath blocking the view
+    }, altKm);
+    await sleep(900);
+    await shot(`12b_down_${altKm}km`);
+  }
+
   // ---- LAVA world (Cinder) entry, grazing-ish — the world the player tested ----
   for (const altKm of [30, 8]) {
     await page.evaluate((altKm) => {
@@ -291,6 +310,26 @@ async function main() {
     await sleep(900);
     await shot(`14_lava_${altKm}km`);
   }
+
+  // ---- LANDED: the ship resting on the terrain (chase cam), gear down ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const e = w.sim.entities.get(w.playerId);
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    // place just above the mean radius (below the relief); the sim's surface
+    // contact seats it on the terrain within a tick or two
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + e.radius + 30));
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    window.IN.place(pos, horiz, un);
+    e.vel = { x: 0, y: 0, z: 0 };
+    const m = w.sim.meta(w.playerId); if (m) { m.gearDown = true; m.vtol = true; }
+  });
+  await page.keyboard.press('KeyV'); // chase cam
+  await sleep(1200);
+  await shot('16_landed');
+  await page.keyboard.press('KeyV');
+  await sleep(300);
 
   // ---- CLOUD layers: flying down through the cloud decks on a terran world ----
   for (const altKm of [10, 6, 4.2, 1.5]) {

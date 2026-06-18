@@ -148,9 +148,12 @@ export class TerrainPatch {
     // aerial perspective: red/green extinguish faster than blue (distance shifts
     // toward the sky) and the inscatter colour is the pale bright horizon, so far
     // ground glows blue instead of greying out. d^2 falloff keeps near ground crisp.
-    const base = hazeD * 0.62e-4;
+    // gentler than physically-thick so mid-distance terrain stays READABLE from
+    // altitude (the brief is: see the relief from high up, not a white wash). The
+    // far rim still hazes to the sky, but hills hold form well into the distance.
+    const base = hazeD * 0.26e-4;
     this.aerial.uExt.value.set(base * 1.3, base * 1.02, base * 0.6);
-    this.aerial.uIns.value = base * 0.95;
+    this.aerial.uIns.value = base * 0.7;
     this.aerial.uInsCol.value.copy(skyColor).lerp(WHITE_C, 0.35).multiplyScalar(1.05);
     if (!p || atmo.altitude > atmoHeight(p)) {
       this.coarse.mesh.visible = false; this.fine.mesh.visible = false;
@@ -176,16 +179,22 @@ export class TerrainPatch {
     const wy = p.pos.y + this.up.y * R;
     const wz = p.pos.z + this.up.z * R;
 
-    // --- two LOD spans. The coarse cap reaches out ~3x altitude (capped by the
-    //     horizon) for the skyline; the fine patch stays tight so its quads stay
-    //     small (~120-180 m) and hills keep their relief from altitude. ---
+    // --- two LOD spans. CRUCIAL: the coarse cap must reach the TRUE GEOMETRIC
+    //     HORIZON, so the curved ground fully covers the visible planet disc and
+    //     fully occludes the far sphere below the skyline. If the cap is any
+    //     smaller than the horizon you see a square plate of ground floating on
+    //     the bare far sphere (the "cuadrado" bug) — terrain only at the rim.
+    //     We push it ~8% past the horizon so even the square's straight edges sit
+    //     below the visible horizon line. The fine patch stays tight so its quads
+    //     stay small and hills keep readable relief from altitude. ---
     const cosH = R / (R + alt);
     const horizonPlanar = R * Math.sqrt(Math.max(0, 1 - cosH * cosH));
-    const coarseHalf = Math.min(MAX_SPAN_HALF, horizonPlanar * 1.04, alt * 2.2 + 9_000);
-    const fineHalf = Math.min(coarseHalf * 0.5, alt * 0.55 + 3_000, 14_000);
+    const coarseHalf = Math.min(MAX_SPAN_HALF, horizonPlanar * 1.08);
+    const fineHalf = Math.min(coarseHalf * 0.5, alt * 0.7 + 3_000, 16_000);
     // amplitude the coarse cap carries at the fine patch's rim, so the fine relief
-    // can fade down to exactly that and the two meet without a step
-    const coarseRelief = Math.min(1, 50_000 / (coarseHalf * 2));
+    // can fade down to exactly that and the two meet without a step. Kept off the
+    // floor so distant ground still has some form (not a flat pancake to the rim).
+    const coarseRelief = Math.max(0.28, Math.min(1, 50_000 / (coarseHalf * 2)));
 
     this.buildCapIfNeeded(this.coarse, p, wx, wy, wz, coarseHalf, coarseRelief, 0);
     this.buildCapIfNeeded(this.fine, p, wx, wy, wz, fineHalf, 1, coarseRelief);
@@ -203,10 +212,13 @@ export class TerrainPatch {
     // cross-fade in over the top slice of the shell so entry is soft, not a pop
     const fade = Math.min(1, (shell - atmo.altitude) / (shell * 0.45));
     this.blend = fade;
-    // low floor-glow keeps the night side off pure black, but stays out of the
-    // sun's way so light-and-shadow models the hills (readable form)
+    // low floor-glow keeps the night side off pure black, but must stay well out
+    // of the sun's way: a strong fill light flattens the terrain into a uniform
+    // wash and kills the light-and-shadow that lets you read hills from altitude.
+    // Keep it dim so the sun models the relief (readable form), lift only on the
+    // deep night side.
     const deep = 1 - Math.min(1, atmo.altitude / shell);
-    const emis = 0.08 + 0.22 * deep;
+    const emis = 0.04 + 0.10 * deep;
     for (const c of [this.coarse, this.fine]) {
       c.mat.opacity = Math.max(0, fade);
       c.mat.emissiveIntensity = emis;

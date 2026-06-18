@@ -1028,6 +1028,10 @@ export class Sim {
       e.vel = vsub(e.vel, vscale(n, vn * 1.04)); // cancel inbound, keep along-slope
       const impact = -vn;
       const softLimit = meta.gearDown ? SOFT_LAND_SPEED : 12;
+      // touchdown event (rising edge): drives the dust kick and camera settle
+      if (!wasResting && impact > 2) {
+        this.events.push({ type: 'touchdown', entityId: e.id, impact, hard: impact > softLimit, x: e.pos.x, y: e.pos.y, z: e.pos.z });
+      }
       if (impact > softLimit) {
         const penalty = meta.gearDown ? 0.4 : 1.4; // gear-up slams the hull
         this.applyDamage(e, (impact - softLimit) * penalty * meta.stats.massFactor, -1, true);

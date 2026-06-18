@@ -376,6 +376,7 @@ export type SimEvent =
   | { type: 'merchant'; pid: number; entityId: number; name: string; wares: Array<{ good: string; qty: number; price: number }>; module: { slot: ModuleSlot; tier: number; price: number } | null }
   | { type: 'distress'; pid: number; entityId: number; text: string }
   | { type: 'cruiseChange'; entityId: number; state: CruiseState }
+  | { type: 'touchdown'; entityId: number; impact: number; hard: boolean; x: number; y: number; z: number }
   | { type: 'refined'; pid: number; goodIn: string; qtyIn: number; goodOut: string; qtyOut: number };
 
 export function dist(a: Vec3, b: Vec3): number {
