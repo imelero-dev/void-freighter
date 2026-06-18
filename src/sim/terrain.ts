@@ -31,15 +31,17 @@ export function heightField(X: number, Z: number, seed: number, p: { amp: number
   const uu = X + wx * 4200;
   const vv = Z + wy * 4200;
   const cont = fbm2(uu * f * 0.45, vv * f * 0.45, seed + 41, 1);
+  // seven octaves with a slower amplitude rolloff carry finer ridgelines, so the
+  // ground reads as rugged mountains up close instead of smooth swells
   let h = 0, amp = 1, freq = 1, norm = 0;
-  for (let o = 0; o < 6; o++) {
+  for (let o = 0; o < 7; o++) {
     let n = fbm2(uu * f * freq, vv * f * freq, seed + o * 131, 1);
     if (p.ridged) n = 1 - Math.abs(n * 2 - 1);
-    h += n * amp; norm += amp; amp *= 0.52; freq *= 2.15;
+    h += n * amp; norm += amp; amp *= 0.54; freq *= 2.15;
   }
   let hn = h / norm;
-  if (p.ridged) hn = Math.pow(hn, 1.4);
-  return hn * p.amp * (0.45 + cont * 0.9);
+  if (p.ridged) hn = Math.pow(hn, 1.45);
+  return hn * p.amp * (0.4 + cont * 1.0);
 }
 
 // Sub-point on the sphere directly under `pos` (where the column of terrain the
