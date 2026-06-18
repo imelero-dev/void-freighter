@@ -455,8 +455,8 @@ export const COLLISION_DAMAGE_SPEED = 90; // m/s impact over this damages hull
 
 // Turbo overburn: hold throttle-up at 100% to push past the speed cap.
 // Free in safe space; with hostiles nearby it drains a burst gauge.
-export const TURBO_SPEED = 1000;          // m/s ceiling
-export const TURBO_ACCEL_MULT = 2.2;
+export const TURBO_SPEED = 1500;          // m/s ceiling — fast enough that a planetary descent isn't a chore
+export const TURBO_ACCEL_MULT = 2.8;
 export const TURBO_BURST_S = 3.5;         // gauge duration in combat
 export const TURBO_RECHARGE_S = 9;        // empty -> full
 export const TURBO_ENEMY_RADIUS = 6000;   // hostiles inside this force burst mode

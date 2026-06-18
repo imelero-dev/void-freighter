@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { blankEntity, Sim } from '../src/sim/sim';
 import { vadd, vdist, vscale, v3 } from '../src/sim/vec';
 import { terrainHeight } from '../src/sim/terrain';
+import { TURBO_SPEED } from '../src/sim/data';
 
 function runTicks(sim: Sim, n: number) {
   const events = [];
@@ -21,7 +22,7 @@ function deepSpacePlayer(sim: Sim) {
 }
 
 describe('turbo overburn', () => {
-  it('pinned throttle in empty space sails past the speed cap toward 1 km/s', () => {
+  it('pinned throttle in empty space sails past the speed cap toward the turbo ceiling', () => {
     const sim = new Sim();
     const { pid, e, meta } = deepSpacePlayer(sim);
     meta.input.thrustForward = 1;
@@ -29,7 +30,7 @@ describe('turbo overburn', () => {
     runTicks(sim, 20 * 25);
     const speed = Math.hypot(e.vel.x, e.vel.y, e.vel.z);
     expect(speed).toBeGreaterThan(meta.stats.maxSpeed * 1.5);
-    expect(speed).toBeLessThanOrEqual(1001);
+    expect(speed).toBeLessThanOrEqual(TURBO_SPEED + 1);
     // free overburn: the gauge stays charged with nobody around
     expect(meta.turboCharge).toBeGreaterThan(0.9);
   });

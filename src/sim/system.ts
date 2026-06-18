@@ -287,7 +287,7 @@ export function stationInfoCost(from: Vec3, st: StationDef): number {
 
 // Atmospheric shell thickness as a fraction of planet radius. Drag ramps from
 // zero at the top of the shell to peak at the surface.
-export const ATMO_DRAG = 0.45;         // peak per-second drag: felt, but you can still reach the ground
+export const ATMO_DRAG = 0.28;         // peak per-second drag: felt in the handling, but it no longer caps a powered dive to a crawl
 export const SOFT_LAND_SPEED = 35;     // m/s closing speed for a clean touchdown
 
 // Atmosphere shell height in metres (absolute, not a fraction of radius) so the

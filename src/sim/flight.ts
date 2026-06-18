@@ -78,27 +78,48 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
       -b.throttle,
     );
     const desired = vscale(qrot(b.orient, desiredLocal), perf.maxSpeed);
-    // weight: the gyros keep you planted horizontally, but the engines have to
-    // actually hold you up — when you aren't commanding vertical thrust the
-    // assist lets go of the gravity axis so your weight pulls you down (you fall
-    // unless you fly it). Commanding up/down still works against gravity.
-    if (perf.gravity && Math.abs(input.thrustUp) < 0.05) {
-      const g = perf.gravity;
-      const gl = vlen(g) || 1;
-      const gx = g.x / gl, gy = g.y / gl, gz = g.z / gl;
-      const adj = (b.vel.x * gx + b.vel.y * gy + b.vel.z * gz) - (desired.x * gx + desired.y * gy + desired.z * gz);
-      desired.x += gx * adj; desired.y += gy * adj; desired.z += gz * adj;
-    }
-    const delta = vsub(desired, b.vel);
-    const dl = vlen(delta);
     // assist corrects the velocity vector much faster than raw thrust — a
     // futuristic ship should feel planted, not like a barge.
     const maxDelta = perf.accel * 1.6 * dt;
-    if (dl > 1e-6) {
-      const f = Math.min(1, maxDelta / dl);
-      b.vel.x += delta.x * f;
-      b.vel.y += delta.y * f;
-      b.vel.z += delta.z * f;
+    if (perf.gravity) {
+      // In a planet's gravity the assist PLANTS you horizontally but never
+      // velocity-matches the vertical (gravity) axis — that axis is Newtonian:
+      // your actual thrust projection plus weight. So pointing the nose down and
+      // burning is a real power dive, pointing up is a real climb, and flying
+      // level lets your weight pull you down. (Velocity-matching the vertical
+      // axis is what cancelled downward thrust and made every descent a crawl.)
+      const g = perf.gravity;
+      const gl = vlen(g) || 1;
+      const gx = g.x / gl, gy = g.y / gl, gz = g.z / gl;
+      const dDes = desired.x * gx + desired.y * gy + desired.z * gz;
+      const dVel = b.vel.x * gx + b.vel.y * gy + b.vel.z * gz;
+      // horizontal error only (strip the gravity-axis component from both)
+      const ex = (desired.x - gx * dDes) - (b.vel.x - gx * dVel);
+      const ey = (desired.y - gy * dDes) - (b.vel.y - gy * dVel);
+      const ez = (desired.z - gz * dDes) - (b.vel.z - gz * dVel);
+      const el = Math.hypot(ex, ey, ez);
+      if (el > 1e-6) {
+        const f = Math.min(1, maxDelta / el);
+        b.vel.x += ex * f; b.vel.y += ey * f; b.vel.z += ez * f;
+      }
+      // vertical: thrust projected onto the gravity axis (the nose direction),
+      // applied directly so a dive actually accelerates you toward the ground
+      const tw = qrot(b.orient, v3(
+        clamp(input.thrustRight, -1, 1),
+        clamp(input.thrustUp, -1, 1),
+        -clamp(input.thrustForward, -1, 1),
+      ));
+      const vThrust = (tw.x * gx + tw.y * gy + tw.z * gz) * perf.accel * 1.6 * dt;
+      b.vel.x += gx * vThrust; b.vel.y += gy * vThrust; b.vel.z += gz * vThrust;
+    } else {
+      const delta = vsub(desired, b.vel);
+      const dl = vlen(delta);
+      if (dl > 1e-6) {
+        const f = Math.min(1, maxDelta / dl);
+        b.vel.x += delta.x * f;
+        b.vel.y += delta.y * f;
+        b.vel.z += delta.z * f;
+      }
     }
     // overspeed bleed: past the cap (turbo release, cruise drop) excess
     // velocity decays fast instead of taking half a minute to settle
