@@ -113,43 +113,56 @@ function cloudDeckTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-const CLOUD_ALT = 5200;   // m above the surface
-const CLOUD_FADE = 26000; // start showing within this altitude of the deck
+// Several decks at different altitudes so you fly DOWN THROUGH a layered cloud
+// field on the way in (and it parts below you), not one flat sheet. Each deck
+// fades as you near and cross its altitude, scrolls at its own speed, and only
+// shows on worlds with weather.
+const CLOUD_LAYERS = [3400, 5600, 8200, 11500]; // m above the surface
+const LAYER_FADE = 5200;  // each deck visible within this altitude of itself
+const CLOUDY: Record<string, number> = { terran: 1, ice: 0.8, gas: 1, rocky: 0.25, barren: 0.2, lava: 0 };
 
 export class CloudDeck {
-  private mesh: THREE.Mesh;
-  private mat: THREE.MeshStandardMaterial;
+  private decks: { mesh: THREE.Mesh; mat: THREE.MeshStandardMaterial; tex: THREE.CanvasTexture; alt: number }[] = [];
   private up = new THREE.Vector3();
-  private tex: THREE.CanvasTexture;
 
   constructor(private sm: SceneManager) {
-    this.tex = cloudDeckTexture();
-    this.mat = new THREE.MeshStandardMaterial({
-      map: this.tex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
-      roughness: 1, metalness: 0, emissive: 0x202833, emissiveIntensity: 0.4, opacity: 0,
-    });
-    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(90_000, 90_000), this.mat);
-    this.mesh.frustumCulled = false;
-    this.mesh.visible = false;
-    sm.near.add(this.mesh);
+    for (let i = 0; i < CLOUD_LAYERS.length; i++) {
+      const tex = cloudDeckTexture();
+      tex.offset.set(Math.random(), Math.random());
+      const mat = new THREE.MeshStandardMaterial({
+        map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+        roughness: 1, metalness: 0, emissive: 0x2a3240, emissiveIntensity: 0.35, opacity: 0,
+      });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(120_000, 120_000), mat);
+      mesh.frustumCulled = false;
+      mesh.visible = false;
+      mesh.renderOrder = -50; // behind ships/fx, over the far sky
+      sm.near.add(mesh);
+      this.decks.push({ mesh, mat, tex, alt: CLOUD_LAYERS[i] });
+    }
   }
 
   update(system: SystemDef, shipPos: { x: number; y: number; z: number }, time: number, density: number): void {
     const atmo = atmosphereAt(system, shipPos);
     const p = atmo.planet;
-    if (!p || density < 0.04 || Math.abs(atmo.altitude - CLOUD_ALT) > CLOUD_FADE) {
-      this.mesh.visible = false;
+    const cover = p ? (CLOUDY[p.kind] ?? 0) : 0;
+    if (!p || density < 0.03 || cover <= 0) {
+      for (const d of this.decks) d.mesh.visible = false;
       return;
     }
     this.up.set(shipPos.x - p.pos.x, shipPos.y - p.pos.y, shipPos.z - p.pos.z).normalize();
-    // centre the deck over the ship at a fixed altitude above the surface
-    const rel = CLOUD_ALT - atmo.altitude;
-    this.mesh.position.set(this.up.x * rel, this.up.y * rel, this.up.z * rel);
-    this.mesh.quaternion.setFromUnitVectors(Z, this.up);
-    this.tex.offset.set(time * 0.002, time * 0.0013);
-    // thickest from a touch below, fading as you climb through and above it
-    const near = 1 - Math.min(1, Math.abs(atmo.altitude - CLOUD_ALT) / CLOUD_FADE);
-    this.mat.opacity = Math.min(0.85, density * near * 1.1);
-    this.mesh.visible = this.mat.opacity > 0.02;
+    for (let i = 0; i < this.decks.length; i++) {
+      const d = this.decks[i];
+      const near = 1 - Math.min(1, Math.abs(atmo.altitude - d.alt) / LAYER_FADE);
+      const op = Math.min(0.9, density * near * 1.25 * cover);
+      d.mesh.visible = op > 0.02;
+      if (!d.mesh.visible) continue;
+      const rel = d.alt - atmo.altitude;
+      d.mesh.position.set(this.up.x * rel, this.up.y * rel, this.up.z * rel);
+      d.mesh.quaternion.setFromUnitVectors(Z, this.up);
+      const sp = 0.0014 + i * 0.0006;
+      d.tex.offset.set(time * sp + i * 0.37, time * sp * 0.7 - i * 0.21);
+      d.mat.opacity = op;
+    }
   }
 }

@@ -292,6 +292,22 @@ async function main() {
     await shot(`14_lava_${altKm}km`);
   }
 
+  // ---- CLOUD layers: flying down through the cloud decks on a terran world ----
+  for (const altKm of [10, 6, 4.2, 1.5]) {
+    await page.evaluate((altKm) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+      const sun = V.vnorm(V.vscale(p.pos, -1));
+      const un = V.vnorm({ x: sun.x * 0.5 + 0.25, y: 0.8, z: sun.z * 0.5 + 0.15 });
+      const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
+      const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.4)));
+      window.IN.place(pos, look, un);
+    }, altKm);
+    await sleep(900);
+    await shot(`15_clouds_${String(altKm).replace('.', '_')}km`);
+  }
+
   // ---- GRAZING views: look out toward the horizon from altitude (the angle that
   //      makes coarse chunks sliver into streaks). Deterministic teleports. ----
   for (const altKm of [40, 18, 6]) {
