@@ -135,7 +135,7 @@ describe('flight model: inertia & flight assist', () => {
 });
 
 describe('VTOL flight mode (#19)', () => {
-  it('VTOL is true vertical flight: thrust-up climbs along local up, nose-independent', () => {
+  it('VTOL is true vertical flight: the throttle is a collective that climbs, nose-independent', () => {
     const sim = makeSim();
     const pid = sim.addPlayer('tester');
     sim.undock(pid);
@@ -151,10 +151,10 @@ describe('VTOL flight mode (#19)', () => {
     sim.toggleVtol(pid);
     expect(meta.vtol).toBe(true);
     const alt0 = vdist(e.pos, p.pos) - p.radius;
-    meta.input.thrustUp = 1; // collective up
+    meta.input.thrustForward = 1; // throttle up = collective climb
     runTicks(sim, 20 * 3);
     const alt1 = vdist(e.pos, p.pos) - p.radius;
-    expect(alt1).toBeGreaterThan(alt0 + 100); // climbed vertically despite a level nose
+    expect(alt1).toBeGreaterThan(alt0 + 100); // climbed straight up despite a level nose
   });
 
   it('VTOL hovers: releasing the stick snaps a drifting ship to a near-stop', () => {
@@ -249,6 +249,7 @@ describe('docking', () => {
     meta.undockInvuln = 0;
     meta.gearDown = true;
     meta.vtol = true;
+    meta.dockArmed = true; // as if you'd just flown in (undock disarms it)
     e.pos = padPoint(def);
     e.vel = v3();
     e.orient = qLookAt(vscale(hangarFrame(def).f, -1)); // nose into the bay
@@ -260,7 +261,7 @@ describe('docking', () => {
     const pid = sim.addPlayer('tester');
     sim.undock(pid);
     stageOnPad(sim, pid, st);
-    runTicks(sim, 8); // settles on the pad and the dock is logged in place
+    runTicks(sim, 20); // settle on the pad for the dwell, then the dock logs in place
     expect(sim.entities.get(pid)!.dockedAt).toBe(st.id);
   });
 

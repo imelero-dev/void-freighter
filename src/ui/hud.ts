@@ -735,7 +735,7 @@ export class Hud {
     ctx.textAlign = 'center';
     ctx.font = '9px "Lucida Console", monospace';
     ctx.fillStyle = AMBER_DIM;
-    ctx.fillText('VTOL HOVER', cx, cy - r - 8);
+    ctx.fillText('VTOL  ·  THROTTLE = CLIMB / DESCEND', cx, cy - r - 8);
     ctx.fillStyle = col;
     ctx.fillText(`DRIFT ${drift.toFixed(1)} m/s`, cx, cy + r + 14);
     // descent rate on the right
@@ -763,9 +763,9 @@ export class Hud {
     const dPort = vdist(port.point, ship.pos);
     // authoritative type-specific readiness — the same check the sim docks on,
     // so the instrument never lies (clamp / bay / pad)
-    const res = dockCheck(st, ship.pos, ship.vel, ship.orient, world.gearDown, world.vtolMode);
+    const res = dockCheck(st, ship.pos, ship.vel, world.gearDown);
     const level = res.level;
-    const cue = res.ok ? `${st.dockType.toUpperCase()} — holding` : res.cue;
+    const cue = res.ok ? 'HANGAR — settling' : res.cue;
 
     const prox = Math.max(0, 1 - dPort / st.dockRadius);
     const beep = level === 2 ? 2 + prox * 6 : level === 1 ? 1 + prox * 2 : 0.4;

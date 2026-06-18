@@ -174,14 +174,19 @@ function vtolFlight(b: FlightBody, input: ShipInput, perf: FlightPerf, dt: numbe
   b.orient = qnlerp(b.orient, target, Math.min(1, perf.turnRate * 1.6 * dt));
   b.angVel = v3(0, 0, 0);
 
-  // --- translation: collective vertical + slow horizontal, nose-independent ---
-  b.throttle = clamp(input.thrustForward, -1, 1);
+  // --- translation: the THROTTLE is the collective — push it up to rise, down
+  //     to descend, leave it at neutral to hold altitude. This is what makes
+  //     VTOL real vertical flight (take off and land straight up/down) instead
+  //     of a hoverboard. Strafe nudges you sideways, the up/down keys fore/aft,
+  //     all decoupled from where the nose points. ---
+  b.throttle = clamp(input.thrustForward, -0.3, 1);
+  const collective = b.throttle >= 0 ? b.throttle : b.throttle * 2.6; // full descent from the short reverse range
+  const climb = clamp(collective, -1, 1) * VTOL_CLIMB;
   const right = vnorm(vcross(heading, up));
-  const climb = clamp(input.thrustUp, -1, 1) * VTOL_CLIMB;
-  const fwd = b.throttle * VTOL_HORIZ;
-  const side = clamp(input.thrustRight, -1, 1) * VTOL_HORIZ;
-  let desired = vadd(vscale(up, climb), vadd(vscale(heading, fwd), vscale(right, side)));
-  if (input.brake) desired = v3(0, 0, 0);
+  let fwd = clamp(input.thrustUp, -1, 1) * VTOL_HORIZ;   // R/F → forward / back
+  let side = clamp(input.thrustRight, -1, 1) * VTOL_HORIZ; // A/D → strafe
+  if (input.brake) { fwd = 0; side = 0; } // brake kills horizontal drift, vertical still flies
+  const desired = vadd(vscale(up, climb), vadd(vscale(heading, fwd), vscale(right, side)));
   const delta = vsub(desired, b.vel);
   const dl = vlen(delta);
   const maxDelta = perf.accel * 3.0 * dt; // crisp, planted hover

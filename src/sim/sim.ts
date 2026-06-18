@@ -19,7 +19,7 @@ import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
 import { ATMO_DRAG, atmoGravity, atmosphereAt, dangerAt, generateSystem, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
-import { dockCheck, hangarFrame, padPoint, vtolUpRef } from './docking';
+import { dockCheck, hangarFrame, insideHangar, padPoint, vtolUpRef } from './docking';
 import { terrainHeight, terrainNormal, type TerrainBody } from './terrain';
 import { TrafficSystem } from './traffic';
 import {
@@ -42,6 +42,7 @@ const VTOL_SPEED_FACTOR = 0.22;  // forward-speed envelope in VTOL hover mode
 const ZERO_VEL: Vec3 = { x: 0, y: 0, z: 0 }; // stationary collider reference
 const LAVA_HEAT_DPS = 55;        // hull heat per second in a lava world's air
 const CRUISE_PLANET_STANDOFF = 160_000; // m above a planet surface where cruise drops you (~2.7 min at full turbo)
+const DOCK_SETTLE_S = 0.7;       // settle dwell on the pad before the dock menu opens
 const CRUISE_MOON_STANDOFF = 60_000;    // m above a moon surface
 const LOOT_TTL = 240;
 const MISSILE_SPEED = 700;
@@ -166,6 +167,8 @@ export interface PlayerMeta {
   gearDown: boolean;     // landing gear deployed (required for pad touchdown)
   approachStation: string | null; // station we've been cleared to approach (ATC)
   onSurface: boolean;    // resting on a planet surface (rising-edge touchdown msg)
+  settleTimer: number;   // how long you've been settled on the pad (dwell before docking)
+  dockArmed: boolean;    // false right after undocking until you leave the hangar (no re-suck)
 }
 
 interface RockState {
@@ -237,6 +240,7 @@ export class Sim {
       turboCharge: 1, turboActive: false, lastCombatAt: -999,
       miningBeam: false, beamFiring: false, drillHeat: 0, drillOverheated: false,
       vtol: false, gearDown: false, approachStation: null, onSurface: false,
+      settleTimer: 0, dockArmed: true,
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
@@ -597,7 +601,7 @@ export class Sim {
     // ATC: announce approach clearance, then auto-dock once the type's approach
     // is flown correctly (clamp aligned / inside the bay / settled on the pad)
     this.tickApproach(meta, e);
-    this.tickDockingDetect(meta, e);
+    this.tickDockingDetect(meta, e, dt);
 
     // mining
     this.tickMining(meta, e, dt);
@@ -2192,7 +2196,7 @@ export class Sim {
       this.events.push({ type: 'log', text: 'No station in docking range.', color: '#f66', pid });
       return;
     }
-    const res = dockCheck(st, e.pos, e.vel, e.orient, meta.gearDown, meta.vtol);
+    const res = dockCheck(st, e.pos, e.vel, meta.gearDown);
     if (!res.ok) {
       this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `Not down yet — ${res.cue}. [Y] for autodock.` });
       return;
@@ -2200,15 +2204,23 @@ export class Sim {
     this.dockShip(meta, e, st, false);
   }
 
-  // Skill landing: the instant you're settled gently on the pad inside the
-  // hangar (centred, slow, gear + VTOL), the dock is logged where you sit — no
-  // autopilot, no being sucked in. Flying the approach IS the docking.
-  private tickDockingDetect(meta: PlayerMeta, e: Entity): void {
-    if (e.dead || e.dockedAt || meta.docking || e.cruise !== 'off') return;
+  // Skill landing: fly into the hangar, drop the gear, set down on the pad and
+  // come to a stop. Once you're settled and motionless on the pad for a beat the
+  // menu opens where you sit — no autopilot, no instant suck-in. After undocking
+  // the dock stays disarmed until you've actually flown back out of the hangar,
+  // so leaving the menu with the gear still down doesn't drag you straight back.
+  private tickDockingDetect(meta: PlayerMeta, e: Entity, dt: number): void {
+    if (e.dead || e.dockedAt || meta.docking || e.cruise !== 'off') { meta.settleTimer = 0; return; }
     const st = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
-    if (!st) return;
-    if (!dockCheck(st, e.pos, e.vel, e.orient, meta.gearDown, meta.vtol).ok) return;
-    this.dockShip(meta, e, st, false);
+    if (!st) { meta.settleTimer = 0; return; }
+    if (!insideHangar(st, e.pos)) meta.dockArmed = true; // re-arm once you're clear of the bay
+    if (!meta.dockArmed) { meta.settleTimer = 0; return; }
+    if (!dockCheck(st, e.pos, e.vel, meta.gearDown).ok) { meta.settleTimer = 0; return; }
+    meta.settleTimer += dt;
+    if (meta.settleTimer >= DOCK_SETTLE_S) {
+      meta.settleTimer = 0;
+      this.dockShip(meta, e, st, false);
+    }
   }
 
   // Autodock convenience service (#17): a paid hands-off final approach for
@@ -2301,6 +2313,8 @@ export class Sim {
     e.vel = vscale(fr.f, 45);
     e.shield = e.maxShield;
     meta.undockInvuln = 4;
+    meta.settleTimer = 0;
+    meta.dockArmed = false; // no instant re-dock — fly out of the bay to re-arm
     this.events.push({ type: 'undocked', pid, stationId: st.id });
   }
 

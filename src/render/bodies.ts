@@ -245,9 +245,11 @@ function buildStationMesh(def: StationDef): {
   ));
 
   const tex = panelTexture(def.seed);
-  const hull = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.82, metalness: 0.6 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x202327, roughness: 0.95, metalness: 0.35 });
-  const interiorMat = new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.9, metalness: 0.3, emissive: 0x141b24, emissiveIntensity: 0.6 });
+  // DoubleSide everywhere so flying inside the hangar never shows see-through
+  // walls (you'd otherwise look at back-face-culled interior panels)
+  const hull = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.82, metalness: 0.6, side: THREE.DoubleSide });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x202327, roughness: 0.95, metalness: 0.35, side: THREE.DoubleSide });
+  const interiorMat = new THREE.MeshStandardMaterial({ color: 0x3a414a, roughness: 0.9, metalness: 0.3, emissive: 0x2a3442, emissiveIntensity: 1.0, side: THREE.DoubleSide });
   const lit = (color: number) => new THREE.MeshBasicMaterial({ color });
 
   const HX = fr.HX, HY = fr.HY, HZ = fr.HZ;     // hull half-extents (metres)
@@ -310,10 +312,13 @@ function buildStationMesh(def: StationDef): {
     strip.position.set(sx * HW * 0.7, HH - t * 1.5, depthZc);
     group.add(strip);
   }
-  const bayLight = new THREE.PointLight(0x9fd8ff, 1.4, R * 2.6, 1.3);
+  const bayLight = new THREE.PointLight(0x9fd8ff, 3.0, R * 3, 1.1);
   bayLight.position.set(0, HH * 0.4, padA);
   group.add(bayLight);
-  const mouthLight = new THREE.PointLight(0xffd9a8, 0.8, R * 1.8, 1.5);
+  const backLight = new THREE.PointLight(0xbfe6ff, 2.0, R * 2.4, 1.2);
+  backLight.position.set(0, HH * 0.3, backA + R * 0.2);
+  group.add(backLight);
+  const mouthLight = new THREE.PointLight(0xffd9a8, 1.4, R * 2.2, 1.4);
   mouthLight.position.set(0, 0, HZ * 0.7);
   group.add(mouthLight);
 

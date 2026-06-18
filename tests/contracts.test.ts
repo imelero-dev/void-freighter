@@ -68,6 +68,7 @@ describe('transport contract lifecycle', () => {
     sim.meta(pid)!.undockInvuln = 0;
     sim.meta(pid)!.gearDown = true;
     sim.meta(pid)!.vtol = true;
+    sim.meta(pid)!.dockArmed = true;
     e.pos = padPoint(dest);
     e.vel = v3();
     const creditsBefore = meta.profile.credits;
@@ -185,6 +186,7 @@ describe('smuggling', () => {
       meta.undockInvuln = 0;
       meta.gearDown = true;
       meta.vtol = true;
+      meta.dockArmed = true;
       sim.addCargo(meta.profile, 'stims', 10);
       const st = sim.station('bren_yards')!;
       e.pos = padPoint(st);

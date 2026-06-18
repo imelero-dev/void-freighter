@@ -13,7 +13,6 @@ import type { StationDef, SystemDef } from './types';
 import { atmoHeight } from './system';
 import { qForward, vadd, vcross, vdot, vlen, vnorm, vscale, vsub, type Quat, type Vec3 } from './vec';
 import { DOCK_MAX_SPEED } from './data';
-import { SOFT_LAND_SPEED } from './system';
 
 // The station hull is a chunky box in its own (u,v,f) frame — a Coriolis-style
 // block — with a rectangular hangar "mail slot" cut into the +f (dock) face.
@@ -80,7 +79,13 @@ export function padPoint(st: StationDef): Vec3 {
   return vadd(vadd(fr.center, vscale(fr.f, fr.padA)), vscale(fr.v, restV));
 }
 
-export function dockCheck(st: StationDef, pos: Vec3, vel: Vec3, _orient: Quat, gearDown: boolean, vtol: boolean): DockResult {
+export const DOCK_STILL_SPEED = 6; // m/s — "at rest" threshold before the menu opens
+
+// Readiness to dock: you have to be inside the hangar, settled on the pad floor
+// with the landing gear down, over the pad, and brought to a stop. No VTOL
+// requirement — drop the gear, set it down, hold still. The dwell + "armed"
+// logic (in the Sim) is what stops it snapping you in the instant you touch.
+export function dockCheck(st: StationDef, pos: Vec3, vel: Vec3, gearDown: boolean): DockResult {
   const fr = hangarFrame(st);
   const rel = vsub(pos, fr.center);
   const a = vdot(rel, fr.f);
@@ -89,26 +94,32 @@ export function dockCheck(st: StationDef, pos: Vec3, vel: Vec3, _orient: Quat, g
   const inFootprint = Math.abs(pu) < fr.HW && Math.abs(pv) < fr.HH;
   const inside = inFootprint && a < fr.mouthA && a > fr.backA;
   const speed = vlen(vel);
-  const slow = speed <= DOCK_MAX_SPEED;
-  const vDown = -vdot(vel, fr.v);                       // >0 = settling toward the floor
   const overPad = inside && Math.hypot(pu, a - fr.padA) < fr.padR;
-  const settled = pv < fr.floorV + fr.R * 0.10;         // close to the pad surface
-  const gentle = Math.abs(vDown) < SOFT_LAND_SPEED && slow;
-  const ready = gearDown && vtol;
+  const settled = pv < fr.floorV + fr.R * 0.12;   // set down on the pad floor
+  const stopped = speed < DOCK_STILL_SPEED;        // not drifting
 
-  if (overPad && settled && gentle && ready) return { ok: true, level: 2, cue: 'SET DOWN' };
+  if (overPad && settled && stopped && gearDown) return { ok: true, level: 2, cue: 'SETTLED — DOCKING' };
   if (inside) {
-    const cue = !ready ? 'VTOL + GEAR TO LAND'
+    const cue = !gearDown ? 'GEAR DOWN TO SET DOWN'
       : !overPad ? 'CENTRE OVER THE PAD'
-        : !settled ? 'DESCEND ONTO THE PAD'
-          : !gentle ? 'EASE YOUR DESCENT' : 'HOLD STILL';
+        : !settled ? 'SET DOWN ON THE PAD'
+          : 'COME TO A STOP';
     return { ok: false, level: 1, cue };
   }
   // lined up in front of the open mouth, about to fly in
   if (inFootprint && a >= fr.mouthA && a < fr.mouthA + fr.R * 1.6) {
-    return { ok: false, level: 1, cue: !slow ? 'SLOW FOR THE HANGAR' : 'FLY INTO THE HANGAR' };
+    return { ok: false, level: 1, cue: speed > DOCK_MAX_SPEED ? 'SLOW FOR THE HANGAR' : 'FLY INTO THE HANGAR' };
   }
   return { ok: false, level: 0, cue: 'LINE UP WITH THE HANGAR MOUTH' };
+}
+
+// True while the ship is within the hangar's interior volume (used to re-arm
+// docking only after you've actually flown back out).
+export function insideHangar(st: StationDef, pos: Vec3): boolean {
+  const fr = hangarFrame(st);
+  const rel = vsub(pos, fr.center);
+  const a = vdot(rel, fr.f), pu = vdot(rel, fr.u), pv = vdot(rel, fr.v);
+  return Math.abs(pu) < fr.HW && Math.abs(pv) < fr.HH && a < fr.mouthA && a > fr.backA;
 }
 
 // "Up" reference for VTOL flight at a world position: the hangar floor normal
