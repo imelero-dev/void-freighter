@@ -86,6 +86,7 @@ export class TerrainPatch {
     uExt: { value: new THREE.Vector3(0, 0, 0) },   // per-channel extinction (1/m, applied to d^2)
     uIns: { value: 0 },                            // inscatter rate (1/m)
     uInsCol: { value: new THREE.Color(0x6fa8d6) }, // inscatter (sky) colour
+    uDetail: { value: 0 },                         // detail bump amplitude (m); fades out with distance/altitude
   };
 
   constructor(private sm: SceneManager) {
@@ -101,8 +102,13 @@ export class TerrainPatch {
   private makeCap(renderOrder: number, onTop: boolean): Cap {
     const geo = new THREE.PlaneGeometry(1, 1, SEG, SEG);
     geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 3), 3));
+    // world XZ of each vertex, so the fragment shader can add WORLD-LOCKED micro
+    // detail (bump + speckle) that doesn't swim when the patch recentres
+    geo.setAttribute('aWorld', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
     const mat = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 1, metalness: 0, flatShading: true,
+      // smooth shading: the base mesh carries the macro relief, a procedural
+      // detail-normal in the shader adds the per-pixel rock texture (no facets)
+      vertexColors: true, roughness: 1, metalness: 0, flatShading: false,
       emissive: 0x202020, emissiveIntensity: 0.25,
       transparent: true, opacity: 1, depthWrite: true,
       // the fine patch wins the depth test over the coarse cap it overlaps, so no
@@ -127,7 +133,54 @@ export class TerrainPatch {
       shader.uniforms.uExt = this.aerial.uExt;
       shader.uniforms.uIns = this.aerial.uIns;
       shader.uniforms.uInsCol = this.aerial.uInsCol;
-      shader.fragmentShader = 'uniform vec3 uExt;\nuniform float uIns;\nuniform vec3 uInsCol;\n' + shader.fragmentShader;
+      shader.uniforms.uDetail = this.aerial.uDetail; // bump amplitude, fades with distance
+
+      // --- vertex: carry the world XZ through so detail is world-locked ---
+      shader.vertexShader = 'attribute vec2 aWorld;\nvarying vec2 vWorldXZ;\n' + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\n  vWorldXZ = aWorld;',
+      );
+
+      // --- fragment: procedural value-noise FBM, a detail bump-normal (tangent-
+      //     free, from screen-space derivatives) and an albedo speckle, so the
+      //     ground reads as textured rock per-pixel instead of flat vertex colour.
+      shader.fragmentShader =
+        'uniform vec3 uExt;\nuniform float uIns;\nuniform vec3 uInsCol;\nuniform float uDetail;\nvarying vec2 vWorldXZ;\n' +
+        `float vfHash(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.21); return fract(p.x * p.y); }
+         float vfNoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+           float a = vfHash(i), b = vfHash(i + vec2(1.0, 0.0)), c = vfHash(i + vec2(0.0, 1.0)), d = vfHash(i + vec2(1.0, 1.0));
+           return mix(mix(a, b, f.x), mix(c, d, f.x), f.y); }
+         float vfFbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { s += a * vfNoise(p); p = p * 2.03 + 7.1; a *= 0.5; } return s; }
+        ` + shader.fragmentShader;
+
+      // perturb the geometric normal by the gradient of a procedural detail height
+      // (Morten Mikkelsen's tangent-free bump, the method three uses for bumpMap)
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <normal_fragment_begin>',
+        `#include <normal_fragment_begin>
+         if (uDetail > 0.001) {
+           float H = (vfFbm(vWorldXZ * 0.085) + 0.45 * vfFbm(vWorldXZ * 0.35)) * uDetail;
+           vec2 dH = vec2(dFdx(H), dFdy(H));
+           vec3 sx = dFdx(-vViewPosition); vec3 sy = dFdy(-vViewPosition);
+           vec3 R1 = cross(sy, normal); vec3 R2 = cross(normal, sx);
+           float fDet = dot(sx, R1);
+           vec3 grad = sign(fDet) * (dH.x * R1 + dH.y * R2);
+           normal = normalize(abs(fDet) * normal - grad);
+         }`,
+      );
+
+      // albedo speckle: fine rock mottling on top of the vertex colour
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+         {
+           float spk = vfFbm(vWorldXZ * 0.6) * vfFbm(vWorldXZ * 0.13 + 19.0);
+           float grain = vfNoise(vWorldXZ * 2.3);          // fine rock grain
+           diffuseColor.rgb *= 0.70 + 0.55 * spk + 0.10 * grain;
+         }`,
+      );
+
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <fog_fragment>',
         `#ifdef USE_FOG
@@ -139,7 +192,7 @@ export class TerrainPatch {
         #endif`,
       );
     };
-    mat.customProgramCacheKey = () => 'vf_aerial_fog';
+    mat.customProgramCacheKey = () => 'vf_aerial_detail';
   }
 
   update(system: SystemDef, shipPos: { x: number; y: number; z: number }, skyColor: THREE.Color, hazeD: number): void {
@@ -219,6 +272,9 @@ export class TerrainPatch {
     // deep night side.
     const deep = 1 - Math.min(1, atmo.altitude / shell);
     const emis = 0.04 + 0.10 * deep;
+    // per-pixel detail bump: full strength low down where it reads, fading out by
+    // ~8 km where a few-metre bump is sub-pixel (and would just shimmer)
+    this.aerial.uDetail.value = 30 * Math.max(0, 1 - atmo.altitude / 8_000);
     for (const c of [this.coarse, this.fine]) {
       c.mat.opacity = Math.max(0, fade);
       c.mat.emissiveIntensity = emis;
@@ -250,6 +306,7 @@ export class TerrainPatch {
     const geo = mesh.geometry;
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const col = geo.attributes.color as THREE.BufferAttribute;
+    const aw = geo.attributes.aWorld as THREE.BufferAttribute;
     const span = spanHalf * 2;
     const rawH = new Float32Array(pos.count); // raw height for LOD-stable colouring
     const vary = new Float32Array(pos.count); // patchy tone variation
@@ -270,8 +327,10 @@ export class TerrainPatch {
       const h = r * relief;
       const drop = R - Math.sqrt(Math.max(0, R * R - s2)); // exact sphere curvature
       pos.setXYZ(i, lx, ly, h - drop);
+      aw.setXY(i, u, vv); // world XZ for shader detail (world-locked)
     }
     pos.needsUpdate = true;
+    aw.needsUpdate = true;
     geo.computeVertexNormals();
     // pass 2: shade by RAW height (LOD-stable coastlines/snowlines) + slope, with
     // patchy tone variation, water in the basins, bare rock on the steeps and

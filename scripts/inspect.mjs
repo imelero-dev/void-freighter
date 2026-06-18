@@ -352,6 +352,22 @@ async function main() {
   await page.keyboard.press('KeyV');
   await sleep(300);
 
+  // ---- CLOSE-UP: low over the deck looking along the ground, to judge the
+  //      per-pixel surface texture (detail bump + speckle), not the macro shape ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec; const th = window.VF.terrainHeight;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    const ground = th({ pos: p.pos, radius: p.radius, kind: p.kind, colorSeed: p.colorSeed }, V.vadd(p.pos, V.vscale(un, p.radius)));
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + ground + 14)); // ~14 m over the deck
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.12))); // nearly level, just dipped at the ground
+    window.IN.place(pos, look, un);
+    w.sim.entities.get(w.playerId).vel = { x: 0, y: 0, z: 0 };
+  });
+  await sleep(900);
+  await shot('17_surface_detail');
+
   // ---- CLOUD layers: flying down through the cloud decks on a terran world ----
   for (const altKm of [10, 6, 4.2, 1.5]) {
     await page.evaluate((altKm) => {
