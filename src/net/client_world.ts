@@ -5,7 +5,8 @@
 import { shipStats, ROCK_TYPES, TURBO_ACCEL_MULT, TURBO_SPEED, type ShipStats } from '../sim/data';
 import { integrateFlight } from '../sim/flight';
 import { blankEntity, defaultProfile, SHIP_RADIUS } from '../sim/sim';
-import { ATMO_DRAG, atmosphereAt, dangerAt, generateSystem, rockSpawn } from '../sim/system';
+import { ATMO_DRAG, atmoGravity, atmosphereAt, dangerAt, generateSystem, rockSpawn } from '../sim/system';
+import { vtolUpRef } from '../sim/docking';
 import {
   emptyShipInput, type Contract, type Destination, type Entity, type HullId, type MarketEntry,
   type ModuleSlot, type PlayerProfile, type ShipInput, type SimEvent, type StationDef,
@@ -221,11 +222,15 @@ export class ClientWorld implements IWorld {
         // predict locally with the shared integrator (turbo overrides the cap,
         // mirroring the server's perf calculation)
         const stats = this.shipStats;
+        // mirror the server's perf: VTOL reference up + atmospheric weight, so
+        // local prediction matches the authoritative flight near planets
+        const vtolUp = this.vtolMode ? (vtolUpRef(this.system, e.pos) ?? undefined) : undefined;
+        const gravity = this.vtolMode ? undefined : (atmoGravity(this.system, e.pos) ?? undefined);
         const perf = this.vtolMode
-          ? { maxSpeed: stats.maxSpeed * 0.22, accel: stats.accel * 1.4, turnRate: stats.turnRate * 0.8, massFactor: stats.massFactor, vtol: true }
+          ? { maxSpeed: stats.maxSpeed * 0.22, accel: stats.accel * 1.4, turnRate: stats.turnRate * 0.8, massFactor: stats.massFactor, vtol: true, vtolUp }
           : this.turboActive
-            ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate, massFactor: stats.massFactor }
-            : stats;
+            ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate, massFactor: stats.massFactor, gravity }
+            : { ...stats, gravity };
         integrateFlight(e, this.input, perf, dt, this.flightAssist);
         // atmospheric drag parity with the server so prediction stays aligned
         // near planets (#16)

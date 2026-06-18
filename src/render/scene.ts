@@ -100,7 +100,7 @@ export class SceneManager {
       this.skyBg.copy(color).multiplyScalar(Math.min(1, density * 1.15));
       this.far.background = this.skyBg;
       this.nearFog.color.copy(color);
-      this.nearFog.density = density * density * 5e-5;
+      this.nearFog.density = density * density * 9e-5;
       this.near.fog = this.nearFog;
       // far-scene haze hides distant worlds in daylight. Far units are km, so a
       // density of ~7e-4 fully washes anything past ~2000 km while leaving the

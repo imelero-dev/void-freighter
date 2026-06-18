@@ -329,6 +329,20 @@ export function atmosphereAt(system: SystemDef, pos: Vec3): { density: number; p
   return { density, planet, altitude };
 }
 
+// Weight you feel inside a planet's atmosphere: an acceleration toward the
+// nearest planet's centre, full near the surface and easing to nothing at the
+// top of the air shell (so it fades in as you enter, not a sudden jolt). null
+// in vacuum. Shared by the Sim and the online client so prediction matches.
+export const GRAVITY = 10; // m/s²
+export function atmoGravity(system: SystemDef, pos: Vec3): Vec3 | null {
+  const a = atmosphereAt(system, pos);
+  if (!a.planet) return null;
+  const shell = atmoHeight(a.planet);
+  if (a.altitude >= shell) return null;
+  const gf = Math.max(0, Math.min(1, (shell - a.altitude) / (shell * 0.6)));
+  return vscale(vnorm(vsub(pos, a.planet.pos)), -GRAVITY * gf);
+}
+
 // Danger level (0..1) at a world position: belts/fields project danger near
 // them, Rusthaven has a hot zone, deep void has a low floor. Drives pirate
 // spawns and cruise interdiction odds.

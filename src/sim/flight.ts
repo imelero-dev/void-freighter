@@ -29,6 +29,7 @@ export interface FlightPerf {
   massFactor?: number; // inertia multiplier; heavier hulls ramp/settle slower
   vtol?: boolean;      // true vertical-flight hover mode
   vtolUp?: Vec3;       // world "up" reference for VTOL (planet/hangar vertical)
+  gravity?: Vec3;      // weight acceleration in atmosphere (toward the planet)
 }
 
 export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPerf, dt: number, assist: boolean): void {
@@ -77,6 +78,17 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
       -b.throttle,
     );
     const desired = vscale(qrot(b.orient, desiredLocal), perf.maxSpeed);
+    // weight: the gyros keep you planted horizontally, but the engines have to
+    // actually hold you up — when you aren't commanding vertical thrust the
+    // assist lets go of the gravity axis so your weight pulls you down (you fall
+    // unless you fly it). Commanding up/down still works against gravity.
+    if (perf.gravity && Math.abs(input.thrustUp) < 0.05) {
+      const g = perf.gravity;
+      const gl = vlen(g) || 1;
+      const gx = g.x / gl, gy = g.y / gl, gz = g.z / gl;
+      const adj = (b.vel.x * gx + b.vel.y * gy + b.vel.z * gz) - (desired.x * gx + desired.y * gy + desired.z * gz);
+      desired.x += gx * adj; desired.y += gy * adj; desired.z += gz * adj;
+    }
     const delta = vsub(desired, b.vel);
     const dl = vlen(delta);
     // assist corrects the velocity vector much faster than raw thrust — a
@@ -128,6 +140,12 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
       b.vel.y *= f;
       b.vel.z *= f;
     }
+  }
+  // gravity: weight pulls you toward the planet whenever you're in its air
+  if (perf.gravity) {
+    b.vel.x += perf.gravity.x * dt;
+    b.vel.y += perf.gravity.y * dt;
+    b.vel.z += perf.gravity.z * dt;
   }
   b.pos.x += b.vel.x * dt;
   b.pos.y += b.vel.y * dt;

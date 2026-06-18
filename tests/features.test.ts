@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { blankEntity, Sim } from '../src/sim/sim';
-import { vadd, vdist, v3 } from '../src/sim/vec';
+import { vadd, vdist, vscale, v3 } from '../src/sim/vec';
+import { terrainHeight } from '../src/sim/terrain';
 
 function runTicks(sim: Sim, n: number) {
   const events = [];
@@ -322,15 +323,19 @@ describe('planetary landing', () => {
     meta.gearDown = true;
     // a non-lava world (lava cooks the hull on the way down — by design)
     const planet = sim.system.planets.find((p) => p.kind !== 'lava')!;
-    // approach the surface gently from straight above
-    e.pos = vadd(planet.pos, v3(0, planet.radius + e.radius + 40, 0));
-    e.vel = v3(0, -25, 0);
+    // the ground is a heightfield now, so find how tall the terrain is right
+    // beneath the descent and start just above it
+    const up = v3(0, 1, 0);
+    const body = { pos: planet.pos, radius: planet.radius, kind: planet.kind, colorSeed: planet.colorSeed };
+    const groundH = terrainHeight(body, vadd(planet.pos, vscale(up, planet.radius + 5000)));
+    e.pos = vadd(planet.pos, vscale(up, planet.radius + groundH + e.radius + 40));
+    e.vel = vscale(up, -25);
     const events = runTicks(sim, 50);
-    // no exclusion field, and the ship comes to rest ON the surface (no clip)
+    // no exclusion field, and the ship comes to rest ON the terrain (no clip)
     expect(events.some((ev) => ev.type === 'forcefield')).toBe(false);
     const alt = vdist(e.pos, planet.pos) - planet.radius;
-    expect(alt).toBeGreaterThan(-2);              // didn't clip through
-    expect(alt).toBeLessThan(e.radius + 60);      // actually reached the ground
+    expect(alt).toBeGreaterThan(groundH - 5);            // didn't clip through the ground
+    expect(alt).toBeLessThan(groundH + e.radius + 30);   // settled on the terrain, not floating
   });
 });
 

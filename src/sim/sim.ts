@@ -18,8 +18,9 @@ import { integrateFlight } from './flight';
 import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
-import { ATMO_DRAG, atmosphereAt, dangerAt, generateSystem, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
+import { ATMO_DRAG, atmoGravity, atmosphereAt, dangerAt, generateSystem, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
 import { dockCheck, hangarFrame, padPoint, vtolUpRef } from './docking';
+import { terrainHeight, terrainNormal, type TerrainBody } from './terrain';
 import { TrafficSystem } from './traffic';
 import {
   DT, emptyShipInput, type CargoItem, type Contract, type Destination, type Entity,
@@ -556,11 +557,15 @@ export class Sim {
       // VTOL levels to the local vertical: a planet's up, a station hangar's
       // floor normal, or — in open space — the ship's own up.
       const vtolUp = meta.vtol ? (vtolUpRef(this.system, e.pos) ?? undefined) : undefined;
+      // weight: in a planet's air the ship has gravity pulling it down. VTOL is
+      // an active hover platform (it holds itself up), so it carries no extra
+      // weight; everything else has to fly against it.
+      const gravity = meta.vtol ? undefined : (atmoGravity(this.system, e.pos) ?? undefined);
       const perf = meta.vtol
         ? { maxSpeed: meta.stats.maxSpeed * VTOL_SPEED_FACTOR, accel: meta.stats.accel * 1.4, turnRate: meta.stats.turnRate * 0.8, massFactor: meta.stats.massFactor, vtol: true, vtolUp }
         : turbo
-          ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate, massFactor: meta.stats.massFactor }
-          : meta.stats;
+          ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate, massFactor: meta.stats.massFactor, gravity }
+          : { ...meta.stats, gravity };
       this.integrateShip(e, meta.input, perf, dt, meta.flightAssist);
       if (meta.cruiseRequested) this.tryStartCruise(meta, e);
     }
@@ -872,10 +877,10 @@ export class Sim {
     const wasResting = meta.onSurface;
     meta.onSurface = false;
     for (const p of this.system.planets) {
-      this.planetSurface(meta, e, p.pos, p.radius, p.name, wasResting);
+      this.planetSurface(meta, e, p, p.name, wasResting);
     }
     for (const m of this.system.moons) {
-      this.planetSurface(meta, e, m.pos, m.radius, 'the moon', wasResting);
+      this.planetSurface(meta, e, { pos: m.pos, radius: m.radius, kind: 'barren', colorSeed: m.colorSeed }, 'the moon', wasResting);
     }
     // stations: a big solid hull with one open hangar carved into the dock
     // face. The hull stops you cold (no more flying through it); inside the
@@ -989,17 +994,26 @@ export class Sim {
   // solid body, but landing quality depends on closing speed and the gear. A
   // slow approach with gear down is a clean touchdown; fast or gear-up bites
   // hull. Resting is just the surface stopping you — thrust away to take off.
-  private planetSurface(meta: PlayerMeta, e: Entity, center: Vec3, radius: number, name: string, wasResting: boolean): void {
+  private planetSurface(meta: PlayerMeta, e: Entity, body: TerrainBody, name: string, wasResting: boolean): void {
+    const center = body.pos;
     const rx = e.pos.x - center.x, ry = e.pos.y - center.y, rz = e.pos.z - center.z;
     const d = Math.hypot(rx, ry, rz);
-    const minD = radius + e.radius;
-    if (d >= minD) return; // not in contact with this body (onSurface already cleared)
-    const n = d > 1e-6 ? v3(rx / d, ry / d, rz / d) : v3(0, 1, 0);
-    e.pos = vadd(center, vscale(n, minD + 0.5));
+    if (d >= body.radius + 3300 + e.radius) return; // clear of any possible relief
+    // the ground is the mean sphere plus the local terrain relief — collision
+    // matches what you see, so you stop on the mountains and rest in the valleys
+    const h = terrainHeight(body, e.pos);
+    const minD = body.radius + h + e.radius;
+    if (d >= minD) return; // clear of the surface column beneath us
+    const up = d > 1e-6 ? v3(rx / d, ry / d, rz / d) : v3(0, 1, 0);
+    // seat the ship a hair INTO the surface so weight keeps it in steady contact
+    // (resting), rather than bouncing just clear and re-triggering touchdown
+    e.pos = vadd(center, vscale(up, minD - 0.4));
     meta.onSurface = true; // in contact with the surface this tick
-    const vn = vdot(e.vel, n); // <0 descending into the surface
+    // slope-aware contact: a steep face pushes you sideways (you slide off it)
+    const n = terrainNormal(body, e.pos);
+    const vn = vdot(e.vel, n); // <0 descending into the slope
     if (vn < 0) {
-      e.vel = vsub(e.vel, vscale(n, vn * 1.04)); // cancel inbound, keep tangential
+      e.vel = vsub(e.vel, vscale(n, vn * 1.04)); // cancel inbound, keep along-slope
       const impact = -vn;
       const softLimit = meta.gearDown ? SOFT_LAND_SPEED : 12;
       if (impact > softLimit) {

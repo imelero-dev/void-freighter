@@ -441,7 +441,7 @@ export class BodiesLayer {
       // solid worlds get real geometric relief so mountains read during descent
       const solid = p.kind !== 'gas';
       const geo = new THREE.SphereGeometry(p.radius * FAR_SCALE, solid ? 200 : 64, solid ? 100 : 32);
-      if (solid) displacePlanet(geo, p.colorSeed, p.kind, p.radius * FAR_SCALE * 0.012);
+      if (solid) displacePlanet(geo, p.colorSeed, p.kind, p.radius * FAR_SCALE * 0.004);
       const mesh = new THREE.Mesh(
         geo,
         new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0, flatShading: false }),
