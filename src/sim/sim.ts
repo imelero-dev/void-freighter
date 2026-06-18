@@ -19,7 +19,7 @@ import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
 import { ATMO_DRAG, atmosphereAt, dangerAt, generateSystem, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
-import { BAY_DEPTH_FRAC, BAY_MOUTH_FRAC, dockCheck, stationPort } from './docking';
+import { dockCheck, hangarFrame, padPoint, vtolUpRef } from './docking';
 import { TrafficSystem } from './traffic';
 import {
   DT, emptyShipInput, type CargoItem, type Contract, type Destination, type Entity,
@@ -40,7 +40,6 @@ const FRAGMENT_TTL = 150;
 const VTOL_SPEED_FACTOR = 0.22;  // forward-speed envelope in VTOL hover mode
 const ZERO_VEL: Vec3 = { x: 0, y: 0, z: 0 }; // stationary collider reference
 const LAVA_HEAT_DPS = 55;        // hull heat per second in a lava world's air
-const DOCK_VERB: Record<string, string> = { clamp: 'Clamp lock', bay: 'Bay approach', pad: 'Pad landing' };
 const LOOT_TTL = 240;
 const MISSILE_SPEED = 700;
 const MISSILE_TURN = 2.8;        // rad/s
@@ -477,19 +476,19 @@ export class Sim {
       return; // being towed: no control
     }
 
-    // docking autopilot: ease the ship the short remaining distance into the
-    // dock FEATURE (collar/bay/pad), never through the hull to the centre. The
-    // pilot already flew the approach, so this is a brief final lock-on.
+    // autodock autopilot (paid convenience / rescue tow only): ease the ship all
+    // the way onto the landing pad inside the hangar. Manual/passive docking no
+    // longer runs an autopilot — you fly in and set down yourself.
     if (meta.docking) {
       const st = this.station(meta.docking.stationId)!;
-      const port = stationPort(st);
-      meta.docking.t += dt / 0.8;
+      const target = padPoint(st);
+      meta.docking.t += dt / 2.2;
       const t = clamp(meta.docking.t, 0, 1);
       const ease = t * t * (3 - 2 * t);
       e.pos = {
-        x: meta.docking.from.x + (port.point.x - meta.docking.from.x) * ease,
-        y: meta.docking.from.y + (port.point.y - meta.docking.from.y) * ease,
-        z: meta.docking.from.z + (port.point.z - meta.docking.from.z) * ease,
+        x: meta.docking.from.x + (target.x - meta.docking.from.x) * ease,
+        y: meta.docking.from.y + (target.y - meta.docking.from.y) * ease,
+        z: meta.docking.from.z + (target.z - meta.docking.from.z) * ease,
       };
       e.vel = v3();
       if (t >= 1) {
@@ -550,12 +549,15 @@ export class Sim {
       if (!turbo && !wantsTurbo) {
         meta.turboCharge = Math.min(1, meta.turboCharge + dt / TURBO_RECHARGE_S);
       }
-      // VTOL overrides the burn: a precise hover with a much-reduced forward
-      // envelope for setting down (issue #19). Cruise/turbo can't run in VTOL.
+      // VTOL overrides the burn: true vertical flight for setting down (#19).
+      // Cruise/turbo can't run in VTOL.
       if (meta.vtol) turbo = false;
       meta.turboActive = turbo;
+      // VTOL levels to the local vertical: a planet's up, a station hangar's
+      // floor normal, or — in open space — the ship's own up.
+      const vtolUp = meta.vtol ? (vtolUpRef(this.system, e.pos) ?? undefined) : undefined;
       const perf = meta.vtol
-        ? { maxSpeed: meta.stats.maxSpeed * VTOL_SPEED_FACTOR, accel: meta.stats.accel * 1.4, turnRate: meta.stats.turnRate * 0.8, massFactor: meta.stats.massFactor, vtol: true }
+        ? { maxSpeed: meta.stats.maxSpeed * VTOL_SPEED_FACTOR, accel: meta.stats.accel * 1.4, turnRate: meta.stats.turnRate * 0.8, massFactor: meta.stats.massFactor, vtol: true, vtolUp }
         : turbo
           ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate, massFactor: meta.stats.massFactor }
           : meta.stats;
@@ -875,14 +877,13 @@ export class Sim {
     for (const m of this.system.moons) {
       this.planetSurface(meta, e, m.pos, m.radius, 'the moon', wasResting);
     }
-    // stations: a compound solid that hugs the visible structure — a core mass
-    // plus the always-vertical central spine — so you stop where you see hull,
-    // not against a big invisible sphere. Bay stations carve an open mouth (#5).
+    // stations: a big solid hull with one open hangar carved into the dock
+    // face. The hull stops you cold (no more flying through it); inside the
+    // hangar you're contained by the floor/ceiling/walls and can set down on
+    // the pad. The hatch mouth is the only way in or out.
     for (const s of this.system.stations) {
       if (e.dockedAt) break;
-      if (s.dockType === 'bay') this.bayCollision(meta, e, s);
-      else this.solidCollision(meta, e, s.pos, s.radius * 0.7, ZERO_VEL, 0.3);
-      this.cylinderCollisionY(meta, e, s.pos, s.radius * 0.22, s.radius * 0.92);
+      this.hangarCollision(meta, e, s);
     }
     // asteroids (active entities only)
     for (const a of this.entities.values()) {
@@ -926,56 +927,62 @@ export class Sim {
     }
   }
 
-  // Solid vertical cylinder (the station's central spine, which is always world
-  // up). Sphere-vs-finite-cylinder: push the ship radially out of the shaft.
-  private cylinderCollisionY(meta: PlayerMeta, e: Entity, center: Vec3, radius: number, halfLen: number): void {
-    if (Math.abs(e.pos.y - center.y) > halfLen + e.radius) return; // past the ends
-    const dx = e.pos.x - center.x, dz = e.pos.z - center.z;
-    const radial = Math.hypot(dx, dz);
-    const minR = radius + e.radius;
-    if (radial >= minR) return;
-    const nx = radial > 1e-6 ? dx / radial : 1, nz = radial > 1e-6 ? dz / radial : 0;
-    e.pos.x = center.x + nx * minR;
-    e.pos.z = center.z + nz * minR;
-    const vn = e.vel.x * nx + e.vel.z * nz;
-    if (vn < 0) {
-      e.vel.x -= nx * vn * 1.04;
-      e.vel.z -= nz * vn * 1.04;
-      const impact = -vn;
-      if (impact > COLLISION_DAMAGE_SPEED) {
-        this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.3 * meta.stats.massFactor, -1, true);
-      }
-      if (e.cruise !== 'off' && impact > 40) this.dropCruise(e, 'collision');
+  // Station collision: a chunky solid box hull (Coriolis-style) with one
+  // rectangular hangar "mail slot" cut into the +f dock face. Outside the
+  // footprint the hull is solid and stops you cold. Directly in front of the
+  // open slot you fly free (the approach corridor). Once inside the footprint
+  // and past the mouth plane you're contained by the hangar's floor, ceiling,
+  // side and back walls — and set down on the pad. Worked entirely in the
+  // station's own (u,v,f) frame, whose axes are orthonormal, so each wall is an
+  // independent 1-D push.
+  private hangarCollision(meta: PlayerMeta, e: Entity, st: StationDef): void {
+    const fr = hangarFrame(st);
+    const rel = vsub(e.pos, fr.center);
+    const a = vdot(rel, fr.f);
+    const pu = vdot(rel, fr.u);
+    const pv = vdot(rel, fr.v);
+    const er = e.radius;
+    const inSlot = Math.abs(pu) < fr.HW && Math.abs(pv) < fr.HH;
+
+    if (inSlot && a >= fr.mouthA) return; // open corridor in front of the hatch
+    if (inSlot && a < fr.mouthA) {
+      // contained inside the hangar; the +f mouth is the only opening
+      this.wallPush(meta, e, fr.f, (fr.backA + er) - a, 0.3);              // back wall
+      this.wallPush(meta, e, vscale(fr.u, -1), pu - (fr.HW - er), 0.25);   // +u wall
+      this.wallPush(meta, e, fr.u, (-(fr.HW - er)) - pu, 0.25);            // -u wall
+      this.wallPush(meta, e, vscale(fr.v, -1), pv - (fr.HH - er), 0.25);   // ceiling
+      this.wallPush(meta, e, fr.v, (fr.floorV + er) - pv, 0.3);            // floor / pad
+      return;
+    }
+    // solid box hull: push out along the least-penetrating face (sphere-vs-box)
+    const penU = (fr.HX + er) - Math.abs(pu);
+    const penV = (fr.HY + er) - Math.abs(pv);
+    const penA = (fr.HZ + er) - Math.abs(a);
+    if (penU <= 0 || penV <= 0 || penA <= 0) return; // clear of the hull
+    if (penU <= penV && penU <= penA) {
+      this.wallPush(meta, e, vscale(fr.u, Math.sign(pu) || 1), penU, 0.3);
+    } else if (penV <= penA) {
+      this.wallPush(meta, e, vscale(fr.v, Math.sign(pv) || 1), penV, 0.3);
+    } else {
+      this.wallPush(meta, e, vscale(fr.f, Math.sign(a) || 1), penA, 0.3);
     }
   }
 
-  // Bay-station collision (#17): the hull is solid everywhere except an open
-  // mouth along the dock-port axis. Inside the mouth tube you fly free until the
-  // solid back wall stops you; stray off-axis and you scrape the solid bay wall.
-  private bayCollision(meta: PlayerMeta, e: Entity, st: StationDef): void {
-    const rx = e.pos.x - st.pos.x, ry = e.pos.y - st.pos.y, rz = e.pos.z - st.pos.z;
-    const along = rx * st.dockPort.x + ry * st.dockPort.y + rz * st.dockPort.z;
-    const px = rx - st.dockPort.x * along, py = ry - st.dockPort.y * along, pz = rz - st.dockPort.z * along;
-    const lateral = Math.hypot(px, py, pz);
-    const inTube = along > 0 && lateral < st.radius * BAY_MOUTH_FRAC;
-    if (inTube) {
-      // solid back wall deep inside the bay
-      const backAlong = st.radius * (1 - BAY_DEPTH_FRAC) + e.radius;
-      if (along < backAlong) {
-        e.pos = vadd(e.pos, vscale(st.dockPort, backAlong - along));
-        const vn = vdot(e.vel, st.dockPort); // inbound is negative
-        if (vn < 0) {
-          e.vel = vsub(e.vel, vscale(st.dockPort, vn * 1.04));
-          const impact = -vn;
-          if (impact > COLLISION_DAMAGE_SPEED) {
-            this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.3 * meta.stats.massFactor, -1, true);
-          }
-        }
+  // Push the ship out of a planar wall whose outward normal (into the allowed
+  // space) is `normal`; `penetration` is how far it is inside the wall. Cancels
+  // the inbound normal velocity (keeps tangential), with momentum-scaled damage.
+  private wallPush(meta: PlayerMeta, e: Entity, normal: Vec3, penetration: number, dmgScale: number): void {
+    if (penetration <= 0) return;
+    e.pos = vadd(e.pos, vscale(normal, penetration));
+    const vn = vdot(e.vel, normal); // <0 while moving into the wall
+    if (vn < 0) {
+      e.vel = vsub(e.vel, vscale(normal, vn * 1.04));
+      const impact = -vn;
+      if (impact > COLLISION_DAMAGE_SPEED) {
+        this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * dmgScale * meta.stats.massFactor, -1, true);
       }
-      return;
+      if (e.cruise !== 'off' && impact > 40) this.dropCruise(e, 'collision');
     }
-    // anywhere outside the mouth the hull (and bay walls) are solid
-    this.solidCollision(meta, e, st.pos, st.radius, ZERO_VEL, 0.3);
   }
 
   // Seamless planetary touchdown (#16/#18): the same mass-based contact as a
@@ -2136,12 +2143,9 @@ export class Sim {
     const near = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
     if (near && meta.approachStation !== near.id) {
       meta.approachStation = near.id;
-      const how = near.dockType === 'clamp' ? 'nose up to the clamp collar'
-        : near.dockType === 'bay' ? 'fly into the open bay'
-          : 'set down on the pad — VTOL and gear';
       this.events.push({
         type: 'comms', pid: meta.pid, from: `${near.name} ATC`,
-        text: `${this.callsign(meta)}, cleared approach. Under ${DOCK_MAX_SPEED} and ${how}.`,
+        text: `${this.callsign(meta)}, cleared approach. Fly into the hangar, then VTOL and gear down onto the pad. Under ${DOCK_MAX_SPEED}.`,
       });
     }
     // hysteresis: only forget the clearance once you're well clear, so jockeying
@@ -2152,9 +2156,9 @@ export class Sim {
     }
   }
 
-  // Manual docking (#17): docking is earned by flying the approach — within
-  // range, below docking speed AND nose lined up on the dock. A bad approach
-  // gets a terse ATC wave-off instead of a free suck-in.
+  // Manual dock key: only confirms what you've already done. If you're set down
+  // on the pad inside the hangar it logs the dock; otherwise it's a wave-off
+  // telling you what's still wrong. There is no suck-in — you fly it yourself.
   requestDock(pid: number): void {
     const meta = this.players.get(pid);
     const e = this.entities.get(pid);
@@ -2168,29 +2172,23 @@ export class Sim {
       this.events.push({ type: 'log', text: 'No station in docking range.', color: '#f66', pid });
       return;
     }
-    if (vlen(e.vel) > DOCK_MAX_SPEED) {
-      this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: 'Excessive closure rate. Go around — reduce to docking speed.' });
-      return;
-    }
-    // type-specific docking readiness (clamp / bay / pad)
     const res = dockCheck(st, e.pos, e.vel, e.orient, meta.gearDown, meta.vtol);
     if (!res.ok) {
-      this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `Not cleared to dock — ${res.cue}. [Y] for autodock.` });
+      this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `Not down yet — ${res.cue}. [Y] for autodock.` });
       return;
     }
-    meta.docking = { stationId: st.id, t: 0, from: vclone(e.pos) };
-    this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `${DOCK_VERB[st.dockType]} confirmed, ${this.callsign(meta)}. Bringing you in.` });
+    this.dockShip(meta, e, st, false);
   }
 
-  // Passive docking: you earn the dock by flying the type's approach correctly;
-  // when the conditions hold we bring you in without needing the dock key (#17).
+  // Skill landing: the instant you're settled gently on the pad inside the
+  // hangar (centred, slow, gear + VTOL), the dock is logged where you sit — no
+  // autopilot, no being sucked in. Flying the approach IS the docking.
   private tickDockingDetect(meta: PlayerMeta, e: Entity): void {
     if (e.dead || e.dockedAt || meta.docking || e.cruise !== 'off') return;
     const st = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
     if (!st) return;
     if (!dockCheck(st, e.pos, e.vel, e.orient, meta.gearDown, meta.vtol).ok) return;
-    meta.docking = { stationId: st.id, t: 0, from: vclone(e.pos) };
-    this.events.push({ type: 'comms', pid: meta.pid, from: `${st.name} ATC`, text: `${DOCK_VERB[st.dockType]} confirmed, ${this.callsign(meta)}. We have you.` });
+    this.dockShip(meta, e, st, false);
   }
 
   // Autodock convenience service (#17): a paid hands-off final approach for
@@ -2220,7 +2218,7 @@ export class Sim {
 
   private dockShip(meta: PlayerMeta, e: Entity, st: StationDef, viaTow: boolean): void {
     e.dockedAt = st.id;
-    e.pos = vclone(st.pos);
+    e.pos = padPoint(st); // rest on the hangar pad, not buried in the core
     e.vel = v3();
     e.angVel = v3();
     e.firing = false;
@@ -2276,12 +2274,11 @@ export class Sim {
     if (!meta || !e || !e.dockedAt) return;
     const st = this.station(e.dockedAt)!;
     e.dockedAt = null;
-    // launch outward, away from the planet if there is one
-    const planet = this.system.planets.find((p) => p.stationId === st.id);
-    const dir = planet ? vnorm(vsub(st.pos, planet.pos)) : vnorm(vsub(st.pos, v3()));
-    e.pos = vadd(st.pos, vscale(dir, st.radius + 220));
-    e.orient = qLookAt(dir);
-    e.vel = vscale(dir, 45);
+    // launch out through the hatch: start on the pad, head out along the port
+    const fr = hangarFrame(st);
+    e.pos = vadd(padPoint(st), vscale(fr.f, fr.HH));
+    e.orient = qLookAt(fr.f);
+    e.vel = vscale(fr.f, 45);
     e.shield = e.maxShield;
     meta.undockInvuln = 4;
     this.events.push({ type: 'undocked', pid, stationId: st.id });

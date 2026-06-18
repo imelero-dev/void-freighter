@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { Rng, fbm2, fbm3 } from '../sim/rng';
 import type { PlanetDef, StationDef, SystemDef } from '../sim/types';
+import { hangarFrame } from '../sim/docking';
 import { FAR_SCALE, SceneManager } from './scene';
 
 const tmp = new THREE.Vector3();
@@ -189,166 +190,150 @@ export interface StationView {
   ring: THREE.Mesh | null;
   blinkers: THREE.Mesh[];
   marker: THREE.Group;      // far-scene beacon
-  hatch: THREE.Object3D[];  // clamp hatch panels that slide open on approach
+  hatch: THREE.Object3D[];  // hangar doors that slide open on approach
+  guides: THREE.Mesh[];     // pulsing interior approach lights
 }
 
-const Y_UP = new THREE.Vector3(0, 1, 0);
-const Z_FWD = new THREE.Vector3(0, 0, 1);
-
-// The visible dock feature for a station, built facing local +Z and oriented so
-// that +Z points along the world dock port (#17). Returns any hatch panels for
-// the approach-open animation.
-function buildDockFeature(def: StationDef, localDir: THREE.Vector3, hull: THREE.Material, dark: THREE.Material): { group: THREE.Group; hatch: THREE.Object3D[] } {
-  const r = def.radius;
-  const fg = new THREE.Group();
-  fg.position.copy(localDir).multiplyScalar(r * 0.98);
-  fg.quaternion.setFromUnitVectors(Z_FWD, localDir.clone().normalize());
-  const lit = (color: number) => new THREE.MeshBasicMaterial({ color });
-  const hatch: THREE.Object3D[] = [];
-
-  if (def.dockType === 'clamp') {
-    // external collar ring + two sliding hatch panels + green guide lights
-    const collar = new THREE.Mesh(new THREE.TorusGeometry(r * 0.3, r * 0.06, 8, 24), hull);
-    fg.add(collar);
-    const inner = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.24, r * 0.24, r * 0.06, 20, 1, true), dark);
-    inner.rotation.x = Math.PI / 2;
-    fg.add(inner);
-    for (const side of [-1, 1]) {
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(r * 0.28, r * 0.5, r * 0.05), hull);
-      panel.position.set(side * r * 0.15, 0, r * 0.02);
-      panel.userData.closedX = side * r * 0.15;
-      panel.userData.openX = side * r * 0.46;
-      fg.add(panel);
-      hatch.push(panel);
-    }
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
-      const g = new THREE.Mesh(new THREE.SphereGeometry(r * 0.02, 6, 6), lit(0x55ff77));
-      g.position.set(Math.cos(a) * r * 0.34, Math.sin(a) * r * 0.34, r * 0.03);
-      fg.add(g);
-    }
-  } else if (def.dockType === 'bay') {
-    // open square mouth with a recessed dark interior (you fly into it)
-    const m = r * 0.34;
-    const frameMat = hull;
-    const bars: Array<[number, number, number, number, number]> = [
-      [0, m, m * 2.2, r * 0.07, r * 0.12],
-      [0, -m, m * 2.2, r * 0.07, r * 0.12],
-    ];
-    for (const [x, y, w, h, d] of bars) {
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), frameMat);
-      bar.position.set(x, y, 0);
-      fg.add(bar);
-    }
-    for (const sx of [-1, 1]) {
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(r * 0.07, m * 2.2, r * 0.12), frameMat);
-      bar.position.set(sx * m, 0, 0);
-      fg.add(bar);
-    }
-    // recessed interior: a dark box behind the mouth
-    const interior = new THREE.Mesh(new THREE.BoxGeometry(m * 1.9, m * 1.9, r * 0.5), dark);
-    interior.position.set(0, 0, -r * 0.28);
-    fg.add(interior);
-    // amber approach lights framing the mouth
-    for (let i = 0; i < 4; i++) {
-      const g = new THREE.Mesh(new THREE.SphereGeometry(r * 0.022, 6, 6), lit(0xffaa33));
-      const cx = (i < 2 ? -1 : 1) * m, cy = (i % 2 ? -1 : 1) * m;
-      g.position.set(cx, cy, r * 0.04);
-      fg.add(g);
-    }
-  } else {
-    // flat landing pad with a marked ring + perimeter lights
-    const pad = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.42, r * 0.42, r * 0.04, 24), hull);
-    pad.rotation.x = Math.PI / 2; // flat face toward +Z (outward)
-    fg.add(pad);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(r * 0.3, r * 0.02, 6, 28), lit(0x66ddff));
-    ring.position.z = r * 0.03;
-    fg.add(ring);
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      const g = new THREE.Mesh(new THREE.SphereGeometry(r * 0.018, 6, 6), lit(i % 2 ? 0xffffff : 0x66ddff));
-      g.position.set(Math.cos(a) * r * 0.4, Math.sin(a) * r * 0.4, r * 0.04);
-      fg.add(g);
-    }
-  }
-  return { group: fg, hatch };
-}
-
-function buildStationMesh(def: StationDef): { group: THREE.Group; ring: THREE.Mesh | null; blinkers: THREE.Mesh[]; hatch: THREE.Object3D[] } {
+// A station is a chunky box hull (Coriolis-style) with a single hangar "mail
+// slot" cut into the +f dock face. You fly in through the slot and set down on
+// the pad inside. Built entirely in the station's own (u,v,f) frame so the
+// visible hangar lines up exactly with the collider and the dock check: the
+// group is oriented by the (u,v,f) basis, local +X=u, +Y=v, +Z=f.
+function buildStationMesh(def: StationDef): {
+  group: THREE.Group; ring: THREE.Mesh | null; blinkers: THREE.Mesh[];
+  hatch: THREE.Object3D[]; guides: THREE.Mesh[];
+} {
   const rng = new Rng(def.seed);
+  const fr = hangarFrame(def);
+  const R = def.radius;
   const group = new THREE.Group();
+  // orient the whole station by its (u,v,f) basis (world directions)
+  group.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(fr.u.x, fr.u.y, fr.u.z),
+    new THREE.Vector3(fr.v.x, fr.v.y, fr.v.z),
+    new THREE.Vector3(fr.f.x, fr.f.y, fr.f.z),
+  ));
+
   const tex = panelTexture(def.seed);
-  const hull = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0.55 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2c2f, roughness: 0.9, metalness: 0.4 });
+  const hull = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.82, metalness: 0.6 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x202327, roughness: 0.95, metalness: 0.35 });
+  const interiorMat = new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.9, metalness: 0.3, emissive: 0x141b24, emissiveIntensity: 0.6 });
+  const lit = (color: number) => new THREE.MeshBasicMaterial({ color });
 
-  // central spine
-  const spineLen = def.radius * 1.9;
-  const spine = new THREE.Mesh(new THREE.CylinderGeometry(def.radius * 0.16, def.radius * 0.2, spineLen, 10), hull);
-  group.add(spine);
+  const HX = fr.HX, HY = fr.HY, HZ = fr.HZ;     // hull half-extents (metres)
+  const HW = fr.HW, HH = fr.HH;                 // hangar slot half sizes
+  const backA = fr.backA, padA = fr.padA, padR = fr.padR, floorV = fr.floorV;
+  const t = R * 0.025;                          // interior panel thickness
 
-  // habitat ring
-  let ring: THREE.Mesh | null = null;
-  if (rng.chance(0.8)) {
-    ring = new THREE.Mesh(new THREE.TorusGeometry(def.radius * 0.72, def.radius * 0.09, 10, 36), hull);
-    ring.rotation.x = Math.PI / 2;
-    group.add(ring);
-    // spokes
-    for (let i = 0; i < 4; i++) {
-      const spoke = new THREE.Mesh(new THREE.CylinderGeometry(def.radius * 0.03, def.radius * 0.03, def.radius * 1.44, 6), dark);
-      spoke.rotation.z = Math.PI / 2;
-      spoke.rotation.y = (i / 4) * Math.PI;
-      ring.add(spoke);
-    }
+  const mkBox = (cx: number, cy: number, cz: number, sx: number, sy: number, sz: number, mat: THREE.Material): THREE.Mesh => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
+    m.position.set(cx, cy, cz);
+    group.add(m);
+    return m;
+  };
+
+  // --- solid hull: a big rear block + a front face framed around the slot ---
+  const frontZc = (backA + HZ) / 2, frontD = HZ - backA;
+  mkBox(0, 0, (-HZ + backA) / 2, 2 * HX, 2 * HY, backA + HZ, hull);              // rear mass
+  mkBox(0, (HH + HY) / 2, frontZc, 2 * HX, HY - HH, frontD, hull);              // above the slot
+  mkBox(0, -(HH + HY) / 2, frontZc, 2 * HX, HY - HH, frontD, hull);            // below the slot
+  mkBox(-(HW + HX) / 2, 0, frontZc, HX - HW, 2 * HH, frontD, hull);            // left of the slot
+  mkBox((HW + HX) / 2, 0, frontZc, HX - HW, 2 * HH, frontD, hull);             // right of the slot
+
+  // --- hangar interior: dark room lining the slot ---
+  const depthZc = (backA + HZ) / 2, depthLen = HZ - backA;
+  mkBox(0, -HH, depthZc, 2 * HW, t, depthLen, interiorMat);                     // floor
+  mkBox(0, HH, depthZc, 2 * HW, t, depthLen, interiorMat);                      // ceiling
+  mkBox(-HW, 0, depthZc, t, 2 * HH, depthLen, interiorMat);                     // left wall
+  mkBox(HW, 0, depthZc, t, 2 * HH, depthLen, interiorMat);                      // right wall
+  mkBox(0, 0, backA, 2 * HW, 2 * HH, t, interiorMat);                           // back wall
+
+  // landing pad on the floor (emissive ring + deck)
+  const padDeck = new THREE.Mesh(new THREE.CylinderGeometry(padR, padR, t * 1.4, 28), new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.8, metalness: 0.4, emissive: 0x202a33, emissiveIntensity: 0.5 }));
+  padDeck.position.set(0, floorV + t, padA);
+  group.add(padDeck);
+  const padRing = new THREE.Mesh(new THREE.TorusGeometry(padR * 0.82, R * 0.012, 8, 36), lit(0x66ddff));
+  padRing.rotation.x = Math.PI / 2;
+  padRing.position.set(0, floorV + t * 1.6, padA);
+  group.add(padRing);
+  const guides: THREE.Mesh[] = [padRing];
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const g = new THREE.Mesh(new THREE.SphereGeometry(R * 0.016, 6, 6), lit(i % 2 ? 0xffffff : 0x66ddff));
+    g.position.set(Math.cos(a) * padR * 0.92, floorV + t * 2, padA + Math.sin(a) * padR * 0.92);
+    group.add(g);
+    guides.push(g);
+  }
+  // approach chevrons leading from the mouth in to the pad
+  for (let i = 0; i < 5; i++) {
+    const z = HZ - (i + 0.5) * (HZ - padA) / 5;
+    const ch = new THREE.Mesh(new THREE.BoxGeometry(HW * 0.5, t * 0.6, R * 0.04), lit(0xffb347));
+    ch.position.set(0, floorV + t * 1.5, z);
+    group.add(ch);
+    guides.push(ch);
+  }
+  // ceiling strip lights so the bay reads as lit from within
+  for (const sx of [-1, 1]) {
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(R * 0.02, R * 0.02, depthLen * 0.9), lit(0xbfe6ff));
+    strip.position.set(sx * HW * 0.7, HH - t * 1.5, depthZc);
+    group.add(strip);
+  }
+  const bayLight = new THREE.PointLight(0x9fd8ff, 0.9, R * 2.4, 1.4);
+  bayLight.position.set(0, 0, padA);
+  group.add(bayLight);
+
+  // sliding hangar doors (two panels closing the slot, tucked into the jambs)
+  const hatch: THREE.Object3D[] = [];
+  for (const side of [-1, 1]) {
+    const door = new THREE.Mesh(new THREE.BoxGeometry(HW, 2 * HH, t * 1.5), hull);
+    door.position.set(side * HW / 2, 0, HZ - t);
+    door.userData.closedX = side * HW / 2;
+    door.userData.openX = side * (HW * 1.5);
+    group.add(door);
+    hatch.push(door);
+  }
+  // amber slot-frame lights so the entrance is obvious from a distance
+  for (let i = 0; i < 6; i++) {
+    const onTop = i < 3;
+    const fxp = (i % 3 - 1) * HW * 0.8;
+    const g = new THREE.Mesh(new THREE.SphereGeometry(R * 0.02, 6, 6), lit(0xffaa33));
+    g.position.set(fxp, (onTop ? 1 : -1) * (HH + t), HZ);
+    group.add(g);
   }
 
-  // stacked modules along the spine
-  const mods = rng.int(3, 6);
+  // --- exterior greebles: habitat ring, modules, antennae, nav blinkers ---
+  let ring: THREE.Mesh | null = null;
+  if (rng.chance(0.85)) {
+    ring = new THREE.Mesh(new THREE.TorusGeometry(R * 0.95, R * 0.06, 10, 40), hull);
+    ring.position.z = -HZ * 0.2;
+    group.add(ring);
+  }
+  const mods = rng.int(4, 7);
   for (let i = 0; i < mods; i++) {
-    const y = rng.range(-0.7, 0.7) * spineLen * 0.5;
-    const kind = rng.next();
-    let m: THREE.Mesh;
-    if (kind < 0.5) {
-      m = new THREE.Mesh(new THREE.BoxGeometry(rng.range(0.2, 0.5) * def.radius, rng.range(0.1, 0.25) * def.radius, rng.range(0.2, 0.5) * def.radius), hull);
-    } else {
-      m = new THREE.Mesh(new THREE.CylinderGeometry(rng.range(0.1, 0.3) * def.radius, rng.range(0.1, 0.3) * def.radius, rng.range(0.15, 0.4) * def.radius, 8), hull);
-    }
-    m.position.set(rng.range(-0.1, 0.1) * def.radius, y, rng.range(-0.1, 0.1) * def.radius);
-    m.rotation.y = rng.range(0, Math.PI);
+    const face = rng.int(0, 3);
+    const s = rng.range(0.12, 0.26) * R;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(s, s, rng.range(0.08, 0.16) * R), hull);
+    const off = rng.range(-0.6, 0.6);
+    if (face === 0) m.position.set(off * HX, HY, rng.range(-0.5, 0.2) * HZ);
+    else if (face === 1) m.position.set(off * HX, -HY, rng.range(-0.5, 0.2) * HZ);
+    else if (face === 2) m.position.set(HX, off * HY, rng.range(-0.5, 0.2) * HZ);
+    else m.position.set(-HX, off * HY, rng.range(-0.5, 0.2) * HZ);
+    m.rotation.set(rng.range(0, 0.4), rng.range(0, 0.4), rng.range(0, 0.4));
     group.add(m);
   }
-
-  // docking arms with approach lights
+  for (let i = 0; i < rng.int(3, 5); i++) {
+    const ant = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.006, R * 0.006, rng.range(0.3, 0.7) * R, 4), dark);
+    ant.position.set(rng.range(-0.7, 0.7) * HX, HY + rng.range(0.1, 0.3) * R, rng.range(-0.7, 0) * HZ);
+    group.add(ant);
+  }
   const blinkers: THREE.Mesh[] = [];
-  const arms = rng.int(2, 3);
-  for (let i = 0; i < arms; i++) {
-    const a = (i / arms) * Math.PI * 2 + rng.range(0, 0.6);
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(def.radius * 0.5, def.radius * 0.05, def.radius * 0.08), dark);
-    arm.position.set(Math.cos(a) * def.radius * 0.45, rng.range(-0.3, 0.3) * def.radius, Math.sin(a) * def.radius * 0.45);
-    arm.rotation.y = -a;
-    group.add(arm);
-    const tip = new THREE.Mesh(
-      new THREE.SphereGeometry(def.radius * 0.025, 6, 6),
-      new THREE.MeshBasicMaterial({ color: 0xff3322 }),
-    );
-    tip.position.set(Math.cos(a) * def.radius * 0.72, arm.position.y, Math.sin(a) * def.radius * 0.72);
+  for (const corner of [[-1, 1], [1, 1], [-1, -1], [1, -1]] as const) {
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(R * 0.025, 6, 6), new THREE.MeshBasicMaterial({ color: 0xff3322 }));
+    tip.position.set(corner[0] * HX, corner[1] * HY, HZ);
     group.add(tip);
     blinkers.push(tip);
   }
 
-  // antennae
-  for (let i = 0; i < rng.int(2, 4); i++) {
-    const ant = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, def.radius * rng.range(0.5, 1.0), 4), dark);
-    ant.position.set(rng.range(-0.2, 0.2) * def.radius, (rng.chance(0.5) ? 1 : -1) * spineLen * 0.55, rng.range(-0.2, 0.2) * def.radius);
-    group.add(ant);
-  }
-
-  const groupRotY = rng.range(0, Math.PI * 2);
-  group.rotation.y = groupRotY;
-  // the dock feature sits at the world dock port; express it in the group's
-  // (Y-rotated) local frame so it ends up in the right place after the rotation
-  const localDir = new THREE.Vector3(def.dockPort.x, def.dockPort.y, def.dockPort.z).applyAxisAngle(Y_UP, -groupRotY).normalize();
-  const dock = buildDockFeature(def, localDir, hull, dark);
-  group.add(dock.group);
   group.traverse((node) => {
     const m = node as THREE.Mesh;
     if (m.isMesh) {
@@ -356,7 +341,7 @@ function buildStationMesh(def: StationDef): { group: THREE.Group; ring: THREE.Me
       m.receiveShadow = true;
     }
   });
-  return { group, ring, blinkers, hatch: dock.hatch };
+  return { group, ring, blinkers, hatch, guides };
 }
 
 // ---------------------------------------------------------------------------
@@ -440,7 +425,7 @@ export class BodiesLayer {
 
     // stations: near detail + far beacon
     for (const def of system.stations) {
-      const { group, ring, blinkers, hatch } = buildStationMesh(def);
+      const { group, ring, blinkers, hatch, guides } = buildStationMesh(def);
       group.visible = false;
       sm.near.add(group);
       const marker = new THREE.Group();
@@ -450,7 +435,7 @@ export class BodiesLayer {
       );
       marker.add(beacon, glowSprite('rgb(150,200,235)', 14));
       sm.far.add(marker);
-      this.stations.push({ def, group, ring, blinkers, marker, hatch });
+      this.stations.push({ def, group, ring, blinkers, marker, hatch, guides });
     }
   }
 
@@ -474,14 +459,20 @@ export class BodiesLayer {
         if (sv.ring) sv.ring.rotation.z = time * 0.05;
         const blink = Math.sin(time * 4 + sv.def.seed % 10) > 0.4;
         for (const b of sv.blinkers) b.visible = blink;
-        // clamp hatch slides open as you enter the approach envelope
+        // hangar doors slide apart as you enter the approach envelope
         if (sv.hatch.length) {
-          const open = dist < sv.def.dockRadius * 1.3 ? 1 : 0;
+          const open = dist < sv.def.dockRadius * 1.25 ? 1 : 0;
           for (const panel of sv.hatch) {
             const cx = panel.userData.closedX as number;
             const ox = panel.userData.openX as number;
-            panel.position.x += (cx + (ox - cx) * open - panel.position.x) * Math.min(1, 0.08);
+            panel.position.x += (cx + (ox - cx) * open - panel.position.x) * Math.min(1, 0.06);
           }
+        }
+        // interior guide lights pulse so the pad reads as "live"
+        const pulse = 0.55 + 0.45 * Math.sin(time * 3);
+        for (const g of sv.guides) {
+          const mat = g.material as THREE.MeshBasicMaterial;
+          if (mat && 'opacity' in mat) { mat.transparent = true; mat.opacity = pulse; }
         }
       } else {
         sv.marker.position.copy(sm.toFar(sv.def.pos, tmp));

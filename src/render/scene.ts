@@ -85,7 +85,13 @@ export class SceneManager {
   // Atmosphere: the empty sky becomes the far-scene background colour (so lit
   // geometry renders over a real sky, not a post wash), plus near-scene haze so
   // distant terrain fades into the air — which also hides the terrain patch edge.
+  // Crucially the FAR scene is fogged too: a real daytime sky scatters so much
+  // light that you can't see other planets through it — from the ground at noon
+  // the rest of the system fades into the blue, reappearing only as you climb
+  // back out into vacuum. Without this the far-scene planets render straight
+  // over the sky background and hang there "perfectly", huge and wrong.
   private nearFog = new THREE.FogExp2(0x6fa8d6, 0);
+  private farFog = new THREE.FogExp2(0x6fa8d6, 0);
   private skyBg = new THREE.Color(0x000000);
   private baseAmbient = new THREE.Color(0x223344);
   setAtmosphere(color: THREE.Color, density: number): void {
@@ -96,6 +102,14 @@ export class SceneManager {
       this.nearFog.color.copy(color);
       this.nearFog.density = density * density * 5e-5;
       this.near.fog = this.nearFog;
+      // far-scene haze hides distant worlds in daylight. Far units are km, so a
+      // density of ~7e-4 fully washes anything past ~2000 km while leaving the
+      // local horizon (the planet you're on, a few hundred km of limb) visible.
+      // Ramps super-linearly so a thin high-altitude haze barely dims the view
+      // but the thick air at the surface buries the rest of the system.
+      this.farFog.color.copy(this.skyBg);
+      this.farFog.density = Math.pow(density, 1.5) * 9e-4;
+      this.far.fog = this.farFog;
       // skylight: the bright sky scatters daylight onto the surface so the
       // terrain (near patch AND the far-scene planet) is lit even away from the sun
       this.ambientNear.color.copy(this.baseAmbient).lerp(color, density * 0.7);
@@ -105,6 +119,7 @@ export class SceneManager {
     } else {
       this.far.background = null;
       this.near.fog = null;
+      this.far.fog = null;
       this.ambientNear.color.copy(this.baseAmbient);
       this.ambientNear.intensity = 0.55;
       this.ambientFar.color.copy(this.baseAmbient);

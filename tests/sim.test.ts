@@ -3,6 +3,7 @@ import { Sim } from '../src/sim/sim';
 import { DT, emptyShipInput } from '../src/sim/types';
 import { integrateFlight } from '../src/sim/flight';
 import { isLandable } from '../src/sim/system';
+import { hangarFrame, padPoint } from '../src/sim/docking';
 import { qLookAt, vadd, vdist, vlen, vnorm, vscale, vsub, v3 } from '../src/sim/vec';
 
 function makeSim(): Sim {
@@ -134,17 +135,26 @@ describe('flight model: inertia & flight assist', () => {
 });
 
 describe('VTOL flight mode (#19)', () => {
-  it('VTOL caps the forward speed envelope for precise hover', () => {
+  it('VTOL is true vertical flight: thrust-up climbs along local up, nose-independent', () => {
     const sim = makeSim();
     const pid = sim.addPlayer('tester');
     sim.undock(pid);
     const e = sim.entities.get(pid)!;
     const meta = sim.meta(pid)!;
+    // hang in a planet's air column with the nose pointed horizontally — far
+    // from any station so "up" is the planet's radial
+    const p = sim.system.planets.find((pp) => isLandable(pp.kind))!;
+    const up = vnorm(vsub(e.pos, p.pos));
+    e.pos = vadd(p.pos, vscale(up, p.radius + 30_000));
+    e.orient = qLookAt(vnorm(v3(up.z, 0, -up.x))); // a horizontal heading
+    e.vel = v3();
     sim.toggleVtol(pid);
     expect(meta.vtol).toBe(true);
-    meta.input.thrustForward = 1;
-    runTicks(sim, 20 * 30);
-    expect(vlen(e.vel)).toBeLessThanOrEqual(meta.stats.maxSpeed * 0.25);
+    const alt0 = vdist(e.pos, p.pos) - p.radius;
+    meta.input.thrustUp = 1; // collective up
+    runTicks(sim, 20 * 3);
+    const alt1 = vdist(e.pos, p.pos) - p.radius;
+    expect(alt1).toBeGreaterThan(alt0 + 100); // climbed vertically despite a level nose
   });
 
   it('VTOL hovers: releasing the stick snaps a drifting ship to a near-stop', () => {
@@ -171,7 +181,7 @@ describe('VTOL flight mode (#19)', () => {
 });
 
 describe('solid collision (#21)', () => {
-  // the station's solid core is 0.7x its radius (the rest is the spine + dock)
+  // approach a SOLID side face of the box hull (the hangar is on the +f face)
   const stageAtStation = (sim: Sim, speed: number) => {
     const pid = sim.addPlayer('tester');
     sim.undock(pid);
@@ -180,8 +190,9 @@ describe('solid collision (#21)', () => {
     meta.undockInvuln = 0;
     meta.flightAssist = false; // coast straight in, deterministic
     const st = sim.system.stations[0];
-    const core = st.radius * 0.7;
-    const dir = v3(1, 0, 0);
+    const fr = hangarFrame(st);
+    const core = fr.HX;       // the +u face of the hull box
+    const dir = fr.u;
     e.pos = vadd(st.pos, vscale(dir, core + e.radius + 5));
     e.vel = vscale(dir, -speed); // straight into the hull
     return { e, st, core };
@@ -216,8 +227,9 @@ describe('solid collision (#21)', () => {
       meta.stats.massFactor = massFactor; // isolate mass as the only variable
       e.maxHull = e.hull = 100_000; // big tank so neither hull dies + resets
       const st = sim.system.stations[0];
-      const dir = v3(1, 0, 0);
-      e.pos = vadd(st.pos, vscale(dir, st.radius * 0.7 + e.radius + 5));
+      const fr = hangarFrame(st);
+      const dir = fr.u;
+      e.pos = vadd(st.pos, vscale(dir, fr.HX + e.radius + 5));
       e.vel = vscale(dir, -300);
       const h0 = e.hull;
       runTicks(sim, 5);
@@ -228,30 +240,28 @@ describe('solid collision (#21)', () => {
 });
 
 describe('docking', () => {
-  // place the ship correctly for a station's dock type, ready to be brought in
-  const stageAtPort = (sim: Sim, pid: number, st: { pos: any; radius: number; dockType: string; dockPort: any }) => {
+  // set the ship down on the landing pad inside the hangar, gear + VTOL, slow:
+  // the skill-landing end state the sim docks on
+  const stageOnPad = (sim: Sim, pid: number, st: { id: string }) => {
     const e = sim.entities.get(pid)!;
     const meta = sim.meta(pid)!;
+    const def = sim.station(st.id)!;
     meta.undockInvuln = 0;
-    meta.gearDown = true; // satisfies the pad type
+    meta.gearDown = true;
     meta.vtol = true;
-    const along = st.dockType === 'bay' ? st.radius * 0.6 : st.radius + 40;
-    e.pos = vadd(st.pos, vscale(st.dockPort, along));
+    e.pos = padPoint(def);
     e.vel = v3();
-    e.orient = qLookAt(vscale(st.dockPort, -1)); // nose toward the station
+    e.orient = qLookAt(vscale(hangarFrame(def).f, -1)); // nose into the bay
   };
 
-  it('all three dock types (clamp / bay / pad) can be flown and docked (#17)', () => {
-    for (const type of ['clamp', 'bay', 'pad'] as const) {
-      const sim = makeSim();
-      const st = sim.system.stations.find((s) => s.dockType === type);
-      expect(st, `a ${type} station exists`).toBeTruthy();
-      const pid = sim.addPlayer('tester');
-      sim.undock(pid);
-      stageAtPort(sim, pid, st!);
-      runTicks(sim, 20 * 5); // passive auto-dock + bring-in lerp
-      expect(sim.entities.get(pid)!.dockedAt, `dock type ${type}`).toBe(st!.id);
-    }
+  it('flying into the hangar and setting down on the pad docks you (#5/#17)', () => {
+    const sim = makeSim();
+    const st = sim.system.stations[0];
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    stageOnPad(sim, pid, st);
+    runTicks(sim, 8); // settles on the pad and the dock is logged in place
+    expect(sim.entities.get(pid)!.dockedAt).toBe(st.id);
   });
 
   it('undocks cleanly', () => {
@@ -263,7 +273,7 @@ describe('docking', () => {
     expect(e.dockedAt).toBeNull();
   });
 
-  it('refuses an off-axis / unaligned approach — docking is earned (#17)', () => {
+  it('will not dock you while still outside the hangar — no auto-suck (#17)', () => {
     const sim = makeSim();
     const pid = sim.addPlayer('tester');
     sim.undock(pid);
@@ -271,17 +281,18 @@ describe('docking', () => {
     const meta = sim.meta(pid)!;
     const st = sim.station('morrow_granary')!;
     meta.undockInvuln = 0;
-    // sit beside the station, well off the dock-port axis, pointed nowhere useful
-    const off = vnorm(v3(st.dockPort.z, st.dockPort.x, -st.dockPort.y)); // perpendicular-ish
-    e.pos = vadd(st.pos, vscale(off, st.radius + 800));
+    meta.gearDown = true;
+    meta.vtol = true;
+    // hover beside the solid hull, in dock range but not inside the hangar
+    const fr = hangarFrame(st);
+    e.pos = vadd(st.pos, vscale(fr.u, fr.HX + e.radius + 600));
     e.vel = v3();
-    e.orient = qLookAt(off);
-    sim.requestDock(pid);
-    runTicks(sim, 20);
+    sim.requestDock(pid);     // manual key: should be a wave-off
+    runTicks(sim, 30);        // and no passive suck-in either
     expect(e.dockedAt).toBeNull();
   });
 
-  it('autodock brings an unaligned ship in for a fee (#17)', () => {
+  it('autodock flies an out-of-position ship onto the pad for a fee (#17)', () => {
     const sim = makeSim();
     const pid = sim.addPlayer('tester');
     sim.undock(pid);
@@ -290,12 +301,11 @@ describe('docking', () => {
     meta.undockInvuln = 0;
     meta.profile.credits = 1000;
     const st = sim.station('morrow_granary')!;
-    const off = vnorm(v3(st.dockPort.z, st.dockPort.x, -st.dockPort.y));
-    e.pos = vadd(st.pos, vscale(off, st.radius + 800)); // off-axis — manual would refuse
+    const fr = hangarFrame(st);
+    e.pos = vadd(st.pos, vscale(fr.f, fr.HZ + 1500)); // in front of the hatch, in range
     e.vel = v3();
-    e.orient = qLookAt(off);
     sim.autodock(pid);
-    runTicks(sim, 20 * 5);
+    runTicks(sim, 20 * 5); // autopilot eases all the way onto the pad
     expect(e.dockedAt).toBe('morrow_granary');
     expect(meta.profile.credits).toBe(500);
   });
@@ -308,13 +318,13 @@ describe('docking', () => {
     const meta = sim.meta(pid)!;
     meta.undockInvuln = 0;
     const st = sim.station('morrow_granary')!;
-    stageAtPort(sim, pid, st);
-    e.vel = vscale(st.dockPort, 200); // way over docking speed
+    stageOnPad(sim, pid, st);
+    e.vel = vscale(hangarFrame(st).f, 200); // on the pad but screaming — too fast
     sim.requestDock(pid);
     runTicks(sim, 2);
     expect(e.dockedAt).toBeNull();
     e.vel = v3();
-    e.pos = vadd(st.pos, vscale(st.dockPort, 50_000)); // out of range
+    e.pos = vadd(st.pos, vscale(hangarFrame(st).f, 80_000)); // out of range
     sim.requestDock(pid);
     runTicks(sim, 2);
     expect(e.dockedAt).toBeNull();

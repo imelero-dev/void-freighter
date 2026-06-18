@@ -2,7 +2,17 @@
 // online client for own-ship prediction. Pure math, no state of its own.
 
 import type { ShipInput } from './types';
-import { clamp, qIntegrate, qrot, v3, vlen, vscale, vsub, type Quat, type Vec3 } from './vec';
+import {
+  clamp, qaxisAngle, qForward, qIntegrate, qLookAt, qnlerp, qRight, qrot, qUp,
+  v3, vadd, vcross, vdot, vlen, vnorm, vscale, vsub, type Quat, type Vec3,
+} from './vec';
+
+// VTOL is true vertical flight, not a slowdown: the throttle/up keys drive
+// motion along the local vertical and horizontal axes, decoupled from where the
+// nose points, while the deck auto-levels to `up`. You hang in place, rise and
+// descend straight, and slide gently sideways — the way you set down on a pad.
+const VTOL_CLIMB = 80;   // m/s vertical authority (collective)
+const VTOL_HORIZ = 60;   // m/s lateral/forward authority
 
 export interface FlightBody {
   pos: Vec3;
@@ -17,10 +27,12 @@ export interface FlightPerf {
   accel: number;
   turnRate: number;
   massFactor?: number; // inertia multiplier; heavier hulls ramp/settle slower
-  vtol?: boolean;      // hover mode: snap-to-stop damping + crisp vertical/lateral
+  vtol?: boolean;      // true vertical-flight hover mode
+  vtolUp?: Vec3;       // world "up" reference for VTOL (planet/hangar vertical)
 }
 
 export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPerf, dt: number, assist: boolean): void {
+  if (perf.vtol) { vtolFlight(b, input, perf, dt); return; }
   // speed-dependent handling: nimble at low speed (dogfights), heavy at full
   // burn — turn authority drops from 125% at standstill to 80% at max speed
   const speedFrac = Math.min(1, vlen(b.vel) / Math.max(1, perf.maxSpeed));
@@ -58,8 +70,7 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
 
   b.throttle = clamp(input.thrustForward, -0.3, 1);
   if (assist && !input.brake) {
-    // VTOL gives crisp vertical/lateral authority for precise hovering
-    const lat = perf.vtol ? 1.0 : 0.85;
+    const lat = 0.85;
     const desiredLocal = v3(
       clamp(input.thrustRight, -1, 1) * lat,
       clamp(input.thrustUp, -1, 1) * lat,
@@ -69,9 +80,8 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
     const delta = vsub(desired, b.vel);
     const dl = vlen(delta);
     // assist corrects the velocity vector much faster than raw thrust — a
-    // futuristic ship should feel planted, not like a barge. VTOL hovers hard:
-    // it snaps to a dead stop when you release, so you hang in place.
-    const maxDelta = perf.accel * (perf.vtol ? 4.5 : 1.6) * dt;
+    // futuristic ship should feel planted, not like a barge.
+    const maxDelta = perf.accel * 1.6 * dt;
     if (dl > 1e-6) {
       const f = Math.min(1, maxDelta / dl);
       b.vel.x += delta.x * f;
@@ -118,6 +128,50 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
       b.vel.y *= f;
       b.vel.z *= f;
     }
+  }
+  b.pos.x += b.vel.x * dt;
+  b.pos.y += b.vel.y * dt;
+  b.pos.z += b.vel.z * dt;
+}
+
+// True VTOL: the ship holds the deck level to `up`, yaw steers the heading, and
+// translation happens along world-decoupled vertical/horizontal axes. Press up
+// and you rise straight; release and you hover (no gravity to fight). This is
+// what makes a precise vertical touchdown a skill rather than a slowdown.
+function vtolFlight(b: FlightBody, input: ShipInput, perf: FlightPerf, dt: number): void {
+  const up = perf.vtolUp ? vnorm(perf.vtolUp) : qUp(b.orient);
+
+  // --- attitude: auto-level to `up`, yaw to turn ---
+  let heading = vsub(qForward(b.orient), vscale(up, vdot(qForward(b.orient), up)));
+  if (vlen(heading) < 1e-4) {
+    const rt = qRight(b.orient);
+    heading = vsub(rt, vscale(up, vdot(rt, up)));
+  }
+  heading = vnorm(heading);
+  const yaw = clamp(input.yaw, -1, 1);
+  if (Math.abs(yaw) > 1e-4) {
+    heading = vnorm(qrot(qaxisAngle(up, -yaw * perf.turnRate * dt), heading));
+  }
+  const target = qLookAt(heading, up);
+  b.orient = qnlerp(b.orient, target, Math.min(1, perf.turnRate * 1.6 * dt));
+  b.angVel = v3(0, 0, 0);
+
+  // --- translation: collective vertical + slow horizontal, nose-independent ---
+  b.throttle = clamp(input.thrustForward, -1, 1);
+  const right = vnorm(vcross(heading, up));
+  const climb = clamp(input.thrustUp, -1, 1) * VTOL_CLIMB;
+  const fwd = b.throttle * VTOL_HORIZ;
+  const side = clamp(input.thrustRight, -1, 1) * VTOL_HORIZ;
+  let desired = vadd(vscale(up, climb), vadd(vscale(heading, fwd), vscale(right, side)));
+  if (input.brake) desired = v3(0, 0, 0);
+  const delta = vsub(desired, b.vel);
+  const dl = vlen(delta);
+  const maxDelta = perf.accel * 3.0 * dt; // crisp, planted hover
+  if (dl > 1e-6) {
+    const f = Math.min(1, maxDelta / dl);
+    b.vel.x += delta.x * f;
+    b.vel.y += delta.y * f;
+    b.vel.z += delta.z * f;
   }
   b.pos.x += b.vel.x * dt;
   b.pos.y += b.vel.y * dt;

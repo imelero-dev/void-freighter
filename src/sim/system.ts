@@ -3,7 +3,7 @@
 
 import { Rng } from './rng';
 import type { BeltDef, FactionDef, FieldDef, MoonDef, PlanetDef, RockType, StationDef, SystemDef } from './types';
-import { v3, type Vec3 } from './vec';
+import { v3, vnorm, vscale, vsub, type Vec3 } from './vec';
 
 export const WORLD_SEED = 7741;
 
@@ -169,25 +169,21 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
       });
     }
     if (spec.station) {
-      // Station orbits just outside the planet, offset sunward-ish for light.
+      // Station orbits just outside the planet. Its hangar faces away from the
+      // planet (into open space) so the approach is unobstructed and lit.
       const sa = rng.range(0, Math.PI * 2);
       const sd = radius + 1.6e6; // a fixed standoff above the (now large) surface
-      stations.push(makeStation(spec.station, v3(
-        pos.x + Math.cos(sa) * sd, pos.y + radius * 0.1, pos.z + Math.sin(sa) * sd,
-      ), rng.int(1, 1e9)));
+      const spos = v3(pos.x + Math.cos(sa) * sd, pos.y + radius * 0.1, pos.z + Math.sin(sa) * sd);
+      stations.push(makeStation(spec.station, spos, rng.int(1, 1e9), vnorm(vsub(spos, pos))));
     }
   }
 
   for (const spec of FREE_STATIONS) {
     const angle = rng.range(0, Math.PI * 2);
-    stations.push(makeStation(spec, v3(
-      Math.cos(angle) * spec.orbit, spec.offPlane, Math.sin(angle) * spec.orbit,
-    ), rng.int(1, 1e9)));
+    const spos = v3(Math.cos(angle) * spec.orbit, spec.offPlane, Math.sin(angle) * spec.orbit);
+    // free stations open their hangar toward the star (sunward) for light
+    stations.push(makeStation(spec, spos, rng.int(1, 1e9), vnorm(vscale(spos, -1))));
   }
-
-  // guarantee all three docking styles appear in the system, deterministically
-  const DOCK_TYPES = ['clamp', 'bay', 'pad'] as const;
-  stations.forEach((st, i) => { st.dockType = DOCK_TYPES[i % 3]; });
 
   const belts: BeltDef[] = BELTS.map((spec) => {
     const fields: FieldDef[] = [];
@@ -218,16 +214,14 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
   };
 }
 
-function makeStation(spec: StationSpec, pos: Vec3, seed: number): StationDef {
-  // deterministic dock type + a fixed port direction on the hull
-  const rng = new Rng((seed ^ 0x90c5) >>> 0);
-  const dockType = (['clamp', 'bay', 'pad'] as const)[rng.int(0, 2)];
-  const dx = rng.range(-1, 1), dy = rng.range(-0.35, 0.35), dz = rng.range(-1, 1);
-  const dl = Math.hypot(dx, dy, dz) || 1;
+function makeStation(spec: StationSpec, pos: Vec3, seed: number, port: Vec3): StationDef {
+  // A big solid hull with a single hangar facing `port`. The station is large
+  // enough to fly inside (radius ~2 km) so the landing pad lives in the hangar,
+  // not on a floating slab out in space.
   return {
     id: spec.id, name: spec.name, factionId: spec.faction, pos,
-    radius: 900, dockRadius: 2200, safeRadius: 14_000,
-    dockType, dockPort: v3(dx / dl, dy / dl, dz / dl),
+    radius: 2000, dockRadius: 6500, safeRadius: 16_000,
+    dockType: 'hangar', dockPort: port,
     services: spec.services,
     produces: { ...spec.produces },
     consumes: { ...spec.consumes },

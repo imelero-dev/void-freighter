@@ -80,9 +80,10 @@ export interface MoonDef {
 
 export type StationService = 'market' | 'contracts' | 'shipyard' | 'refinery' | 'fuel';
 
-// How you physically dock here: an external clamp/hatch you nose up to, an open
-// bay you fly through and into, or an exterior pad you set down on (#17).
-export type DockType = 'clamp' | 'bay' | 'pad';
+// Every station docks the same way now: you fly in through the hatch and set
+// down on the landing pad inside the hangar. The field is kept for forward
+// compatibility (and in case bespoke dock styles return).
+export type DockType = 'hangar';
 
 export interface StationDef {
   id: string;

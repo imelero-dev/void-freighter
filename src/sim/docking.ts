@@ -1,20 +1,31 @@
-// Multi-type docking geometry & readiness (#17). A single pure check shared by
-// the authoritative Sim and the HUD approach aid so the instrument can never
-// disagree with what actually docks you.
+// Station docking geometry & readiness. A single pure module shared by the
+// authoritative Sim (collision + the dock grant), the HUD approach aid and the
+// renderer, so the instrument, the visible hangar and what actually docks you
+// can never disagree.
 //
-// Each station exposes a dock feature on its hull at `pos + dockPort*radius`:
-//  - clamp: nose up to the external collar, lined up and slow → it locks.
-//  - bay:   fly through the open mouth and come to rest inside (walls solid).
-//  - pad:   set down on the exterior pad in VTOL with gear, gently and level.
+// Every station is a big solid hull with one open HANGAR carved into the face
+// its dock port points at. You fly in through the hatch, descend onto the
+// interior landing pad in VTOL with the gear down, and set down gently — then
+// you're docked. No external floating pads, no auto-suck: the skill is flying
+// the approach and the touchdown.
 
-import type { StationDef } from './types';
-import { qForward, vdot, vlen, vnorm, vsub, type Quat, type Vec3 } from './vec';
-import { DOCK_ALIGN, DOCK_MAX_SPEED } from './data';
+import type { StationDef, SystemDef } from './types';
+import { atmoHeight } from './system';
+import { qForward, vadd, vcross, vdot, vlen, vnorm, vscale, vsub, type Quat, type Vec3 } from './vec';
+import { DOCK_MAX_SPEED } from './data';
 import { SOFT_LAND_SPEED } from './system';
 
-export const BAY_MOUTH_FRAC = 0.34;  // bay mouth radius / station radius
-export const BAY_DEPTH_FRAC = 0.62;  // how deep the bay cuts into the hull
-export const PAD_RADIUS_FRAC = 0.5;  // landing-pad radius / station radius
+// The station hull is a chunky box in its own (u,v,f) frame — a Coriolis-style
+// block — with a rectangular hangar "mail slot" cut into the +f (dock) face.
+// All dimensions are fractions of the station hull radius R.
+export const HULL_HX = 1.00;   // hull half-width  (along u)
+export const HULL_HY = 0.78;   // hull half-height (along v)
+export const HULL_HZ = 0.92;   // hull half-depth  (along f); dock face at +HZ
+export const HANGAR_HALF_W = 0.42;   // hangar half width  (along u) — the slot
+export const HANGAR_HALF_H = 0.26;   // hangar half height (along v)
+export const HANGAR_DEPTH = 0.95;    // how deep the hangar cuts in (along -f)
+export const PAD_RADIUS = 0.30;      // landing-pad radius
+export const PAD_DEPTH_FRAC = 0.5;   // pad centre depth into the hangar (× DEPTH)
 
 export interface DockResult {
   ok: boolean;        // conditions met — docking is granted
@@ -22,51 +33,113 @@ export interface DockResult {
   cue: string;        // terse instruction for the HUD + ATC wave-off
 }
 
-// The dock feature's anchor point and outward normal in world space.
-export function stationPort(st: StationDef): { point: Vec3; dir: Vec3 } {
+// Orthonormal hangar frame in world space. `f` is the outward hatch normal
+// (== dock port); `u` is the lateral (width) axis; `v` is the hangar's "up"
+// (the pad sits on the -v floor). u/v are derived deterministically from f so
+// the sim, the HUD and the renderer all agree on which way is up inside the bay.
+export interface HangarFrame {
+  center: Vec3; R: number;
+  f: Vec3; u: Vec3; v: Vec3;
+  HX: number; HY: number; HZ: number; // hull half-extents in (u,v,f)
+  HW: number; HH: number; D: number;  // hangar slot half-w/half-h and depth
+  mouthA: number; backA: number;      // along-f coords of the dock face and back wall
+  padA: number; padR: number;         // pad centre depth & radius
+  floorV: number;                     // v-coord of the pad floor
+}
+
+export function hangarFrame(st: StationDef): HangarFrame {
+  const f = vnorm(st.dockPort);
+  const ref: Vec3 = Math.abs(f.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+  const u = vnorm(vcross(ref, f));
+  const v = vnorm(vcross(f, u));
+  const R = st.radius;
+  const HZ = R * HULL_HZ;
+  const D = R * HANGAR_DEPTH;
   return {
-    point: { x: st.pos.x + st.dockPort.x * st.radius, y: st.pos.y + st.dockPort.y * st.radius, z: st.pos.z + st.dockPort.z * st.radius },
-    dir: st.dockPort,
+    center: st.pos, R, f, u, v,
+    HX: R * HULL_HX, HY: R * HULL_HY, HZ,
+    HW: R * HANGAR_HALF_W, HH: R * HANGAR_HALF_H, D,
+    mouthA: HZ, backA: HZ - D,
+    padA: HZ - D * PAD_DEPTH_FRAC, padR: R * PAD_RADIUS,
+    floorV: -R * HANGAR_HALF_H,
   };
 }
 
-export function dockCheck(st: StationDef, pos: Vec3, vel: Vec3, orient: Quat, gearDown: boolean, vtol: boolean): DockResult {
-  const rel = vsub(pos, st.pos);
-  const along = vdot(rel, st.dockPort);                 // distance along the port axis
-  const px = rel.x - st.dockPort.x * along;
-  const py = rel.y - st.dockPort.y * along;
-  const pz = rel.z - st.dockPort.z * along;
-  const lateral = Math.hypot(px, py, pz);               // offset from the port axis
+// World point of the hatch mouth (the thing the HUD diamond marks and what you
+// aim for on approach) and its outward normal.
+export function stationPort(st: StationDef): { point: Vec3; dir: Vec3 } {
+  const fr = hangarFrame(st);
+  return { point: vadd(fr.center, vscale(fr.f, fr.mouthA)), dir: fr.f };
+}
+
+// World point a ship rests at on the pad (a touch above the floor so it sits
+// unambiguously inside the hangar slot, not on its lower edge).
+export function padPoint(st: StationDef): Vec3 {
+  const fr = hangarFrame(st);
+  const restV = fr.floorV + fr.R * 0.03;
+  return vadd(vadd(fr.center, vscale(fr.f, fr.padA)), vscale(fr.v, restV));
+}
+
+export function dockCheck(st: StationDef, pos: Vec3, vel: Vec3, _orient: Quat, gearDown: boolean, vtol: boolean): DockResult {
+  const fr = hangarFrame(st);
+  const rel = vsub(pos, fr.center);
+  const a = vdot(rel, fr.f);
+  const pu = vdot(rel, fr.u);
+  const pv = vdot(rel, fr.v);
+  const inFootprint = Math.abs(pu) < fr.HW && Math.abs(pv) < fr.HH;
+  const inside = inFootprint && a < fr.mouthA && a > fr.backA;
   const speed = vlen(vel);
   const slow = speed <= DOCK_MAX_SPEED;
-  const noseAlign = vdot(qForward(orient), vnorm(vsub(st.pos, pos))); // nose toward the station
-  const closing = vdot(vel, st.dockPort);               // +out / -in along the axis
-  const r = st.radius;
+  const vDown = -vdot(vel, fr.v);                       // >0 = settling toward the floor
+  const overPad = inside && Math.hypot(pu, a - fr.padA) < fr.padR;
+  const settled = pv < fr.floorV + fr.R * 0.10;         // close to the pad surface
+  const gentle = Math.abs(vDown) < SOFT_LAND_SPEED && slow;
+  const ready = gearDown && vtol;
 
-  switch (st.dockType) {
-    case 'clamp': {
-      const onAxis = lateral < r * 0.45 && along > r * 0.5;
-      const aligned = noseAlign > DOCK_ALIGN;
-      if (onAxis && aligned && slow && along < r * 1.8) return { ok: true, level: 2, cue: 'CLAMP LOCK' };
-      if (along < r * 2.4 && lateral < r * 0.9) return { ok: false, level: 1, cue: !slow ? 'REDUCE SPEED' : !aligned ? 'NOSE ON COLLAR' : 'CENTRE ON COLLAR' };
-      return { ok: false, level: 0, cue: 'LINE UP ON THE CLAMP' };
-    }
-    case 'bay': {
-      const inMouth = lateral < r * BAY_MOUTH_FRAC && along > 0;
-      const inside = inMouth && along < r * 0.98 && along > r * (1 - BAY_DEPTH_FRAC);
-      if (inside && slow) return { ok: true, level: 2, cue: 'IN THE BAY' };
-      if (inMouth || (lateral < r * 0.7 && along > r * 0.7)) return { ok: false, level: 1, cue: !slow ? 'SLOW FOR THE BAY' : 'FLY INTO THE BAY' };
-      return { ok: false, level: 0, cue: 'ALIGN WITH THE BAY MOUTH' };
-    }
-    case 'pad': {
-      const overPad = lateral < r * PAD_RADIUS_FRAC && Math.abs(along - r) < r * 0.3;
-      const gentle = Math.abs(closing) < SOFT_LAND_SPEED && slow;
-      const ready = gearDown && vtol;
-      if (overPad && gentle && ready) return { ok: true, level: 2, cue: 'SET DOWN' };
-      if (lateral < r * 0.85 && Math.abs(along - r) < r * 0.6) return { ok: false, level: 1, cue: !ready ? 'VTOL + GEAR FOR PAD' : !gentle ? 'EASE YOUR DESCENT' : 'CENTRE ON THE PAD' };
-      return { ok: false, level: 0, cue: 'LINE UP OVER THE PAD' };
-    }
-    default:
-      return { ok: false, level: 0, cue: '' };
+  if (overPad && settled && gentle && ready) return { ok: true, level: 2, cue: 'SET DOWN' };
+  if (inside) {
+    const cue = !ready ? 'VTOL + GEAR TO LAND'
+      : !overPad ? 'CENTRE OVER THE PAD'
+        : !settled ? 'DESCEND ONTO THE PAD'
+          : !gentle ? 'EASE YOUR DESCENT' : 'HOLD STILL';
+    return { ok: false, level: 1, cue };
   }
+  // lined up in front of the open mouth, about to fly in
+  if (inFootprint && a >= fr.mouthA && a < fr.mouthA + fr.R * 1.6) {
+    return { ok: false, level: 1, cue: !slow ? 'SLOW FOR THE HANGAR' : 'FLY INTO THE HANGAR' };
+  }
+  return { ok: false, level: 0, cue: 'LINE UP WITH THE HANGAR MOUTH' };
+}
+
+// "Up" reference for VTOL flight at a world position: the hangar floor normal
+// when close to a station, otherwise the local vertical of a nearby planet or
+// moon. null in open space (the caller falls back to the ship's own up). Shared
+// by the Sim and the online client's prediction so hover behaves identically.
+export function vtolUpRef(system: SystemDef, pos: Vec3): Vec3 | null {
+  let best: StationDef | null = null;
+  let bestD = Infinity;
+  for (const st of system.stations) {
+    const d = vlen(vsub(pos, st.pos));
+    if (d < st.dockRadius * 2.4 && d < bestD) { bestD = d; best = st; }
+  }
+  if (best) return hangarFrame(best).v;
+
+  let up: Vec3 | null = null;
+  let nearest = Infinity;
+  for (const p of system.planets) {
+    const d = vlen(vsub(pos, p.pos));
+    const alt = d - p.radius;
+    if (alt < atmoHeight(p) * 1.8 && alt < nearest) { nearest = alt; up = vnorm(vsub(pos, p.pos)); }
+  }
+  for (const m of system.moons) {
+    const d = vlen(vsub(pos, m.pos));
+    const alt = d - m.radius;
+    if (alt < m.radius * 0.6 && alt < nearest) { nearest = alt; up = vnorm(vsub(pos, m.pos)); }
+  }
+  return up;
+}
+
+// Nose-forward alignment helper kept for callers that grade heading (HUD).
+export function noseAlignment(orient: Quat, pos: Vec3, target: Vec3): number {
+  return vdot(qForward(orient), vnorm(vsub(target, pos)));
 }

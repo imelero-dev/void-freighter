@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/sim';
-import { qLookAt, vadd, vscale, v3 } from '../src/sim/vec';
+import { padPoint } from '../src/sim/docking';
+import { v3 } from '../src/sim/vec';
 
 function runTicks(sim: Sim, n: number) {
   const events = [];
@@ -61,16 +62,14 @@ describe('transport contract lifecycle', () => {
     sim.sellGood(pid, c.good!, c.qty);
     expect(meta.profile.cargo.find((ci) => ci.contractId === c.id)).toBeTruthy();
 
-    // teleport to the destination's dock port and fly it in
+    // teleport onto the destination's hangar pad and let it dock
     const dest = sim.station(c.dest)!;
     sim.undock(pid);
     sim.meta(pid)!.undockInvuln = 0;
     sim.meta(pid)!.gearDown = true;
     sim.meta(pid)!.vtol = true;
-    const along = dest.dockType === 'bay' ? dest.radius * 0.6 : dest.radius + 40;
-    e.pos = vadd(dest.pos, vscale(dest.dockPort, along));
+    e.pos = padPoint(dest);
     e.vel = v3();
-    e.orient = qLookAt(vscale(dest.dockPort, -1));
     const creditsBefore = meta.profile.credits;
     runTicks(sim, 20 * 6);
     expect(e.dockedAt).toBe(dest.id);
@@ -188,10 +187,8 @@ describe('smuggling', () => {
       meta.vtol = true;
       sim.addCargo(meta.profile, 'stims', 10);
       const st = sim.station('bren_yards')!;
-      const along = st.dockType === 'bay' ? st.radius * 0.6 : st.radius + 40;
-      e.pos = vadd(st.pos, vscale(st.dockPort, along));
+      e.pos = padPoint(st);
       e.vel = v3();
-      e.orient = qLookAt(vscale(st.dockPort, -1));
       for (let i = 0; i < 20 * 6; i++) sim.tick();
       if (sim.freeQty(meta.profile, 'stims') === 0) confiscated = true;
     }
