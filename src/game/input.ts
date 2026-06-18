@@ -37,6 +37,8 @@ export class InputManager {
   // strafe stick written by TouchControls drag-from-roll, [-1, 1]
   touchStrafeX = 0;
   touchStrafeY = 0;
+  // touch throttle pushed into the reserved top band -> turbo overburn
+  mobileBoost = false;
 
   private keys = new Set<string>();
   private listeners = new Map<GameAction, Array<() => void>>();
@@ -192,8 +194,9 @@ export class InputManager {
     if (up) this.throttle = clamp(this.throttle + dt * 0.8, -0.3, 1);
     if (down) this.throttle = clamp(this.throttle - dt * 0.8, -0.3, 1);
     out.thrustForward = this.throttle;
-    // pinned at 100% and still pushing -> turbo overburn
-    out.turbo = up && this.throttle >= 1;
+    // pinned at 100% and still pushing -> turbo overburn (keyboard or the
+    // touch throttle pushed into its reserved boost band)
+    out.turbo = (up && this.throttle >= 1) || this.mobileBoost;
     out.thrustRight = clamp((b('strafeRight') ? 1 : 0) - (b('strafeLeft') ? 1 : 0) + this.touchStrafeX, -1, 1);
     out.thrustUp = clamp((b('strafeUp') ? 1 : 0) - (b('strafeDown') ? 1 : 0) + this.touchStrafeY, -1, 1);
     out.roll = (b('rollRight') || this.touchRollRight ? 1 : 0) - (b('rollLeft') || this.touchRollLeft ? 1 : 0);

@@ -99,7 +99,9 @@ export class GameApp {
     // distance we want lit: with decay 1 the illuminance is intensity/d, so
     // ~2200 keeps an asteroid readable out to ~700 m. A wide-ish cone reads as
     // a usable beam rather than a pencil dot.
-    this.headlight = new THREE.SpotLight(0xfff0d6, 2200, 3000, 0.55, 0.5, 1.0);
+    // a focused forward beam (≈34° cone) reaching ~4 km; the per-frame
+    // auto-exposure keeps whatever it lands on at a constant useful brightness
+    this.headlight = new THREE.SpotLight(0xfff0d6, 2200, 4000, 0.3, 0.35, 1.0);
     this.headlight.position.set(0, -0.2, 0);
     this.headlight.target.position.set(0, 0, -100);
     this.sm.camera.add(this.headlight);

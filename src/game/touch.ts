@@ -327,11 +327,26 @@ export class TouchControls {
     }
     if (!t) return;
     const rect = this.throttleEl.getBoundingClientRect();
-    this.input.throttle = clamp(1 - (t.clientY - rect.top) / rect.height, 0, 1);
+    const raw = clamp(1 - (t.clientY - rect.top) / rect.height, 0, 1);
+    // top ~7% of the slider is a spring-loaded BOOST band: full throttle +
+    // turbo while held there; the lower 93% maps to the 0..1 throttle range
+    if (raw > 0.93) {
+      this.input.throttle = 1;
+      this.input.mobileBoost = true;
+      this.throttleEl.classList.add('boosting');
+    } else {
+      this.input.throttle = raw / 0.93;
+      this.input.mobileBoost = false;
+      this.throttleEl.classList.remove('boosting');
+    }
   };
 
   private onThrottleEnd = (ev: TouchEvent) => {
-    if (findTouch(ev.changedTouches, this.throttleId)) this.throttleId = null;
+    if (findTouch(ev.changedTouches, this.throttleId)) {
+      this.throttleId = null;
+      this.input.mobileBoost = false;
+      this.throttleEl.classList.remove('boosting');
+    }
   };
 
   // ----- per-frame upkeep --------------------------------------------------
@@ -360,6 +375,8 @@ export class TouchControls {
     this.input.cursorY = 0;
     this.input.fireOn(false);
     this.input.rmbOn(false);
+    this.input.mobileBoost = false;
+    this.throttleEl?.classList.remove('boosting');
     this.input.touchRollLeft = false;
     this.input.touchRollRight = false;
     for (const reset of this.strafeResets) reset();

@@ -371,6 +371,18 @@
       border: 1px solid rgba(217, 164, 65, 0.35); background: rgba(10, 12, 15, 0.6);
       pointer-events: auto; touch-action: none;
     }
+    /* spring-loaded BOOST band at the very top of the throttle */
+    .vf-touch-throttle::before {
+      content: 'BOOST'; position: absolute; left: 0; right: 0; top: 0; height: 7%;
+      font-size: 7px; letter-spacing: 1px; text-align: center; line-height: 1.6;
+      color: rgba(255, 136, 48, 0.7); background: rgba(255, 136, 48, 0.12);
+      border-bottom: 1px dashed rgba(255, 136, 48, 0.4); pointer-events: none;
+    }
+    .vf-touch-throttle.boosting { border-color: rgba(255, 136, 48, 0.9); }
+    .vf-touch-throttle.boosting::before { color: #ff8830; background: rgba(255, 136, 48, 0.35); }
+    .vf-touch-throttle.boosting .vf-touch-throttle-fill {
+      background: linear-gradient(rgba(255, 136, 48, 0.7), rgba(255, 136, 48, 0.4));
+    }
     .vf-touch-throttle-fill {
       position: absolute; left: 2px; right: 2px; bottom: 2px; height: 0%;
       background: linear-gradient(rgba(217, 164, 65, 0.55), rgba(217, 164, 65, 0.3));
