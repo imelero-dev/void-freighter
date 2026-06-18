@@ -41,6 +41,8 @@ const FRAGMENT_TTL = 150;
 const VTOL_SPEED_FACTOR = 0.22;  // forward-speed envelope in VTOL hover mode
 const ZERO_VEL: Vec3 = { x: 0, y: 0, z: 0 }; // stationary collider reference
 const LAVA_HEAT_DPS = 55;        // hull heat per second in a lava world's air
+const CRUISE_PLANET_STANDOFF = 160_000; // m above a planet surface where cruise drops you (~2.7 min at full turbo)
+const CRUISE_MOON_STANDOFF = 60_000;    // m above a moon surface
 const LOOT_TTL = 240;
 const MISSILE_SPEED = 700;
 const MISSILE_TURN = 2.8;        // rad/s
@@ -834,14 +836,18 @@ export class Sim {
 
   // Max cruise speed allowed at a position: distance to the nearest mass edge
   // divided by 3 (so you always have ~3 s of braking room), floored near zero.
+  // Planets/moons use a FIXED low-altitude standoff (not a fraction of their
+  // radius) so the cruise drops you a sane ~150 km above the surface no matter
+  // how big the world is — a couple of minutes' burn from the ground, not the
+  // ~450 km a radius-proportional lock gave on the (now huge) planets.
   private massSpeedCap(pos: Vec3): number {
     let edge = Infinity;
     edge = Math.min(edge, vlen(pos) - this.system.starRadius * 2.2);
     for (const p of this.system.planets) {
-      edge = Math.min(edge, vdist(pos, p.pos) - p.radius * 1.5);
+      edge = Math.min(edge, vdist(pos, p.pos) - p.radius - CRUISE_PLANET_STANDOFF);
     }
     for (const m of this.system.moons) {
-      edge = Math.min(edge, vdist(pos, m.pos) - m.radius * 1.6);
+      edge = Math.min(edge, vdist(pos, m.pos) - m.radius - CRUISE_MOON_STANDOFF);
     }
     for (const s of this.system.stations) {
       edge = Math.min(edge, vdist(pos, s.pos) - s.radius * 1.3);
