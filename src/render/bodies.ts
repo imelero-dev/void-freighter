@@ -586,11 +586,19 @@ export class BodiesLayer {
       if (def.id === planetId && blend > 0) {
         const g = GROUND_MID[def.kind] ?? GROUND_MID.barren;
         mat.color.setRGB(1, 1, 1).lerp(g, Math.min(1, blend));
+        mat.opacity = 1; mat.transparent = false;
+        mesh.visible = true;
       } else {
         if (mat.color.r !== 1 || mat.color.g !== 1 || mat.color.b !== 1) mat.color.setRGB(1, 1, 1);
-        // hide other planets when in thick atmosphere — you can't see them
-        // through a real sky, and the far fog alone can't erase same-hue worlds
-        mesh.visible = atmoDensity < 0.25;
+        // hide other planets as the air thickens — you can't see them through a
+        // real sky, and the far fog alone can't erase a same-hue world (a red
+        // planet on a red lava sky). Fade the body out over a short density band
+        // so they dissolve into the haze instead of popping, then hide entirely
+        // (which also kills the additive atmosphere/cloud shells) once buried.
+        const fade = Math.max(0, Math.min(1, (0.16 - atmoDensity) / 0.08));
+        if (fade < 1) { mat.transparent = true; mat.opacity = fade; }
+        else if (mat.transparent) { mat.transparent = false; mat.opacity = 1; }
+        mesh.visible = fade > 0.02;
       }
     }
     this.entryBlendId = planetId;
