@@ -274,18 +274,26 @@ export class TerrainPatch {
     pos.needsUpdate = true;
     geo.computeVertexNormals();
     // pass 2: shade by RAW height (LOD-stable coastlines/snowlines) + slope, with
-    // patchy tone variation, water in the basins and snow on the peaks
+    // patchy tone variation, water in the basins, bare rock on the steeps and
+    // snow capping the high ranges. Heights now span ~0..2.3*amp (plains -> peaks),
+    // so the bands are keyed to that full range, not just [0,amp].
     const water = p.kind === 'terran';
-    const sea = prm.amp * 0.16, snow = prm.amp * 0.82;
+    const sea = prm.amp * 0.14;          // low plains/basins flood (terran)
+    const snow = prm.amp * 1.30;         // only the high ranges get a snow cap
+    const hiRange = prm.amp * 2.2;       // height that maps to the top of the lo->hi gradient
     const nor = geo.attributes.normal as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
       const r = rawH[i];
-      const t = Math.min(1, Math.max(0, r / prm.amp));
-      this.tmpCol.copy(def.lo).lerp(def.hi, Math.pow(t, 0.7));
+      const t = Math.min(1, Math.max(0, r / hiRange));
+      this.tmpCol.copy(def.lo).lerp(def.hi, Math.pow(t, 0.8));
+      // steep faces are bare rock (and snow can't cling to them)
       const slope = 1 - Math.min(1, Math.max(0, nor.getZ(i)));
-      this.tmpCol.lerp(def.rock, Math.min(1, slope * 2.0) * 0.85);
+      this.tmpCol.lerp(def.rock, Math.min(1, slope * 2.2) * 0.9);
       this.tmpCol.multiplyScalar(0.82 + vary[i] * 0.34);
-      if (r > snow) this.tmpCol.lerp(SNOW_C, Math.min(1, (r - snow) / (prm.amp * 0.18)) * 0.8);
+      if (r > snow) {
+        const cap = Math.min(1, (r - snow) / (prm.amp * 0.55)) * (1 - Math.min(1, slope * 1.6)) * 0.92;
+        this.tmpCol.lerp(SNOW_C, Math.max(0, cap));
+      }
       if (water && r < sea) this.tmpCol.copy(WATER_DEEP_C).lerp(WATER_SHALLOW_C, Math.max(0, r / sea));
       col.setXYZ(i, this.tmpCol.r, this.tmpCol.g, this.tmpCol.b);
     }

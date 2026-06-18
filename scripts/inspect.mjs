@@ -69,6 +69,27 @@ async function main() {
         e.prevOrient = { ...e.orient };
       },
     };
+    // Find an outward (up) direction over a planet that sits on a mountain RANGE
+    // (high terrain) within the lit hemisphere, so descent shots show dramatic
+    // relief rather than whatever random plains the fixed direction landed on.
+    window.findPeakUp = (p, sun) => {
+      const V = window.VF.vec; const th = window.VF.terrainHeight;
+      const seed = { x: sun.x * 0.6 + 0.2, y: 0.78, z: sun.z * 0.6 + 0.1 };
+      let best = V.vnorm(seed), bestH = -1e9;
+      const ref = Math.abs(V.vnorm(seed).y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+      const t1 = V.vnorm(V.vcross(ref, V.vnorm(seed)));
+      const t2 = V.vnorm(V.vcross(V.vnorm(seed), t1));
+      for (let i = 0; i < 220; i++) {
+        const a = i * 2.399963; // golden-angle spiral over a cap around the seed dir
+        const rad = 0.55 * Math.sqrt(i / 220);
+        const un = V.vnorm(V.vadd(V.vnorm(seed), V.vadd(V.vscale(t1, Math.cos(a) * rad), V.vscale(t2, Math.sin(a) * rad))));
+        if (V.vdot(un, sun) < 0.15) continue; // keep it lit
+        const at = V.vadd(p.pos, V.vscale(un, p.radius));
+        const h = th({ pos: p.pos, radius: p.radius, kind: p.kind, colorSeed: p.colorSeed }, at);
+        if (h > bestH) { bestH = h; best = un; }
+      }
+      return best;
+    };
   });
 
   // ---- player ship beauty shot: daylit terran surface, chase cam ----
@@ -260,7 +281,7 @@ async function main() {
       const w = window.VF.world; const V = window.VF.vec;
       const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
       const sun = V.vnorm(V.vscale(p.pos, -1)); // lit hemisphere
-      const un = V.vnorm({ x: sun.x * 0.6 + 0.2, y: 0.78, z: sun.z * 0.6 + 0.1 });
+      const un = window.findPeakUp(p, sun); // descend toward a mountain range, not random plains
       const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
       const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
       const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.45))); // ~25° descent view, like a pilot picking a spot
@@ -281,7 +302,7 @@ async function main() {
       const w = window.VF.world; const V = window.VF.vec;
       const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
       const sun = V.vnorm(V.vscale(p.pos, -1));
-      const un = V.vnorm({ x: sun.x * 0.6 + 0.2, y: 0.78, z: sun.z * 0.6 + 0.1 });
+      const un = window.findPeakUp(p, sun);
       const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
       const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
       const look = V.vnorm(V.vadd(horiz, V.vscale(un, -1.0))); // ~45° down: ground fills the lower frame

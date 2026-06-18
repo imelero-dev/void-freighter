@@ -4,6 +4,7 @@
 import { GameApp } from './game/app';
 import { OfflineWorld } from './offline_world';
 import * as vec from './sim/vec';
+import { terrainHeight } from './sim/terrain';
 import { Menu } from './ui/menu';
 import type { IWorld } from './world_api';
 
@@ -49,7 +50,7 @@ const menu = new Menu({
 
 function startGame(w: IWorld): void {
   world = w;
-  (window as any).VF = { world: w, vec }; // exposed for E2E scripts/bots
+  (window as any).VF = { world: w, vec, terrainHeight }; // exposed for E2E scripts/bots
   app = new GameApp(w, canvas);
   (window as any).VF.app = app;
   app.menuHelp = () => menu.toggleHelp();

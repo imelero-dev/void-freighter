@@ -21,27 +21,52 @@ export const TERRAIN: Record<PlanetKind, { amp: number; freq: number; ridged: bo
   gas:    { amp: 700, freq: 0.6, ridged: false },
 };
 
-// Height (m above the mean sphere) at a world (X,Z) for a given world. A
-// low-frequency domain warp meanders the ridgelines; a large-scale mask carves
-// highlands vs basins; six octaves with a valley bias give sharp peaks.
+// Height (m above the mean sphere) at a world (X,Z) for a given world.
+//
+// The shape is built for DRAMATIC, Elite-Dangerous-like relief that reads from
+// altitude: broad rolling plains EVERYWHERE, with isolated mountain MASSIFS
+// rising several km where a large-scale "continental" mask is high — rather than
+// uniform bumpiness that foreshortens to a flat wash from high up. A low-freq
+// domain warp meanders the ridgelines; seven ridged octaves carry the fine
+// ridge detail you read on the way down.
 export function heightField(X: number, Z: number, seed: number, p: { amp: number; freq: number; ridged: boolean }): number {
   const f = 0.00011 * p.freq;
   const wx = fbm2(X * f * 0.35 + 19, Z * f * 0.35, seed + 711, 1) - 0.5;
   const wy = fbm2(X * f * 0.35, Z * f * 0.35 - 23, seed + 913, 1) - 0.5;
   const uu = X + wx * 4200;
   const vv = Z + wy * 4200;
-  const cont = fbm2(uu * f * 0.45, vv * f * 0.45, seed + 41, 1);
-  // seven octaves with a slower amplitude rolloff carry finer ridgelines, so the
-  // ground reads as rugged mountains up close instead of smooth swells
-  let h = 0, amp = 1, freq = 1, norm = 0;
-  for (let o = 0; o < 7; o++) {
+  // continental mask (2-octave, large scale): 0 over lowland plains, rising over
+  // highland belts. We square the upper range into a MASSIF mask so mountains
+  // cluster into ranges with broad plains between, not an even field of bumps.
+  const cont = fbm2(uu * f * 0.30, vv * f * 0.30, seed + 41, 2);
+  const massif = Math.pow(Math.max(0, cont - 0.30) / 0.70, 1.0); // 0 on plains -> 1 deep in a range; linear ramp gives foothills, not abrupt spikes
+  // Split the shape so mountains are BROAD MASSIFS, not needles:
+  //  - a low-frequency BODY (4 big octaves) gives the broad mountain mass that the
+  //    massif mask lifts into tall ranges;
+  //  - a high-frequency DETAIL pass (3 fine octaves) adds rugged ridge texture at
+  //    a modest, uniform amplitude so it reads as rock up close without spiking
+  //    the peaks into thin spires.
+  let body = 0, amp = 1, freq = 1, bnorm = 0;
+  for (let o = 0; o < 4; o++) {
     let n = fbm2(uu * f * freq, vv * f * freq, seed + o * 131, 1);
     if (p.ridged) n = 1 - Math.abs(n * 2 - 1);
-    h += n * amp; norm += amp; amp *= 0.54; freq *= 2.15;
+    body += n * amp; bnorm += amp; amp *= 0.5; freq *= 2.1;
   }
-  let hn = h / norm;
-  if (p.ridged) hn = Math.pow(hn, 1.45);
-  return hn * p.amp * (0.4 + cont * 1.0);
+  body /= bnorm;
+  if (p.ridged) body = Math.pow(body, 1.25);
+  let detail = 0, damp = 1, dfreq = 9, dnorm = 0;
+  for (let o = 0; o < 3; o++) {
+    let n = fbm2(uu * f * dfreq, vv * f * dfreq, seed + o * 257 + 5, 1);
+    if (p.ridged) n = 1 - Math.abs(n * 2 - 1);
+    detail += n * damp; dnorm += damp; damp *= 0.5; dfreq *= 2.1;
+  }
+  detail = detail / dnorm - 0.5; // centered, so it only textures the body
+  // gentle rolling plains everywhere + tall broad ranges where the massif mask is
+  // high. Peaks reach ~2x the per-kind amplitude. The big dynamic range is what
+  // makes the relief read from km up; the detail rides on top for close-up rock.
+  const plains = body * 0.42;
+  const ranges = body * massif * 1.65;
+  return ((plains + ranges) + detail * 0.16) * p.amp;
 }
 
 // Sub-point on the sphere directly under `pos` (where the column of terrain the
