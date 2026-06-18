@@ -141,10 +141,10 @@ function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
       void main() {
         vN = normalize(normalMatrix * normal);
         vWN = normalize(mat3(modelMatrix) * normal);
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        vV = normalize(-mv.xyz);
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vV = normalize(-mvPosition.xyz);
         vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
-        gl_Position = projectionMatrix * mv;
+        gl_Position = projectionMatrix * mvPosition;
         #include <fog_vertex>
       }`,
     fragmentShader: `
