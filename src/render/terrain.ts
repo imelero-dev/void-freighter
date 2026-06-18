@@ -20,7 +20,12 @@ import * as THREE from 'three';
 import type { PlanetKind, SystemDef } from '../sim/types';
 import { atmoHeight, atmosphereAt } from '../sim/system';
 import { heightField, TERRAIN } from '../sim/terrain';
+import { fbm2 } from '../sim/rng';
 import type { SceneManager } from './scene';
+
+const SNOW_C = new THREE.Color(0xeef2f6);
+const WATER_DEEP_C = new THREE.Color(0x1c3a5e);
+const WATER_SHALLOW_C = new THREE.Color(0x2f6f86);
 
 const WHITE_C = new THREE.Color(0xffffff);
 const SEG = 150;             // grid resolution per cap (constant; span varies)
@@ -234,6 +239,8 @@ export class TerrainPatch {
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const col = geo.attributes.color as THREE.BufferAttribute;
     const span = spanHalf * 2;
+    const rawH = new Float32Array(pos.count); // raw height for LOD-stable colouring
+    const vary = new Float32Array(pos.count); // patchy tone variation
     // pass 1: heights. grid is unit [-0.5,0.5]; scale by span. Curvature is the
     // EXACT spherical drop so the rim lands on the real horizon.
     for (let i = 0; i < pos.count; i++) {
@@ -245,25 +252,29 @@ export class TerrainPatch {
       // relief amplitude: center value, easing to the rim value over the outer 25%
       const k = edge < 0.75 ? 0 : (edge - 0.75) / 0.25;
       const relief = reliefCenter + (reliefRim - reliefCenter) * (k * k * (3 - 2 * k));
-      const h = heightField(u, vv, seed, prm) * relief;
+      const r = heightField(u, vv, seed, prm);
+      rawH[i] = r;
+      vary[i] = fbm2(u * 0.00085, vv * 0.00085, seed ^ 0x55a3, 3);
+      const h = r * relief;
       const drop = R - Math.sqrt(Math.max(0, R * R - s2)); // exact sphere curvature
       pos.setXYZ(i, lx, ly, h - drop);
     }
     pos.needsUpdate = true;
     geo.computeVertexNormals();
-    // pass 2: shade by relief height AND slope (steep faces show bare rock)
+    // pass 2: shade by RAW height (LOD-stable coastlines/snowlines) + slope, with
+    // patchy tone variation, water in the basins and snow on the peaks
+    const water = p.kind === 'terran';
+    const sea = prm.amp * 0.16, snow = prm.amp * 0.82;
     const nor = geo.attributes.normal as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
-      const lx = pos.getX(i), ly = pos.getY(i);
-      const s2 = lx * lx + ly * ly;
-      const drop = R - Math.sqrt(Math.max(0, R * R - s2));
-      const h = pos.getZ(i) + drop; // relief height above the cap
-      const t = Math.min(1, Math.max(0, h / prm.amp));
-      // lowland -> highland with a brighter, snappier high so ridges/valleys
-      // separate visibly from altitude (lit peaks vs shadowed lows = readable form)
+      const r = rawH[i];
+      const t = Math.min(1, Math.max(0, r / prm.amp));
       this.tmpCol.copy(def.lo).lerp(def.hi, Math.pow(t, 0.7));
       const slope = 1 - Math.min(1, Math.max(0, nor.getZ(i)));
       this.tmpCol.lerp(def.rock, Math.min(1, slope * 2.0) * 0.85);
+      this.tmpCol.multiplyScalar(0.82 + vary[i] * 0.34);
+      if (r > snow) this.tmpCol.lerp(SNOW_C, Math.min(1, (r - snow) / (prm.amp * 0.18)) * 0.8);
+      if (water && r < sea) this.tmpCol.copy(WATER_DEEP_C).lerp(WATER_SHALLOW_C, Math.max(0, r / sea));
       col.setXYZ(i, this.tmpCol.r, this.tmpCol.g, this.tmpCol.b);
     }
     col.needsUpdate = true;
