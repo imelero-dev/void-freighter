@@ -10,6 +10,7 @@ import type { Vec3 } from '../sim/vec';
 export const FAR_SCALE = 1 / 1000;
 
 const WHITE = new THREE.Color(0xffffff);
+const DAYLIGHT = new THREE.Color(0xfff0dd); // warm daylight tint for the skylight fill
 
 export class SceneManager {
   renderer: THREE.WebGLRenderer;
@@ -96,6 +97,7 @@ export class SceneManager {
   private farFog = new THREE.FogExp2(0x6fa8d6, 0);
   private skyBg = new THREE.Color(0x000000);
   private baseAmbient = new THREE.Color(0x223344);
+  private tmpC = new THREE.Color();
   // skyD drives how BLUE the sky/background/skylight is (ramps in high, so you're
   // never staring at a lit disc in black space); hazeD drives how thick the haze
   // is (grows with real air, so the ground still reads when you're low).
@@ -125,12 +127,15 @@ export class SceneManager {
       // patch meets it — while a high, thin-air descent still sees the world's curve.
       this.farFog.density = Math.pow(hazeD, 1.5) * 9e-4 + Math.pow(hazeD, 4) * 0.02;
       this.far.fog = this.farFog;
-      // skylight: the bright sky scatters daylight onto the surface so the
-      // terrain (near patch AND the far-scene planet) is lit even away from the sun
-      this.ambientNear.color.copy(this.baseAmbient).lerp(color, skyD * 0.7);
-      this.ambientNear.intensity = 0.55 + skyD * 1.9;
-      this.ambientFar.color.copy(this.baseAmbient).lerp(color, skyD * 0.7);
-      this.ambientFar.intensity = 0.4 + skyD * 1.9;
+      // skylight: the bright sky scatters daylight onto the surface so the terrain
+      // (near patch AND the far-scene planet) is lit even away from the sun. Warm
+      // the sky-tinted fill toward daylight and lift it in thick air, so the
+      // surface reads bright and alive instead of a cool, murky dusk.
+      const dayFill = this.tmpC.copy(color).lerp(DAYLIGHT, 0.45);
+      this.ambientNear.color.copy(this.baseAmbient).lerp(dayFill, skyD * 0.85);
+      this.ambientNear.intensity = 0.6 + skyD * 2.4;
+      this.ambientFar.color.copy(this.baseAmbient).lerp(dayFill, skyD * 0.85);
+      this.ambientFar.intensity = 0.45 + skyD * 2.4;
     } else {
       this.far.background = null;
       this.near.fog = null;
