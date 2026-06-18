@@ -87,6 +87,35 @@ function planetTexture(p: PlanetDef): THREE.CanvasTexture {
   return tex;
 }
 
+// Wispy cloud layer for worlds with weather: white with an fbm alpha mask so it
+// reads as broken cloud, lit by the sun (day bright / night dark) on a slightly
+// larger sphere that drifts independently of the surface.
+function cloudTexture(seed: number): THREE.CanvasTexture {
+  const W = 512, H = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(W, H);
+  const d = img.data;
+  for (let y = 0; y < H; y++) {
+    const lat = y / H;
+    const band = 0.6 + 0.4 * Math.sin(lat * Math.PI); // thinner clouds at the poles
+    for (let x = 0; x < W; x++) {
+      const n = fbm2(x / W * 6, lat * 3, seed, 5);
+      const m = fbm2(x / W * 13 + 7, lat * 6, seed ^ 0x9d, 4);
+      let a = Math.max(0, (n * 0.7 + m * 0.5) - 0.62) * 3.2 * band;
+      a = Math.min(1, a);
+      const i = (y * W + x) * 4;
+      d[i] = d[i + 1] = d[i + 2] = 245;
+      d[i + 3] = a * 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 // rim-glow atmosphere shader
 function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
@@ -192,6 +221,7 @@ export interface StationView {
   marker: THREE.Group;      // far-scene beacon
   hatch: THREE.Object3D[];  // hangar doors that slide open on approach
   guides: THREE.Mesh[];     // pulsing interior approach lights
+  chevrons: THREE.Mesh[];   // "follow-me" wave leading to the pad
 }
 
 // A station is a chunky box hull (Coriolis-style) with a single hangar "mail
@@ -201,7 +231,7 @@ export interface StationView {
 // group is oriented by the (u,v,f) basis, local +X=u, +Y=v, +Z=f.
 function buildStationMesh(def: StationDef): {
   group: THREE.Group; ring: THREE.Mesh | null; blinkers: THREE.Mesh[];
-  hatch: THREE.Object3D[]; guides: THREE.Mesh[];
+  hatch: THREE.Object3D[]; guides: THREE.Mesh[]; chevrons: THREE.Mesh[];
 } {
   const rng = new Rng(def.seed);
   const fr = hangarFrame(def);
@@ -264,13 +294,15 @@ function buildStationMesh(def: StationDef): {
     group.add(g);
     guides.push(g);
   }
-  // approach chevrons leading from the mouth in to the pad
-  for (let i = 0; i < 5; i++) {
-    const z = HZ - (i + 0.5) * (HZ - padA) / 5;
-    const ch = new THREE.Mesh(new THREE.BoxGeometry(HW * 0.5, t * 0.6, R * 0.04), lit(0xffb347));
+  // approach chevrons leading from the mouth in to the pad — animated as a
+  // "follow-me" wave travelling toward the pad in update()
+  const chevrons: THREE.Mesh[] = [];
+  for (let i = 0; i < 6; i++) {
+    const z = HZ - (i + 0.5) * (HZ - padA) / 6;
+    const ch = new THREE.Mesh(new THREE.BoxGeometry(HW * (0.6 - i * 0.05), t * 0.6, R * 0.05), new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.5 }));
     ch.position.set(0, floorV + t * 1.5, z);
     group.add(ch);
-    guides.push(ch);
+    chevrons.push(ch);
   }
   // ceiling strip lights so the bay reads as lit from within
   for (const sx of [-1, 1]) {
@@ -378,7 +410,7 @@ function buildStationMesh(def: StationDef): {
       m.receiveShadow = true;
     }
   });
-  return { group, ring, blinkers, hatch, guides };
+  return { group, ring, blinkers, hatch, guides, chevrons };
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +418,7 @@ function buildStationMesh(def: StationDef): {
 export class BodiesLayer {
   stations: StationView[] = [];
   private planetMeshes: { def: PlanetDef; mesh: THREE.Mesh }[] = [];
+  private clouds: THREE.Mesh[] = [];
   private starMesh: THREE.Group;
 
   constructor(private sm: SceneManager, system: SystemDef) {
@@ -419,6 +452,15 @@ export class BodiesLayer {
             : p.kind === 'ice' ? new THREE.Color(0x88bbdd) : new THREE.Color(0x6699cc);
         const atmo = new THREE.Mesh(new THREE.SphereGeometry(p.radius * FAR_SCALE * 1.04, 48, 24), atmosphereMaterial(atmoColor));
         mesh.add(atmo);
+      }
+      // weather: a drifting broken-cloud shell on worlds that have an ocean/ice
+      if (p.kind === 'terran' || p.kind === 'ice') {
+        const cloud = new THREE.Mesh(
+          new THREE.SphereGeometry(p.radius * FAR_SCALE * 1.015, 48, 24),
+          new THREE.MeshStandardMaterial({ map: cloudTexture(p.colorSeed ^ 0xc10d), transparent: true, depthWrite: false, roughness: 1, metalness: 0, opacity: p.kind === 'ice' ? 0.7 : 0.9 }),
+        );
+        mesh.add(cloud);
+        this.clouds.push(cloud);
       }
       if (p.ringed) {
         const ringTexC = document.createElement('canvas');
@@ -464,7 +506,7 @@ export class BodiesLayer {
 
     // stations: near detail + far beacon
     for (const def of system.stations) {
-      const { group, ring, blinkers, hatch, guides } = buildStationMesh(def);
+      const { group, ring, blinkers, hatch, guides, chevrons } = buildStationMesh(def);
       group.visible = false;
       sm.near.add(group);
       const marker = new THREE.Group();
@@ -474,7 +516,7 @@ export class BodiesLayer {
       );
       marker.add(beacon, glowSprite('rgb(150,200,235)', 14));
       sm.far.add(marker);
-      this.stations.push({ def, group, ring, blinkers, marker, hatch, guides });
+      this.stations.push({ def, group, ring, blinkers, marker, hatch, guides, chevrons });
     }
   }
 
@@ -485,6 +527,8 @@ export class BodiesLayer {
       mesh.position.copy(sm.toFar(def.pos, tmp));
       mesh.rotation.y = time * 0.005;
     }
+    // clouds drift a touch faster than the surface they sit on
+    for (const c of this.clouds) c.rotation.y = time * 0.0022;
     for (const sv of this.stations) {
       const dx = sv.def.pos.x - sm.origin.x;
       const dy = sv.def.pos.y - sm.origin.y;
@@ -512,6 +556,13 @@ export class BodiesLayer {
         for (const g of sv.guides) {
           const mat = g.material as THREE.MeshBasicMaterial;
           if (mat && 'opacity' in mat) { mat.transparent = true; mat.opacity = pulse; }
+        }
+        // chevrons light up in sequence, a wave running in toward the pad
+        const head = (time * 2.2) % (sv.chevrons.length + 2);
+        for (let i = 0; i < sv.chevrons.length; i++) {
+          const d = Math.abs(i - head);
+          const mat = sv.chevrons[i].material as THREE.MeshBasicMaterial;
+          mat.opacity = 0.28 + 0.72 * Math.max(0, 1 - d * 0.8);
         }
       } else {
         sv.marker.position.copy(sm.toFar(sv.def.pos, tmp));

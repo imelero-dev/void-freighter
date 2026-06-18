@@ -475,18 +475,27 @@ export function buildShipMesh(hullId: HullId | 'pirate', pirateTier?: PirateTier
 
 // Per-frame thruster glow update from entity state.
 export function updateThrusters(view: ShipView, e: Entity): void {
-  const power = e.cruise === 'cruise' ? 1.4 : Math.max(Math.abs(e.throttle), 0.06);
+  const cruising = e.cruise === 'cruise';
+  const power = cruising ? 1.5 : Math.max(Math.abs(e.throttle), 0.06);
+  // afterburner: the plume stretches and shifts blue-white at cruise/full burn
+  const burn = cruising || power > 0.98;
+  const lenMul = cruising ? 3.6 : power > 0.98 ? 2.8 : 2.2;
+  const flameHex = burn ? 0x9ad0ff : 0xff8830;
   for (const t of view.thrusters) {
     const flicker = 0.85 + Math.random() * 0.3; // visual only — not sim state
-    t.scale.set(power * flicker, power * 2.2 * flicker, power * flicker);
-    (t.material as THREE.MeshBasicMaterial).opacity = Math.min(1, 0.25 + power * 0.7);
+    t.scale.set(power * flicker, power * lenMul * flicker, power * flicker);
+    const m = t.material as THREE.MeshBasicMaterial;
+    m.color.setHex(flameHex);
+    m.opacity = Math.min(1, 0.25 + power * 0.7);
   }
   // engine bloom tracks throttle so a thrusting ship lights up and stands out
   // against the dark long before knife range
   for (const glow of view.glows) {
     const flicker = 0.88 + Math.random() * 0.24;
     const base = glow.userData.baseScale as number;
-    glow.scale.setScalar(base * (0.5 + power * 0.9) * flicker);
-    (glow.material as THREE.SpriteMaterial).opacity = Math.min(0.8, 0.1 + power * 0.6);
+    glow.scale.setScalar(base * (0.5 + power * 0.9) * flicker * (burn ? 1.25 : 1));
+    const gm = glow.material as THREE.SpriteMaterial;
+    gm.color.setHex(burn ? 0xbfe0ff : 0xff8a3a);
+    gm.opacity = Math.min(0.82, 0.1 + power * 0.6);
   }
 }

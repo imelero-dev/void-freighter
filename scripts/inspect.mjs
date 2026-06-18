@@ -175,13 +175,15 @@ async function main() {
   await sleep(400);
   await shot('06_surface_sky_scan');
 
-  // control: from space near that planet, planets SHOULD be visible
+  // control: the day-lit side from space — planets visible, cloud layer on show
   await page.evaluate(() => {
     const w = window.VF.world; const V = window.VF.vec;
     const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
-    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
-    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 400000)); // 400 km up, vacuum
-    window.IN.place(pos, V.vscale(un, -1), { x: 0, y: 0, z: 1 });
+    const sun = V.vnorm(V.vscale(p.pos, -1)); // toward the star = the lit hemisphere
+    const off = V.vnorm({ x: sun.z, y: 0.5, z: -sun.x });
+    const dir = V.vnorm(V.vadd(sun, V.vscale(off, 0.5)));
+    const pos = V.vadd(p.pos, V.vscale(dir, p.radius + 700000));
+    window.IN.place(pos, V.vscale(dir, -1), { x: 0, y: 1, z: 0 });
   });
   await sleep(900);
   await shot('07_space_control');
