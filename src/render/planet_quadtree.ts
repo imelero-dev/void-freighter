@@ -149,7 +149,7 @@ export class PlanetQuadtree {
     // Far-plane ceiling: detailed ground out to roughly the haze line, the smooth
     // far-scene sphere carries the deep horizon. Smooth shading keeps the flat
     // coarse chunks from faceting at grazing angles, so this can stay generous.
-    const reachCap = Math.min(90_000, Math.max(13_000, camAlt * 2.4));
+    const reachCap = Math.min(95_000, Math.max(14_000, camAlt * 1.9));
     // Distance-fade FLOOR: regardless of how thin the air is, fade the detailed
     // terrain into the sky by the far-plane, so the coarse grazing chunks at the
     // edge dissolve (no streaks) and the hazed far-scene sphere takes over with no

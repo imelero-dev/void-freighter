@@ -60,7 +60,7 @@ export class GameApp {
   // The cube-sphere quadtree is the real technique but still WIP (low-altitude
   // geometry artifacts); kept gated OFF so the proven patch terrain ships, and
   // flipped on for development. TODO: fix close-range skirts/precision, then flip.
-  private static readonly USE_QUADTREE = true;
+  private static readonly USE_QUADTREE = false;
   private sky: SkyDome;
   private clouds: CloudDeck;
   private dustAcc = 0;
