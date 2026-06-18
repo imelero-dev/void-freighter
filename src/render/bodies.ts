@@ -130,8 +130,13 @@ function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
     blending: THREE.AdditiveBlending,
     side: THREE.BackSide,
     depthWrite: false,
-    uniforms: { c: { value: color } },
+    fog: true,
+    uniforms: THREE.UniformsUtils.merge([
+      THREE.UniformsLib.fog,
+      { c: { value: color } },
+    ]),
     vertexShader: `
+      #include <fog_pars_vertex>
       varying vec3 vN; varying vec3 vV; varying vec3 vWN; varying vec3 vWorld;
       void main() {
         vN = normalize(normalMatrix * normal);
@@ -140,8 +145,10 @@ function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
         vV = normalize(-mv.xyz);
         vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
         gl_Position = projectionMatrix * mv;
+        #include <fog_vertex>
       }`,
     fragmentShader: `
+      #include <fog_pars_fragment>
       uniform vec3 c; varying vec3 vN; varying vec3 vV; varying vec3 vWN; varying vec3 vWorld;
       void main() {
         float f = 1.0 - abs(dot(vN, vV));
@@ -156,6 +163,10 @@ function atmosphereMaterial(color: THREE.Color): THREE.ShaderMaterial {
         float termBand = exp(-8.0 * (sunDot + 0.1) * (sunDot + 0.1));
         col = mix(col, vec3(1.0, 0.72, 0.38), termBand * 0.35);
         gl_FragColor = vec4(col, clamp(halo * lit, 0.0, 1.0));
+        #ifdef USE_FOG
+          float fogFactor = 1.0 - exp( -fogDensity * fogDensity * vFogDepth * vFogDepth );
+          gl_FragColor.a *= 1.0 - fogFactor;
+        #endif
       }`,
   });
 }
