@@ -38,6 +38,10 @@ const SKY_COLORS: Record<PlanetKind, number> = {
   ice: 0xbcd6ea, lava: 0xd2541e, gas: 0x8a7fb8,
 };
 
+// Render layer the first-person cockpit lives on, so the headlight (which only
+// touches the default world layer 0) can't illuminate the dashboard.
+const COCKPIT_LAYER = 2;
+
 export class GameApp {
   private sm: SceneManager;
   private bodies: BodiesLayer;
@@ -95,6 +99,14 @@ export class GameApp {
     this.cockpit.scale.setScalar(2.2); // keeps geometry past the near plane
     this.cockpit.position.y = 0.28;    // dashboard peeks into the lower view
     this.sm.camera.add(this.cockpit);
+    // The cockpit interior lives on its own render layer so the HEADLIGHT (a
+    // world-facing spotlight on the camera) never lights the dashboard right in
+    // front of it — only the sun and ambient do. This was the "light coming out
+    // of the dashboard" bug.
+    this.cockpit.traverse((o) => o.layers.set(COCKPIT_LAYER));
+    this.sm.camera.layers.enable(COCKPIT_LAYER);
+    this.sm.sunLightNear.layers.enable(COCKPIT_LAYER);
+    this.sm.ambientNear.layers.enable(COCKPIT_LAYER);
     // headlights: a warm spot punching into the dark ([I] to toggle).
     // Lights are physically based (candela), so intensity must scale with the
     // distance we want lit: with decay 1 the illuminance is intensity/d, so
@@ -103,7 +115,10 @@ export class GameApp {
     // a focused forward beam (≈34° cone) reaching ~4 km; the per-frame
     // auto-exposure keeps whatever it lands on at a constant useful brightness
     this.headlight = new THREE.SpotLight(0xfff0d6, 2200, 4000, 0.3, 0.35, 1.0);
-    this.headlight.position.set(0, -0.2, 0);
+    // mounted FORWARD of all cockpit geometry (which reaches ~z=-2.1 scaled) so
+    // its cone can never light the dashboard — that was the "light coming out of
+    // the dashboard" glow. Combined with the cockpit render layer below.
+    this.headlight.position.set(0, -0.2, -5);
     this.headlight.target.position.set(0, 0, -100);
     this.sm.camera.add(this.headlight);
     this.sm.camera.add(this.headlight.target);
