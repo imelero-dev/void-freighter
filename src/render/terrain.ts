@@ -28,7 +28,7 @@ const WATER_DEEP_C = new THREE.Color(0x1c3a5e);
 const WATER_SHALLOW_C = new THREE.Color(0x2f6f86);
 
 const WHITE_C = new THREE.Color(0xffffff);
-const SEG = 150;             // grid resolution per cap (constant; span varies)
+const SEG = 192;             // grid resolution per cap (constant; span varies) — finer cells, more detail at altitude
 const MAX_SPAN_HALF = 260_000; // cap the coarse reach so the near far-plane stays sane (m)
 const REBUILD_MOVE = 55;    // re-noise after the ship moves this far laterally (m)
 const REBUILD_SPAN = 0.05;  // ...or after a cap's LOD span changes this fraction
@@ -182,7 +182,7 @@ export class TerrainPatch {
     const cosH = R / (R + alt);
     const horizonPlanar = R * Math.sqrt(Math.max(0, 1 - cosH * cosH));
     const coarseHalf = Math.min(MAX_SPAN_HALF, horizonPlanar * 1.04, alt * 2.2 + 9_000);
-    const fineHalf = Math.min(coarseHalf * 0.55, alt * 0.7 + 4_000, 16_000);
+    const fineHalf = Math.min(coarseHalf * 0.5, alt * 0.55 + 3_000, 14_000);
     // amplitude the coarse cap carries at the fine patch's rim, so the fine relief
     // can fade down to exactly that and the two meet without a step
     const coarseRelief = Math.min(1, 50_000 / (coarseHalf * 2));
