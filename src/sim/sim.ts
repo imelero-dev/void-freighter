@@ -5,7 +5,8 @@ import {
   AMMO_PRICE, ASTEROID_RESPAWN_S, BOLT_SPEED, COLLISION_DAMAGE_SPEED, CRUISE_CHARGE_S, CRUISE_ACCEL_DOUBLE_S,
   CRUISE_DROP_SPEED, CRUISE_FUEL_PER_S, CRUISE_MIN_SPEED, DOCK_MAX_SPEED, FUEL_PRICE,
   COMBAT_LOCKOUT_S, CRAFT_RECIPES, craftMaterials, GOODS, HULLS, INSURANCE_DEDUCTIBLE, MISSILE_PRICE, MODULE_SELL_FACTOR, PIRATES, PLAYER_AIM_SPREAD,
-  REPAIR_KIT_FRACTION, REPAIR_KIT_RECIPE, WAREHOUSE_PLOT_M3, WORKSHOP_RENT_PRICE, WORKSHOP_RENT_S, warehousePlotPrice,
+  DRILL_COOL_PER_S, DRILL_HEAT_PER_S, DRILL_OVERHEAT_RESUME, HOTSPOT_CONE, MINING_RATE_FACTOR,
+  NPC_DEFS, ORE_CHANCE_BASE, ORE_CHANCE_HOTSPOT, REPAIR_KIT_FRACTION, REPAIR_KIT_RECIPE, WAREHOUSE_PLOT_M3, WORKSHOP_RENT_PRICE, WORKSHOP_RENT_S, warehousePlotPrice,
   TURBO_ACCEL_MULT, TURBO_BURST_S, TURBO_ENEMY_RADIUS, TURBO_RECHARGE_S, TURBO_SPEED,
   PIRATE_GOOD_DROPS, REFINE_RECIPES, REPAIR_PRICE, REP_DISCOUNT_MAX, REP_SMUGGLING_PENALTY,
   RESCUE_COST_FRACTION, RESCUE_COST_MIN, ROCK_TYPES, SHIELD_REGEN_DELAY,
@@ -17,7 +18,10 @@ import { integrateFlight } from './flight';
 import { ContractBoards } from './contracts';
 import { Economy } from './economy';
 import { Rng } from './rng';
-import { dangerAt, generateSystem, rockSpawn, stationInfoCost, WORLD_SEED } from './system';
+import { ATMO_DRAG, atmoGravity, atmoHeight, atmosphereAt, dangerAt, generateSystem, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
+import { dockCheck, hangarFrame, insideHangar, padPoint, vtolUpRef } from './docking';
+import { terrainHeight, terrainNormal, maxRelief, type TerrainBody } from './terrain';
+import { TrafficSystem } from './traffic';
 import {
   DT, emptyShipInput, type CargoItem, type Contract, type Destination, type Entity,
   type EntityKind, type HullId, type MarketEntry, type ModuleSlot, type PirateTier,
@@ -34,6 +38,13 @@ export const SHIP_RADIUS: Record<string, number> = {
 
 const FRAGMENT_CHUNK = 3;        // mined units per fragment entity
 const FRAGMENT_TTL = 150;
+const VTOL_SPEED_FACTOR = 0.22;  // forward-speed envelope in VTOL hover mode
+const ZERO_VEL: Vec3 = { x: 0, y: 0, z: 0 }; // stationary collider reference
+const LAVA_HEAT_DPS = 16;        // hull heat per second deep in a lava world's air
+const LAVA_HEAT_SAFE = 0.25;     // air density below this is a safe approach band (no heat)
+const CRUISE_PLANET_STANDOFF = 95_000;  // hard cap on the drop altitude; the real standoff is the planet's own atmosphere height (~3 min powered descent at full turbo)
+const DOCK_SETTLE_S = 0.7;       // settle dwell on the pad before the dock menu opens
+const CRUISE_MOON_STANDOFF = 35_000;    // m above a moon surface (airless, so a closer drop)
 const LOOT_TTL = 240;
 const MISSILE_SPEED = 700;
 const MISSILE_TURN = 2.8;        // rad/s
@@ -85,7 +96,7 @@ export function blankEntity(id: number, kind: EntityKind): Entity {
   return {
     id, kind, pos: v3(), vel: v3(), angVel: v3(), prevPos: v3(),
     orient: qident(), prevOrient: qident(), name: '',
-    isPlayer: false, pirate: null, factionId: '', hullId: 'shuttle',
+    isPlayer: false, pirate: null, npc: null, factionId: '', hullId: 'shuttle',
     hull: 1, maxHull: 1, shield: 0, maxShield: 0, shieldRegenTimer: 99,
     targetId: null, firing: false, weaponCooldown: 0, dead: false,
     throttle: 0, cruise: 'off', cruiseSpeed: 0, dockedAt: null,
@@ -93,7 +104,7 @@ export function blankEntity(id: number, kind: EntityKind): Entity {
     aiPhase: 0, missileCooldown: 0,
     missileAmmo: 0, cannonAmmo: 0, lockTimer: 0, lockedOn: false,
     parentId: 0, derelict: false, derelictOpened: false,
-    rockType: null, rockHp: 0, rockMaxHp: 0, rockYield: null, fieldId: null, rockIndex: -1,
+    rockType: null, rockHp: 0, rockMaxHp: 0, rockYield: null, hotspots: null, fieldId: null, rockIndex: -1,
     radius: 10, goodId: null, qty: 0, lootCredits: 0, lootModule: null, ttl: 0,
     ownerId: 0, damage: 0,
   };
@@ -149,6 +160,16 @@ export interface PlayerMeta {
   turboCharge: number;   // 0..1 burst gauge
   turboActive: boolean;
   lastCombatAt: number;  // sim time of the last hit taken (field-repair lockout)
+  miningBeam: boolean;   // RMB held with the drill deployed
+  beamFiring: boolean;   // beam actually firing this tick (drives FX/audio)
+  drillHeat: number;     // 0..1 — overheats, cools when idle
+  drillOverheated: boolean;
+  vtol: boolean;         // VTOL hover mode: precise, reduced forward envelope
+  gearDown: boolean;     // landing gear deployed (required for pad touchdown)
+  approachStation: string | null; // station we've been cleared to approach (ATC)
+  onSurface: boolean;    // resting on a planet surface (rising-edge touchdown msg)
+  settleTimer: number;   // how long you've been settled on the pad (dwell before docking)
+  dockArmed: boolean;    // false right after undocking until you leave the hangar (no re-suck)
 }
 
 interface RockState {
@@ -169,6 +190,7 @@ export class Sim {
   system = generateSystem();
   economy: Economy;
   boards: ContractBoards;
+  traffic: TrafficSystem;
   time = 0;
   tickCount = 0;
   entities = new Map<number, Entity>();
@@ -176,7 +198,7 @@ export class Sim {
   newsLog: string[] = [];
   private nextId = 1;
   private events: SimEvent[] = [];
-  private rng: Rng;
+  rng: Rng; // shared with subsystems (traffic)
   private rocks = new Map<string, RockState>();      // "fieldId:idx" -> state
   private activeFields = new Set<string>();
   private secondAcc = 0;
@@ -187,6 +209,7 @@ export class Sim {
     this.economy = new Economy(this.system);
     this.boards = new ContractBoards(this.system);
     this.rng = new Rng(this.cfg.seed ^ 0xdead);
+    this.traffic = new TrafficSystem(this);
     this.boards.tick(0);
   }
 
@@ -216,6 +239,9 @@ export class Sim {
       cruiseRequested: false, flightAssist: true,
       forcefieldCooldown: 0, promptedDerelicts: new Set(),
       turboCharge: 1, turboActive: false, lastCombatAt: -999,
+      miningBeam: false, beamFiring: false, drillHeat: 0, drillOverheated: false,
+      vtol: false, gearDown: false, approachStation: null, onSurface: false,
+      settleTimer: 0, dockArmed: true,
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
@@ -243,6 +269,17 @@ export class Sim {
 
   meta(pid: number): PlayerMeta | undefined {
     return this.players.get(pid);
+  }
+
+  // subsystem hooks (traffic)
+  emit(ev: SimEvent): void {
+    this.events.push(ev);
+  }
+
+  spawnShipEntity(): Entity {
+    const e = blankEntity(this.nextId++, 'ship');
+    this.entities.set(e.id, e);
+    return e;
   }
 
   // Sync live entity state into the profile and return it (for persistence).
@@ -379,6 +416,8 @@ export class Sim {
       this.tickPlayer(meta, dt, secondTick);
     }
 
+    this.traffic.tick(dt, secondTick);
+
     for (const e of [...this.entities.values()]) {
       switch (e.kind) {
         case 'ship':
@@ -387,6 +426,8 @@ export class Sim {
             e.ttl -= dt;
             vaddTo(e.pos, vscale(e.vel, dt));
             if (e.ttl <= 0) this.entities.delete(e.id);
+          } else if (e.npc) {
+            this.traffic.tickNpc(e, dt);
           } else if (!e.isPlayer) {
             this.tickPirate(e, dt);
           }
@@ -424,6 +465,9 @@ export class Sim {
   private tickPlayer(meta: PlayerMeta, dt: number, secondTick: boolean): void {
     const e = this.entities.get(meta.pid);
     if (!e || e.dead) return;
+    // re-asserted by tickMining further down; the early returns (towed,
+    // docking, docked) must not leave a stale "firing" flag behind
+    meta.beamFiring = false;
     const prof = meta.profile;
     meta.undockInvuln = Math.max(0, meta.undockInvuln - dt);
     meta.interdictCooldown = Math.max(0, meta.interdictCooldown - dt);
@@ -440,16 +484,19 @@ export class Sim {
       return; // being towed: no control
     }
 
-    // docking autopilot
+    // autodock autopilot (paid convenience / rescue tow only): ease the ship all
+    // the way onto the landing pad inside the hangar. Manual/passive docking no
+    // longer runs an autopilot — you fly in and set down yourself.
     if (meta.docking) {
       const st = this.station(meta.docking.stationId)!;
-      meta.docking.t += dt / 3.5;
+      const target = padPoint(st);
+      meta.docking.t += dt / 2.2;
       const t = clamp(meta.docking.t, 0, 1);
       const ease = t * t * (3 - 2 * t);
       e.pos = {
-        x: meta.docking.from.x + (st.pos.x - meta.docking.from.x) * ease,
-        y: meta.docking.from.y + (st.pos.y - meta.docking.from.y) * ease,
-        z: meta.docking.from.z + (st.pos.z - meta.docking.from.z) * ease,
+        x: meta.docking.from.x + (target.x - meta.docking.from.x) * ease,
+        y: meta.docking.from.y + (target.y - meta.docking.from.y) * ease,
+        z: meta.docking.from.z + (target.z - meta.docking.from.z) * ease,
       };
       e.vel = v3();
       if (t >= 1) {
@@ -510,18 +557,58 @@ export class Sim {
       if (!turbo && !wantsTurbo) {
         meta.turboCharge = Math.min(1, meta.turboCharge + dt / TURBO_RECHARGE_S);
       }
+      // VTOL overrides the burn: true vertical flight for setting down (#19).
+      // Cruise/turbo can't run in VTOL.
+      if (meta.vtol) turbo = false;
       meta.turboActive = turbo;
-      const perf = turbo
-        ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate }
-        : meta.stats;
+      // VTOL levels to the local vertical: a planet's up, a station hangar's
+      // floor normal, or — in open space — the ship's own up.
+      const vtolUp = meta.vtol ? (vtolUpRef(this.system, e.pos) ?? undefined) : undefined;
+      // weight: in a planet's air the ship has gravity pulling it down. VTOL is
+      // an active hover platform (it holds itself up), so it carries no extra
+      // weight; everything else has to fly against it.
+      const gravity = meta.vtol ? undefined : (atmoGravity(this.system, e.pos) ?? undefined);
+      const perf = meta.vtol
+        ? { maxSpeed: meta.stats.maxSpeed * VTOL_SPEED_FACTOR, accel: meta.stats.accel * 1.4, turnRate: meta.stats.turnRate * 0.8, massFactor: meta.stats.massFactor, vtol: true, vtolUp }
+        : turbo
+          ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate, massFactor: meta.stats.massFactor, gravity }
+          : { ...meta.stats, gravity };
       this.integrateShip(e, meta.input, perf, dt, meta.flightAssist);
       if (meta.cruiseRequested) this.tryStartCruise(meta, e);
     }
+    // atmospheric drag: the air thickens as you descend, bleeding speed and
+    // changing the control feel near a planet (#16)
+    if (!e.dockedAt) {
+      const atmo = atmosphereAt(this.system, e.pos);
+      if (atmo.density > 0) {
+        const f = Math.max(0, 1 - ATMO_DRAG * atmo.density * dt);
+        e.vel = vscale(e.vel, f);
+        // a lava world's air cooks the hull the deeper you go — but the upper
+        // atmosphere is a safe approach band, so you get clear warning and time to
+        // climb out before it bites. Only the lower air (dense, near the surface)
+        // actually burns, ramping from zero at the safe band to full at the deck.
+        if (atmo.planet?.kind === 'lava') {
+          const heatFrac = Math.max(0, (atmo.density - LAVA_HEAT_SAFE) / (1 - LAVA_HEAT_SAFE));
+          if (heatFrac > 0) {
+            this.applyDamage(e, LAVA_HEAT_DPS * heatFrac * dt, -1, true, `Burned up in ${atmo.planet.name}'s atmosphere`);
+            if (this.tickCount % 12 === 0) {
+              this.events.push({ type: 'log', text: `⚠ ${atmo.planet.name.toUpperCase()} HEAT — hull cooking, CLIMB to cool`, color: '#f44', pid: meta.pid });
+            }
+          }
+        }
+      }
+    }
+
     const moved = vlen(e.vel) * dt;
     prof.stats.distanceTravelled += moved;
 
     // collisions & hazards
     this.tickCollisions(meta, e, dt);
+
+    // ATC: announce approach clearance, then auto-dock once the type's approach
+    // is flown correctly (clamp aligned / inside the bay / settled on the pad)
+    this.tickApproach(meta, e);
+    this.tickDockingDetect(meta, e, dt);
 
     // mining
     this.tickMining(meta, e, dt);
@@ -596,7 +683,7 @@ export class Sim {
       // outright and tears into the hull on the way out
       e.shield = 0;
       const dmg = e.maxHull * this.rng.range(0.12, 0.22);
-      this.applyDamage(e, dmg, -1, true);
+      this.applyDamage(e, dmg, -1, true, 'Killed escaping a derelict');
       this.events.push({ type: 'log', text: 'Hull breach — you got out, but the ship took a beating escaping the wreck.', color: '#f44', pid });
       this.events.push({ type: 'comms', pid, text: 'You do not talk about what was in the hold. Nobody would believe you anyway.' });
     }
@@ -609,7 +696,7 @@ export class Sim {
   private integrateShip(
     e: Entity,
     input: ShipInput,
-    perf: { maxSpeed: number; accel: number; turnRate: number },
+    perf: { maxSpeed: number; accel: number; turnRate: number; massFactor?: number },
     dt: number,
     assist: boolean,
   ): void {
@@ -625,6 +712,7 @@ export class Sim {
     const e = this.entities.get(pid);
     if (!meta || !e || e.dead || e.dockedAt || meta.docking) return;
     if (e.cruise === 'off') {
+      meta.vtol = false; // the cruise drive and VTOL hover are mutually exclusive
       meta.cruiseRequested = true;
       this.tryStartCruise(meta, e);
     } else {
@@ -704,7 +792,8 @@ export class Sim {
       // the mass cap has already braked us; final drop right at the doorstep
       if (d < 2500) {
         this.dropCruise(e, 'arrival');
-        this.events.push({ type: 'log', text: `Arriving: ${meta.destination.name}.`, color: '#8fb', pid: meta.pid });
+        this.events.push({ type: 'log', text: `Arriving: ${meta.destination.name}. Destination cleared.`, color: '#8fb', pid: meta.pid });
+        meta.destination = null; // GPS resets once you are there
         return;
       }
     }
@@ -758,17 +847,23 @@ export class Sim {
 
   // Max cruise speed allowed at a position: distance to the nearest mass edge
   // divided by 3 (so you always have ~3 s of braking room), floored near zero.
+  // A planet's standoff is its OWN atmosphere height (capped) so the cruise
+  // drops you right at the atmospheric interface — the edge of the air, a
+  // ~3-minute powered descent from the deck — and the entry/transition begins
+  // exactly where the drive can no longer push. Moons (airless) keep a small
+  // fixed standoff.
   private massSpeedCap(pos: Vec3): number {
     let edge = Infinity;
     edge = Math.min(edge, vlen(pos) - this.system.starRadius * 2.2);
     for (const p of this.system.planets) {
-      edge = Math.min(edge, vdist(pos, p.pos) - p.radius * 1.5);
+      const standoff = Math.min(atmoHeight(p), CRUISE_PLANET_STANDOFF);
+      edge = Math.min(edge, vdist(pos, p.pos) - p.radius - standoff);
     }
     for (const m of this.system.moons) {
-      edge = Math.min(edge, vdist(pos, m.pos) - m.radius * 1.6);
+      edge = Math.min(edge, vdist(pos, m.pos) - m.radius - CRUISE_MOON_STANDOFF);
     }
     for (const s of this.system.stations) {
-      edge = Math.min(edge, vdist(pos, s.pos) - 1500);
+      edge = Math.min(edge, vdist(pos, s.pos) - s.radius * 1.3);
     }
     for (const belt of this.system.belts) {
       for (const f of belt.fields) {
@@ -787,63 +882,177 @@ export class Sim {
     // star burn
     const starD = vlen(e.pos);
     if (starD < this.system.starRadius * STAR_BURN_RADIUS_MULT) {
-      this.applyDamage(e, 60 * dt, -1, true);
+      this.applyDamage(e, 60 * dt, -1, true, 'Incinerated by the star');
       if (this.tickCount % 20 === 0) {
         this.events.push({ type: 'log', text: 'WARNING: hull temperature critical.', color: '#f44', pid: meta.pid });
       }
     }
-    // planets & moons: planetary exclusion field well above the surface —
-    // an invisible wall that shoves you back out (no more clipping through)
-    meta.forcefieldCooldown = Math.max(0, meta.forcefieldCooldown - dt);
-    const bounce = (center: Vec3, shellRadius: number, label: string) => {
-      const d = vdist(e.pos, center);
-      if (d >= shellRadius) return;
-      const n = vnorm(vsub(e.pos, center));
-      e.pos = vadd(center, vscale(n, shellRadius + 5));
-      // reflect velocity off the shell, heavily damped
-      const vn = vdot(e.vel, n);
-      if (vn < 0) {
-        e.vel = vsub(e.vel, vscale(n, vn * 1.6));
-        e.vel = vscale(e.vel, 0.45);
-      }
-      this.dropCruise(e, 'forcefield');
-      if (meta.forcefieldCooldown <= 0) {
-        meta.forcefieldCooldown = 3;
-        this.events.push({ type: 'forcefield', pid: meta.pid, body: label });
-      }
-    };
+    // Every planet and moon is landable now (#16): the old exclusion field is
+    // gone. Gas giants present a solid cloud deck, lava worlds a scorching
+    // surface — you can set down on any of them. onSurface is a single flag
+    // across all bodies, so snapshot the previous state and clear it BEFORE
+    // testing any body this tick — each planetSurface re-asserts it only on real
+    // contact, making the touchdown cue a true rising edge.
+    const wasResting = meta.onSurface;
+    meta.onSurface = false;
     for (const p of this.system.planets) {
-      bounce(p.pos, p.radius * 1.15, p.name);
+      this.planetSurface(meta, e, p, p.name, wasResting);
     }
     for (const m of this.system.moons) {
-      bounce(m.pos, m.radius * 1.3, 'moon');
+      this.planetSurface(meta, e, { pos: m.pos, radius: m.radius, kind: 'barren', colorSeed: m.colorSeed }, 'the moon', wasResting);
     }
-    // stations: bounce
+    // stations: a big solid hull with one open hangar carved into the dock
+    // face. The hull stops you cold (no more flying through it); inside the
+    // hangar you're contained by the floor/ceiling/walls and can set down on
+    // the pad. The hatch mouth is the only way in or out.
     for (const s of this.system.stations) {
-      const d = vdist(e.pos, s.pos);
-      if (d < s.radius + e.radius && !e.dockedAt) {
-        const n = vnorm(vsub(e.pos, s.pos));
-        e.pos = vadd(s.pos, vscale(n, s.radius + e.radius + 2));
-        const impact = vlen(e.vel);
-        e.vel = vscale(n, Math.max(10, impact * 0.25));
-        if (impact > COLLISION_DAMAGE_SPEED) {
-          this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.3, -1, true);
-        }
-      }
+      if (e.dockedAt) break;
+      this.hangarCollision(meta, e, s);
     }
     // asteroids (active entities only)
     for (const a of this.entities.values()) {
       if (a.kind !== 'asteroid') continue;
-      const d = vdist(e.pos, a.pos);
-      if (d < a.radius + e.radius) {
-        const n = vnorm(vsub(e.pos, a.pos));
-        e.pos = vadd(a.pos, vscale(n, a.radius + e.radius + 1));
-        const impact = vlen(e.vel);
-        e.vel = vscale(n, Math.max(8, impact * 0.3));
-        if (impact > COLLISION_DAMAGE_SPEED) {
-          this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.5, -1, true);
-        }
+      this.solidCollision(meta, e, a.pos, a.radius, ZERO_VEL, 0.5);
+    }
+    // bulk carriers are solid: half a kilometre of hull is not a suggestion
+    for (const n of this.entities.values()) {
+      if (n.kind !== 'ship' || n.npc !== 'superfreighter' || n.dead) continue;
+      this.solidCollision(meta, e, n.pos, n.radius, n.vel, 0.4);
+    }
+  }
+
+  // Credible solid-body contact response (#21): push the ship exactly to the
+  // surface (no clipping, no overshoot), then cancel the inbound NORMAL
+  // velocity while preserving the TANGENTIAL part — so low-speed contact slides
+  // or gently stops along the surface instead of bouncing off. Damage scales
+  // with closing momentum (mass × speed), so a heavy freighter hits harder than
+  // a scout at the same speed.
+  private solidCollision(meta: PlayerMeta, e: Entity, center: Vec3, surfaceRadius: number, otherVel: Vec3, dmgScale: number): void {
+    const rx = e.pos.x - center.x, ry = e.pos.y - center.y, rz = e.pos.z - center.z;
+    const d = Math.hypot(rx, ry, rz);
+    const minD = surfaceRadius + e.radius;
+    if (d >= minD) return;
+    const n = d > 1e-6 ? v3(rx / d, ry / d, rz / d) : v3(0, 1, 0);
+    e.pos = vadd(center, vscale(n, minD + 0.5));
+    const relVel = vsub(e.vel, otherVel);
+    const vn = vdot(relVel, n); // <0 while moving into the surface
+    if (vn < 0) {
+      // remove the inbound component (tiny restitution for a soft nudge at
+      // speed; at low speed this is effectively a gentle stop). Tangential
+      // velocity is untouched, which is what lets the ship slide along.
+      const restitution = 0.08;
+      const newRel = vsub(relVel, vscale(n, vn * (1 + restitution)));
+      e.vel = vadd(otherVel, newRel);
+      const impact = -vn; // closing speed along the normal
+      if (impact > COLLISION_DAMAGE_SPEED) {
+        this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * dmgScale * meta.stats.massFactor, -1, true, 'Hull collision');
       }
+      if (e.cruise !== 'off' && impact > 40) this.dropCruise(e, 'collision');
+    }
+  }
+
+  // Station collision: a chunky solid box hull (Coriolis-style) with one
+  // rectangular hangar "mail slot" cut into the +f dock face. Outside the
+  // footprint the hull is solid and stops you cold. Directly in front of the
+  // open slot you fly free (the approach corridor). Once inside the footprint
+  // and past the mouth plane you're contained by the hangar's floor, ceiling,
+  // side and back walls — and set down on the pad. Worked entirely in the
+  // station's own (u,v,f) frame, whose axes are orthonormal, so each wall is an
+  // independent 1-D push.
+  private hangarCollision(meta: PlayerMeta, e: Entity, st: StationDef): void {
+    const fr = hangarFrame(st);
+    const rel = vsub(e.pos, fr.center);
+    const a = vdot(rel, fr.f);
+    const pu = vdot(rel, fr.u);
+    const pv = vdot(rel, fr.v);
+    const er = e.radius;
+    const inSlot = Math.abs(pu) < fr.HW && Math.abs(pv) < fr.HH;
+
+    if (inSlot && a >= fr.mouthA) return; // open corridor in front of the hatch
+    if (inSlot && a < fr.mouthA) {
+      // contained inside the hangar; the +f mouth is the only opening
+      this.wallPush(meta, e, fr.f, (fr.backA + er) - a, 0.3);              // back wall
+      this.wallPush(meta, e, vscale(fr.u, -1), pu - (fr.HW - er), 0.25);   // +u wall
+      this.wallPush(meta, e, fr.u, (-(fr.HW - er)) - pu, 0.25);            // -u wall
+      this.wallPush(meta, e, vscale(fr.v, -1), pv - (fr.HH - er), 0.25);   // ceiling
+      this.wallPush(meta, e, fr.v, (fr.floorV + er) - pv, 0.3);            // floor / pad
+      return;
+    }
+    // solid box hull: push out along the least-penetrating face (sphere-vs-box)
+    const penU = (fr.HX + er) - Math.abs(pu);
+    const penV = (fr.HY + er) - Math.abs(pv);
+    const penA = (fr.HZ + er) - Math.abs(a);
+    if (penU <= 0 || penV <= 0 || penA <= 0) return; // clear of the hull
+    if (penU <= penV && penU <= penA) {
+      this.wallPush(meta, e, vscale(fr.u, Math.sign(pu) || 1), penU, 0.3);
+    } else if (penV <= penA) {
+      this.wallPush(meta, e, vscale(fr.v, Math.sign(pv) || 1), penV, 0.3);
+    } else {
+      this.wallPush(meta, e, vscale(fr.f, Math.sign(a) || 1), penA, 0.3);
+    }
+  }
+
+  // Push the ship out of a planar wall whose outward normal (into the allowed
+  // space) is `normal`; `penetration` is how far it is inside the wall. Cancels
+  // the inbound normal velocity (keeps tangential), with momentum-scaled damage.
+  private wallPush(meta: PlayerMeta, e: Entity, normal: Vec3, penetration: number, dmgScale: number): void {
+    if (penetration <= 0) return;
+    e.pos = vadd(e.pos, vscale(normal, penetration));
+    const vn = vdot(e.vel, normal); // <0 while moving into the wall
+    if (vn < 0) {
+      e.vel = vsub(e.vel, vscale(normal, vn * 1.04));
+      const impact = -vn;
+      if (impact > COLLISION_DAMAGE_SPEED) {
+        this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * dmgScale * meta.stats.massFactor, -1, true);
+      }
+      if (e.cruise !== 'off' && impact > 40) this.dropCruise(e, 'collision');
+    }
+  }
+
+  // Seamless planetary touchdown (#16/#18): the same mass-based contact as a
+  // solid body, but landing quality depends on closing speed and the gear. A
+  // slow approach with gear down is a clean touchdown; fast or gear-up bites
+  // hull. Resting is just the surface stopping you — thrust away to take off.
+  private planetSurface(meta: PlayerMeta, e: Entity, body: TerrainBody, name: string, wasResting: boolean): void {
+    const center = body.pos;
+    const rx = e.pos.x - center.x, ry = e.pos.y - center.y, rz = e.pos.z - center.z;
+    const d = Math.hypot(rx, ry, rz);
+    if (d >= body.radius + maxRelief(body.kind) + e.radius) return; // clear of any possible relief
+    // the ground is the mean sphere plus the local terrain relief — collision
+    // matches what you see, so you stop on the mountains and rest in the valleys
+    const h = terrainHeight(body, e.pos);
+    const minD = body.radius + h + e.radius;
+    if (d >= minD) return; // clear of the surface column beneath us
+    const up = d > 1e-6 ? v3(rx / d, ry / d, rz / d) : v3(0, 1, 0);
+    // seat the ship a hair INTO the surface so weight keeps it in steady contact
+    // (resting), rather than bouncing just clear and re-triggering touchdown
+    e.pos = vadd(center, vscale(up, minD - 0.4));
+    meta.onSurface = true; // in contact with the surface this tick
+    // slope-aware contact: a steep face pushes you sideways (you slide off it)
+    const n = terrainNormal(body, e.pos);
+    const vn = vdot(e.vel, n); // <0 descending into the slope
+    if (vn < 0) {
+      e.vel = vsub(e.vel, vscale(n, vn * 1.04)); // cancel inbound, keep along-slope
+      const impact = -vn;
+      const softLimit = meta.gearDown ? SOFT_LAND_SPEED : 12;
+      // touchdown event (rising edge): drives the dust kick and camera settle
+      if (!wasResting && impact > 2) {
+        this.events.push({ type: 'touchdown', entityId: e.id, impact, hard: impact > softLimit, x: e.pos.x, y: e.pos.y, z: e.pos.z });
+      }
+      if (impact > softLimit) {
+        const penalty = meta.gearDown ? 0.4 : 1.4; // gear-up slams the hull
+        this.applyDamage(e, (impact - softLimit) * penalty * meta.stats.massFactor, -1, true, `Crashed into ${name}`);
+        if (!wasResting) {
+          this.events.push({
+            type: 'log',
+            text: meta.gearDown ? `Hard landing on ${name} — hull stressed.` : 'CRASH LANDING — deploy landing gear [P] before touchdown!',
+            color: '#f66', pid: meta.pid,
+          });
+        }
+      } else if (!wasResting) {
+        this.events.push({ type: 'log', text: `Touchdown on ${name}. Gear holding — thrust up to lift off.`, color: '#8fb', pid: meta.pid });
+      }
+      if (e.cruise !== 'off') this.dropCruise(e, 'landing');
     }
   }
 
@@ -874,6 +1083,31 @@ export class Sim {
     meta.flightAssist = !meta.flightAssist;
     this.events.push({ type: 'log', text: `Flight assist ${meta.flightAssist ? 'ON' : 'OFF'}.`, color: '#8ad', pid });
     return meta.flightAssist;
+  }
+
+  // VTOL: precise hover for atmospheric/pad landing — reduced forward envelope,
+  // mutually exclusive with the cruise drive (#19).
+  toggleVtol(pid: number): boolean {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || e.dead || e.dockedAt) return false;
+    meta.vtol = !meta.vtol;
+    if (meta.vtol) {
+      meta.cruiseRequested = false;
+      if (e.cruise !== 'off') this.dropCruise(e, 'manual');
+    }
+    this.events.push({ type: 'log', text: `Flight mode: ${meta.vtol ? 'VTOL — vertical/hover' : 'CRUISE — standard'}.`, color: '#8ad', pid });
+    return meta.vtol;
+  }
+
+  // Landing gear: must be down for a clean pad/surface touchdown (#18).
+  toggleGear(pid: number): boolean {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || e.dead || e.dockedAt) return false;
+    meta.gearDown = !meta.gearDown;
+    this.events.push({ type: 'log', text: `Landing gear ${meta.gearDown ? 'DEPLOYED' : 'retracted'}.`, color: '#8ad', pid });
+    return meta.gearDown;
   }
 
   setFiring(pid: number, on: boolean): void {
@@ -944,21 +1178,23 @@ export class Sim {
     if (!e.firing || e.weaponCooldown > 0 || e.dockedAt || e.cruise !== 'off') return;
     const stats = e.isPlayer ? this.players.get(e.id)?.stats : null;
     const pdef = e.pirate ? PIRATES[e.pirate] : null;
-    const damage = stats ? stats.weaponDamage : pdef?.shotDamage ?? 0;
-    const range = stats ? stats.weaponRange : pdef?.weaponRange ?? 0;
-    const interval = stats ? stats.weaponInterval : pdef?.shotInterval ?? 1;
+    const ndef = e.npc ? NPC_DEFS[e.npc] : null;
+    const aidef = pdef ?? (ndef && ndef.shotDamage > 0 ? ndef : null);
+    const damage = stats ? stats.weaponDamage : aidef?.shotDamage ?? 0;
+    const range = stats ? stats.weaponRange : aidef?.weaponRange ?? 0;
+    const interval = stats ? stats.weaponInterval : aidef?.shotInterval ?? 1;
     if (damage <= 0) return;
 
     let dir: Vec3;
-    if (pdef) {
-      // AI: lead the target, with tier-defined sloppiness
+    if (aidef) {
+      // AI: lead the target, with per-ship sloppiness
       const target = e.aggroId !== null ? this.entities.get(e.aggroId) : null;
       if (!target || target.dead) return;
       const aim = leadPoint(e.pos, e.vel, target.pos, target.vel, BOLT_SPEED);
       dir = vnorm(vsub(aim, e.pos));
       // turrets swivel freely; hull guns need the nose on target
       if (e.pirate !== 'turret' && angleBetween(qForward(e.orient), dir) > 0.25) return;
-      dir = jitterDir(dir, pdef.aimError, this.rng);
+      dir = jitterDir(dir, aidef.aimError, this.rng);
     } else {
       if (e.cannonAmmo <= 0) {
         e.weaponCooldown = 0.5;
@@ -1102,7 +1338,7 @@ export class Sim {
   }
 
   // Apply damage with all protection rules. sourceId -1 = environment.
-  applyDamage(target: Entity, amount: number, sourceId: number, environmental: boolean): void {
+  applyDamage(target: Entity, amount: number, sourceId: number, environmental: boolean, cause = ''): void {
     if (target.dead || target.dockedAt) return;
     if (target.derelict && !environmental) return; // hulks just soak fire
     const meta = target.isPlayer ? this.players.get(target.id) : undefined;
@@ -1125,6 +1361,8 @@ export class Sim {
         this.dropCruise(target, 'damage');
         if (meta) this.events.push({ type: 'log', text: 'Cruise charge interrupted by weapons fire!', color: '#f66', pid: target.id });
       }
+      // ambient traffic reacts: civilians flee + scream, patrols answer
+      if (target.npc) this.traffic.onNpcDamaged(target, sourceId);
     }
 
     target.shieldRegenTimer = 0;
@@ -1140,20 +1378,24 @@ export class Sim {
       const absorbed = Math.min(target.shield, remaining);
       target.shield -= absorbed;
       remaining -= absorbed;
-      this.events.push({ type: 'hit', entityId: target.id, shield: true, amount: Math.round(absorbed), x: target.pos.x, y: target.pos.y, z: target.pos.z, ...from });
+      // flag the exact moment the shield collapses so clients can sound/flash a
+      // distinct "shields down" cue (#12)
+      const broke = target.shield <= 0;
+      this.events.push({ type: 'hit', entityId: target.id, shield: true, amount: Math.round(absorbed), x: target.pos.x, y: target.pos.y, z: target.pos.z, ...from, broke });
     }
     if (remaining > 0) {
       target.hull -= remaining;
       this.events.push({ type: 'hit', entityId: target.id, shield: false, amount: Math.round(remaining), x: target.pos.x, y: target.pos.y, z: target.pos.z, ...from });
-      if (target.hull <= 0) this.handleDeath(target, sourceId);
+      if (target.hull <= 0) this.handleDeath(target, sourceId, cause);
     }
   }
 
-  private handleDeath(e: Entity, killerId: number): void {
+  private handleDeath(e: Entity, killerId: number, cause = ''): void {
     e.hull = 0;
     this.events.push({ type: 'explosion', entityId: e.id, big: true, x: e.pos.x, y: e.pos.y, z: e.pos.z });
 
     if (e.pirate) {
+      this.traffic.onPirateKilled(e.id, killerId);
       this.dropPirateLoot(e);
       // a dying carrier takes its remaining turrets with it
       if (e.pirate === 'corvette') {
@@ -1187,6 +1429,25 @@ export class Sim {
         const nearest = this.nearestStation(e.pos);
         if (!nearest.blackMarket) this.addRep(kmeta.profile, nearest.factionId, e.pirate === 'scout' ? 0.5 : 1);
       }
+      this.entities.delete(e.id);
+      return;
+    }
+
+    if (e.npc) {
+      // civilian wrecks shed a little of their cargo
+      if (e.npc !== 'patrol' && e.goodId && this.rng.chance(0.8)) {
+        const loot = blankEntity(this.nextId++, 'loot');
+        loot.pos = vclone(e.pos);
+        loot.vel = vscale(e.vel, 0.05);
+        loot.ttl = 240;
+        loot.radius = 4;
+        loot.name = 'cargo spill';
+        loot.goodId = e.goodId;
+        loot.qty = this.rng.int(3, 8);
+        loot.lootCredits = this.rng.int(20, 120);
+        this.entities.set(loot.id, loot);
+      }
+      this.traffic.onNpcKilled(e, killerId);
       this.entities.delete(e.id);
       return;
     }
@@ -1226,7 +1487,14 @@ export class Sim {
       meta.cruiseRequested = false;
       e.dockedAt = st.id;
       e.pos = vclone(st.pos);
-      this.events.push({ type: 'death', pid: e.id, lostCargo, deductible });
+      // a human-readable cause for the death screen: explicit environmental
+      // reason if given, else the attacker's name, else a generic fallback
+      let causeText = cause;
+      if (!causeText) {
+        const killer = killerId >= 0 ? this.entities.get(killerId) : null;
+        causeText = killer ? `Destroyed by ${killer.name}` : 'Ship destroyed';
+      }
+      this.events.push({ type: 'death', pid: e.id, lostCargo, deductible, cause: causeText, station: st.name });
       return;
     }
   }
@@ -1379,8 +1647,9 @@ export class Sim {
     if (nearby >= cap) return;
     if (!this.rng.chance(Math.min(0.5, danger * 0.55))) return;
 
-    // deep red space occasionally fields an Ironclad gun platform
-    if (danger > 0.55 && !corvetteNear && this.rng.chance(0.16)) {
+    // red space regularly fields an Ironclad gun platform — a turreted capital
+    // should be a memorable encounter on a dangerous run, not a rumour (#11)
+    if (danger > 0.5 && !corvetteNear && this.rng.chance(0.22)) {
       const dir = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-0.2, 0.2), this.rng.range(-1, 1)));
       this.spawnCorvette(vadd(e.pos, vscale(dir, this.rng.range(5500, 7500))));
       return;
@@ -1477,6 +1746,18 @@ export class Sim {
           e.aggroId = nearestPlayer.id;
           e.aiState = 'approach';
           this.events.push({ type: 'hostileDetected', pid: nearestPlayer.id });
+        } else {
+          // no player in reach? civilian traffic will do (never the police,
+          // never the bulk carriers — too big to crack)
+          for (const civ of this.entities.values()) {
+            if (civ.kind !== 'ship' || !civ.npc || civ.dead) continue;
+            if (civ.npc === 'patrol' || civ.npc === 'superfreighter') continue;
+            if (vdist(civ.pos, e.pos) < def.detectRange * 0.8) {
+              e.aggroId = civ.id;
+              e.aiState = 'approach';
+              break;
+            }
+          }
         }
         break;
       }
@@ -1607,7 +1888,7 @@ export class Sim {
       if (st.blackMarket) continue;
       for (const e of this.entities.values()) {
         if (e.kind === 'ship' && e.pirate && !e.dead && vdist(e.pos, st.pos) < st.safeRadius) {
-          this.applyDamage(e, STATION_TURRET_DPS, -1, true);
+          this.applyDamage(e, STATION_TURRET_DPS, -1, true, 'Shot down by station defences');
         }
       }
     }
@@ -1686,6 +1967,7 @@ export class Sim {
       e.rockHp = st.hp;
       e.rockMaxHp = spawn.radius * ROCK_TYPES[spawn.type].hpPerRadius;
       e.rockYield = st.yieldLeft;
+      e.hotspots = spawn.hotspots;
       e.fieldId = fieldId;
       e.rockIndex = i;
       e.name = `${spawn.type} asteroid`;
@@ -1702,62 +1984,121 @@ export class Sim {
       return;
     }
     meta.drillOn = on;
+    if (!on) meta.miningBeam = false;
+  }
+
+  // The mining beam: hold RMB with the drill deployed. Heat builds while
+  // firing and the drill locks out when it redlines — no AFK strip-mining.
+  // Most pulls are worthless regolith; carving the glowing seams (hotspots)
+  // is where the real ore comes from.
+  setMiningBeam(pid: number, on: boolean): void {
+    const meta = this.players.get(pid);
+    if (!meta) return;
+    meta.miningBeam = on && meta.drillOn;
   }
 
   private tickMining(meta: PlayerMeta, e: Entity, dt: number): void {
-    if (!meta.drillOn || meta.stats.drillRate === 0 || e.cruise !== 'off') return;
-    const target = e.targetId !== null ? this.entities.get(e.targetId) : null;
-    let rock: Entity | null = (target && target.kind === 'asteroid' && !target.dead) ? target : null;
-    if (!rock) {
-      // nearest rock in the aim cone
-      const fwd = qForward(e.orient);
-      let best = 0.3;
-      for (const t of this.entities.values()) {
-        if (t.kind !== 'asteroid') continue;
-        const d = vdist(t.pos, e.pos);
-        if (d > meta.stats.drillRange) continue;
-        const ang = angleBetween(fwd, vsub(t.pos, e.pos));
-        if (ang < best) {
-          best = ang;
-          rock = t;
-        }
+    if (meta.stats.drillRate === 0) return;
+    const firing = meta.drillOn && meta.miningBeam && !meta.drillOverheated && e.cruise === 'off' && !e.dockedAt;
+    meta.beamFiring = firing;
+    // beam FX cadence: every 2nd tick (10 Hz) is enough for a continuous
+    // look client-side and halves the event traffic in online snapshots
+    const emitBeam = firing && this.tickCount % 2 === 0;
+
+    // heat model: builds while the beam is on, cools whenever it is not
+    if (firing) {
+      meta.drillHeat = Math.min(1, meta.drillHeat + DRILL_HEAT_PER_S * dt);
+      if (meta.drillHeat >= 1) {
+        meta.drillOverheated = true;
+        this.events.push({ type: 'log', text: 'DRILL OVERHEAT — venting. Ease off the trigger, pilot.', color: '#f66', pid: meta.pid });
+        return;
+      }
+    } else {
+      meta.drillHeat = Math.max(0, meta.drillHeat - DRILL_COOL_PER_S * dt);
+      if (meta.drillOverheated && meta.drillHeat <= DRILL_OVERHEAT_RESUME) {
+        meta.drillOverheated = false;
+        this.events.push({ type: 'log', text: 'Drill back within thermal limits.', color: '#8fb', pid: meta.pid });
+      }
+      return;
+    }
+
+    // tight aimed beam: whatever rock sits under the reticle
+    const fwd = qForward(e.orient);
+    let rock: Entity | null = null;
+    let best = 0.15;
+    for (const t of this.entities.values()) {
+      if (t.kind !== 'asteroid') continue;
+      const d = vdist(t.pos, e.pos);
+      if (d > meta.stats.drillRange) continue;
+      const ang = angleBetween(fwd, vsub(t.pos, e.pos));
+      const cone = Math.max(0.06, Math.atan(t.radius / Math.max(d, 1)) * 0.9);
+      if (ang < Math.min(best, cone)) {
+        best = ang;
+        rock = t;
       }
     }
-    if (!rock || vdist(rock.pos, e.pos) > meta.stats.drillRange) return;
-    const ang = angleBetween(qForward(e.orient), vsub(rock.pos, e.pos));
-    if (ang > 0.35) return;
+    if (!rock) {
+      // beam into the void: visual only
+      if (emitBeam) {
+        const end = vadd(e.pos, vscale(fwd, meta.stats.drillRange * 0.8));
+        this.events.push({ type: 'laser', fromId: e.id, toX: end.x, toY: end.y, toZ: end.z, hit: false, mining: true });
+      }
+      return;
+    }
 
     const key = `${rock.fieldId}:${rock.rockIndex}`;
     const st = this.rocks.get(key);
     if (!st || st.hp <= 0) return;
-    const rate = meta.stats.drillRate;
+    const rate = meta.stats.drillRate * MINING_RATE_FACTOR;
     st.hp -= rate * dt * (ROCK_TYPES[rock.rockType!].hpPerRadius / 1.5);
     rock.rockHp = Math.max(0, st.hp);
     meta.extractAcc += rate * dt;
-    this.events.push({ type: 'laser', fromId: e.id, toX: rock.pos.x, toY: rock.pos.y, toZ: rock.pos.z, hit: true, mining: true });
+    if (emitBeam) {
+      this.events.push({ type: 'laser', fromId: e.id, toX: rock.pos.x, toY: rock.pos.y, toZ: rock.pos.z, hit: true, mining: true });
+    }
+
+    // are we carving a hotspot seam? (beam impact point vs seam axes)
+    let onSeam = false;
+    if (rock.hotspots) {
+      const impactDir = vnorm(vsub(e.pos, rock.pos)); // facing side of the rock
+      for (const h of rock.hotspots) {
+        if (angleBetween(impactDir, h) < HOTSPOT_CONE) {
+          onSeam = true;
+          break;
+        }
+      }
+    }
 
     while (meta.extractAcc >= FRAGMENT_CHUNK) {
       meta.extractAcc -= FRAGMENT_CHUNK;
-      this.spawnFragment(rock, st, e.pos);
+      this.spawnFragment(rock, st, e.pos, onSeam);
     }
     if (st.hp <= 0) {
       st.respawnAt = this.time + ASTEROID_RESPAWN_S;
       st.entityId = null;
       this.events.push({ type: 'explosion', entityId: rock.id, big: false, x: rock.pos.x, y: rock.pos.y, z: rock.pos.z });
-      // final burst of fragments
-      for (let i = 0; i < 2; i++) this.spawnFragment(rock, st, e.pos);
+      // cracking the rock open always sheds something real
+      for (let i = 0; i < 2; i++) this.spawnFragment(rock, st, e.pos, true);
       this.entities.delete(rock.id);
     }
   }
 
-  private spawnFragment(rock: Entity, st: RockState, towards: Vec3): void {
-    // pick a good from remaining yield
+  private spawnFragment(rock: Entity, st: RockState, towards: Vec3, onSeam: boolean): void {
+    // grindy by design: most pulls are regolith; the real composition only
+    // comes out at base odds — or much better odds while carving a seam
+    const oreChance = onSeam ? ORE_CHANCE_HOTSPOT : ORE_CHANCE_BASE;
+    let good: string;
+    let qty: number;
     const goods = Object.keys(st.yieldLeft).filter((g) => st.yieldLeft[g] > 0);
-    if (goods.length === 0) return;
-    const weights = goods.map((g) => st.yieldLeft[g]);
-    const good = this.rng.pickWeighted(goods, weights);
-    const qty = Math.min(st.yieldLeft[good], FRAGMENT_CHUNK);
-    st.yieldLeft[good] -= qty;
+    if (goods.length > 0 && this.rng.chance(oreChance)) {
+      const weights = goods.map((g) => st.yieldLeft[g]);
+      good = this.rng.pickWeighted(goods, weights);
+      qty = Math.min(st.yieldLeft[good], FRAGMENT_CHUNK);
+      st.yieldLeft[good] -= qty;
+    } else {
+      good = 'stone';
+      qty = this.rng.int(1, FRAGMENT_CHUNK);
+    }
     const f = blankEntity(this.nextId++, 'fragment');
     // bias the debris toward the mining ship so the collector has work to do
     const rand = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-1, 1), this.rng.range(-1, 1)));
@@ -1834,6 +2175,34 @@ export class Sim {
   // Docking & station services
   // -------------------------------------------------------------------------
 
+  // terse pilot callsign for ATC chatter
+  private callsign(meta: PlayerMeta): string {
+    return meta.name.length > 14 ? meta.name.slice(0, 14) : meta.name;
+  }
+
+  // ATC presence: a one-shot approach clearance when you enter a station's
+  // approach envelope, cleared when you leave it (#20).
+  private tickApproach(meta: PlayerMeta, e: Entity): void {
+    if (e.dockedAt || meta.docking || e.cruise !== 'off') return;
+    const near = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
+    if (near && meta.approachStation !== near.id) {
+      meta.approachStation = near.id;
+      this.events.push({
+        type: 'comms', pid: meta.pid, from: `${near.name} ATC`,
+        text: `${this.callsign(meta)}, cleared approach. Fly into the hangar, then VTOL and gear down onto the pad. Under ${DOCK_MAX_SPEED}.`,
+      });
+    }
+    // hysteresis: only forget the clearance once you're well clear, so jockeying
+    // back and forth across the dock-range boundary doesn't replay the call
+    if (meta.approachStation) {
+      const cur = this.station(meta.approachStation);
+      if (!cur || vdist(cur.pos, e.pos) > cur.dockRadius * 1.4) meta.approachStation = null;
+    }
+  }
+
+  // Manual dock key: only confirms what you've already done. If you're set down
+  // on the pad inside the hangar it logs the dock; otherwise it's a wave-off
+  // telling you what's still wrong. There is no suck-in — you fly it yourself.
   requestDock(pid: number): void {
     const meta = this.players.get(pid);
     const e = this.entities.get(pid);
@@ -1847,17 +2216,61 @@ export class Sim {
       this.events.push({ type: 'log', text: 'No station in docking range.', color: '#f66', pid });
       return;
     }
-    if (vlen(e.vel) > DOCK_MAX_SPEED) {
-      this.events.push({ type: 'log', text: `Docking denied: reduce speed below ${DOCK_MAX_SPEED} m/s.`, color: '#fa4', pid });
+    const res = dockCheck(st, e.pos, e.vel, meta.gearDown);
+    if (!res.ok) {
+      this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `Not down yet — ${res.cue}. [Y] for autodock.` });
       return;
     }
+    this.dockShip(meta, e, st, false);
+  }
+
+  // Skill landing: fly into the hangar, drop the gear, set down on the pad and
+  // come to a stop. Once you're settled and motionless on the pad for a beat the
+  // menu opens where you sit — no autopilot, no instant suck-in. After undocking
+  // the dock stays disarmed until you've actually flown back out of the hangar,
+  // so leaving the menu with the gear still down doesn't drag you straight back.
+  private tickDockingDetect(meta: PlayerMeta, e: Entity, dt: number): void {
+    if (e.dead || e.dockedAt || meta.docking || e.cruise !== 'off') { meta.settleTimer = 0; return; }
+    const st = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
+    if (!st) { meta.settleTimer = 0; return; }
+    if (!insideHangar(st, e.pos)) meta.dockArmed = true; // re-arm once you're clear of the bay
+    if (!meta.dockArmed) { meta.settleTimer = 0; return; }
+    if (!dockCheck(st, e.pos, e.vel, meta.gearDown).ok) { meta.settleTimer = 0; return; }
+    meta.settleTimer += dt;
+    if (meta.settleTimer >= DOCK_SETTLE_S) {
+      meta.settleTimer = 0;
+      this.dockShip(meta, e, st, false);
+    }
+  }
+
+  // Autodock convenience service (#17): a paid hands-off final approach for
+  // when you can't be bothered to fly the collar yourself.
+  autodock(pid: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || e.dead || e.dockedAt || meta.docking) return;
+    if (e.cruise !== 'off') {
+      this.events.push({ type: 'log', text: 'Cannot autodock at cruise speed.', color: '#f66', pid });
+      return;
+    }
+    const st = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
+    if (!st) {
+      this.events.push({ type: 'log', text: 'No station in range for autodock.', color: '#f66', pid });
+      return;
+    }
+    const COST = 500;
+    if (meta.profile.credits < COST) {
+      this.events.push({ type: 'log', text: 'Autodock service: insufficient credits (500c).', color: '#f66', pid });
+      return;
+    }
+    meta.profile.credits -= COST;
     meta.docking = { stationId: st.id, t: 0, from: vclone(e.pos) };
-    this.events.push({ type: 'log', text: `Docking clearance granted — ${st.name}.`, color: '#8fb', pid });
+    this.events.push({ type: 'comms', pid, from: `${st.name} ATC`, text: `Autodock fee logged, ${this.callsign(meta)}. Hands off the stick — we have control.` });
   }
 
   private dockShip(meta: PlayerMeta, e: Entity, st: StationDef, viaTow: boolean): void {
     e.dockedAt = st.id;
-    e.pos = vclone(st.pos);
+    e.pos = padPoint(st); // rest on the hangar pad, not buried in the core
     e.vel = v3();
     e.angVel = v3();
     e.firing = false;
@@ -1867,7 +2280,11 @@ export class Sim {
     const prof = meta.profile;
     prof.respawnStation = st.id;
     if (!prof.knownStations.includes(st.id)) prof.knownStations.push(st.id);
+    meta.approachStation = null;
     this.events.push({ type: 'docked', pid: meta.pid, stationId: st.id });
+    if (!viaTow) {
+      this.events.push({ type: 'comms', pid: meta.pid, from: `${st.name} ATC`, text: `Contact. Welcome to ${st.name}.` });
+    }
 
     // customs inspection at legal stations
     if (!st.blackMarket && !viaTow) {
@@ -1909,14 +2326,15 @@ export class Sim {
     if (!meta || !e || !e.dockedAt) return;
     const st = this.station(e.dockedAt)!;
     e.dockedAt = null;
-    // launch outward, away from the planet if there is one
-    const planet = this.system.planets.find((p) => p.stationId === st.id);
-    const dir = planet ? vnorm(vsub(st.pos, planet.pos)) : vnorm(vsub(st.pos, v3()));
-    e.pos = vadd(st.pos, vscale(dir, st.radius + 220));
-    e.orient = qLookAt(dir);
-    e.vel = vscale(dir, 45);
+    // launch out through the hatch: start on the pad, head out along the port
+    const fr = hangarFrame(st);
+    e.pos = vadd(padPoint(st), vscale(fr.f, fr.HH));
+    e.orient = qLookAt(fr.f);
+    e.vel = vscale(fr.f, 45);
     e.shield = e.maxShield;
     meta.undockInvuln = 4;
+    meta.settleTimer = 0;
+    meta.dockArmed = false; // no instant re-dock — fly out of the bay to re-arm
     this.events.push({ type: 'undocked', pid, stationId: st.id });
   }
 

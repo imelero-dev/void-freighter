@@ -9,22 +9,42 @@ import { EntitiesLayer } from '../render/entities';
 import { FxLayer } from '../render/fx';
 import { PostPipeline } from '../render/post';
 import { SceneManager } from '../render/scene';
+import { TerrainPatch } from '../render/terrain';
+import { PlanetQuadtree } from '../render/planet_quadtree';
+import { SkyDome, CloudDeck } from '../render/sky';
+import { terrainHeight } from '../sim/terrain';
+import { atmoHeight } from '../sim/system';
 import { buildStarfield } from '../render/starfield';
-import { BOLT_SPEED, GOODS } from '../sim/data';
+import { BOLT_SPEED, GOODS, MODULE_NAMES, MODULE_TIER_TAGS } from '../sim/data';
 import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
+import { atmosphereAt, skyStrength } from '../sim/system';
+import type { PlanetKind } from '../sim/types';
 import { settings } from '../ui/settings';
 import type { IWorld } from '../world_api';
 import { ChatUi } from '../ui/chat';
-import { el, fmtCredits, fmtDistance } from '../ui/dom';
+import { button, el, fmtCredits, fmtDistance } from '../ui/dom';
 import { Hud } from '../ui/hud';
 import { SystemMap } from '../ui/map';
 import { StationUi } from '../ui/station_windows';
 import { WindowManager } from '../ui/windows';
 import { AudioEngine } from './audio';
 import { CameraRig } from './camera';
+import { buzz, HAPTIC } from './haptics';
 import { bindAxis, bindButton, clearHotasBind, describeAxis, describeButton, GamepadManager } from './gamepad';
 import { InputManager } from './input';
+import { isMobile, TouchControls } from './touch';
 import { BINDABLE, binds, HOTAS_AXES, HOTAS_BUTTONS, keyLabel, resetBinds, setBind } from '../ui/keybinds';
+
+// Sky / atmosphere tint per planet kind — the colour space fills with as you
+// descend into the air column.
+const SKY_COLORS: Record<PlanetKind, number> = {
+  terran: 0x6fa8d6, rocky: 0xc09a6a, barren: 0xb7a890,
+  ice: 0xbcd6ea, lava: 0xd2541e, gas: 0x8a7fb8,
+};
+
+// Render layer the first-person cockpit lives on, so the headlight (which only
+// touches the default world layer 0) can't illuminate the dashboard.
+const COCKPIT_LAYER = 2;
 
 export class GameApp {
   private sm: SceneManager;
@@ -32,12 +52,29 @@ export class GameApp {
   private entities: EntitiesLayer;
   private fx: FxLayer;
   private dust: DustLayer;
+  private terrain: TerrainPatch;
+  // cube-sphere quadtree planet (the real continuous-LOD surface). Built lazily
+  // for whichever planet you're descending to; replaces the patch terrain there.
+  private quadtree: PlanetQuadtree | null = null;
+  private quadtreePlanetId = '';
+  // The cube-sphere quadtree is the real technique but still WIP (low-altitude
+  // geometry artifacts); kept gated OFF so the proven patch terrain ships, and
+  // flipped on for development. TODO: fix close-range skirts/precision, then flip.
+  private static readonly USE_QUADTREE = false;
+  private sky: SkyDome;
+  private clouds: CloudDeck;
+  private dustAcc = 0;
+  private smokeAcc = 0;
   private cockpit: THREE.Group;
   private gamepad = new GamepadManager();
   private gpFireWas: boolean | null = null;
+  private headlight!: THREE.SpotLight;
+  private headlightOn = true;
+  paused = false;
   private post: PostPipeline;
   private hud: Hud;
   private input: InputManager;
+  private touchControls: TouchControls | null = null;
   private camera = new CameraRig();
   private audio = new AudioEngine();
   private wm = new WindowManager();
@@ -49,30 +86,65 @@ export class GameApp {
   private lastT = performance.now();
   private uiRefreshAcc = 0;
   private wasDocked = false;
-  private miningActive = false;
   private lowFuelWarned = false;
   private wasAligned = false;
+  private wasOverheated = false;
   private fovCurrent = 68;
   private alarmUntil = 0;   // hull klaxon bursts on damage, then shuts up
+  private approachBeepAcc = 0; // accumulates toward the next approach-aid beep
+  private skyColor = new THREE.Color(0x6fa8d6); // reused per-frame atmosphere tint
+  private frameAtmoDensity = 0;
+  private frameAtmoKind: PlanetKind = 'rocky';
+  private starfield!: THREE.Group; // faded out as you descend into daylight
+  private warpSmooth = 0; // eased hyperjump warp intensity
+  private entryHeatSmooth = 0; // eased atmospheric re-entry plasma intensity
 
   onExit: (() => void) | null = null;
 
   constructor(private world: IWorld, canvas: HTMLCanvasElement) {
     this.sm = new SceneManager(canvas);
-    this.sm.far.add(buildStarfield(world.system.seed));
+    this.starfield = buildStarfield(world.system.seed);
+    this.sm.far.add(this.starfield);
     this.bodies = new BodiesLayer(this.sm, world.system);
     this.entities = new EntitiesLayer(this.sm, world);
     this.fx = new FxLayer(this.sm, world, this.entities);
     this.dust = new DustLayer(this.sm, world);
+    this.terrain = new TerrainPatch(this.sm);
+    this.sky = new SkyDome(this.sm);
+    this.clouds = new CloudDeck(this.sm);
     // first-person cockpit interior rides on the camera
     this.sm.near.add(this.sm.camera);
     this.cockpit = buildCockpit();
     this.cockpit.scale.setScalar(2.2); // keeps geometry past the near plane
     this.cockpit.position.y = 0.28;    // dashboard peeks into the lower view
     this.sm.camera.add(this.cockpit);
+    // The cockpit interior lives on its own render layer so the HEADLIGHT (a
+    // world-facing spotlight on the camera) never lights the dashboard right in
+    // front of it — only the sun and ambient do. This was the "light coming out
+    // of the dashboard" bug.
+    this.cockpit.traverse((o) => o.layers.set(COCKPIT_LAYER));
+    this.sm.camera.layers.enable(COCKPIT_LAYER);
+    this.sm.sunLightNear.layers.enable(COCKPIT_LAYER);
+    this.sm.ambientNear.layers.enable(COCKPIT_LAYER);
+    // headlights: a warm spot punching into the dark ([I] to toggle).
+    // Lights are physically based (candela), so intensity must scale with the
+    // distance we want lit: with decay 1 the illuminance is intensity/d, so
+    // ~2200 keeps an asteroid readable out to ~700 m. A wide-ish cone reads as
+    // a usable beam rather than a pencil dot.
+    // a focused forward beam (≈34° cone) reaching ~4 km; the per-frame
+    // auto-exposure keeps whatever it lands on at a constant useful brightness
+    this.headlight = new THREE.SpotLight(0xfff0d6, 2200, 4000, 0.3, 0.35, 1.0);
+    // mounted FORWARD of all cockpit geometry (which reaches ~z=-2.1 scaled) so
+    // its cone can never light the dashboard — that was the "light coming out of
+    // the dashboard" glow. Combined with the cockpit render layer below.
+    this.headlight.position.set(0, -0.2, -5);
+    this.headlight.target.position.set(0, 0, -100);
+    this.sm.camera.add(this.headlight);
+    this.sm.camera.add(this.headlight.target);
     this.post = new PostPipeline(this.sm);
     this.hud = new Hud(this.sm.camera);
     this.input = new InputManager(canvas);
+    if (isMobile()) this.touchControls = new TouchControls(this.input);
     this.chat = new ChatUi(() => this.world);
     this.stationUi = new StationUi(world, this.wm, this.audio);
     this.map = new SystemMap(world, this.wm, this.audio);
@@ -84,6 +156,7 @@ export class GameApp {
 
     this.bindInput();
     this.hud.resize();
+    this.applySettings();
     window.addEventListener('resize', this.onResize);
     this.audio.ensure();
     this.hud.pushLog('Systems online. Fly safe out there.', '#8fb');
@@ -100,6 +173,7 @@ export class GameApp {
   destroy(): void {
     this.running = false;
     window.removeEventListener('resize', this.onResize);
+    this.touchControls?.destroy();
   }
 
   // -------------------------------------------------------------------------
@@ -110,6 +184,9 @@ export class GameApp {
     input.on('toggleCruise', () => w.toggleCruise());
     input.on('zeroThrottle', () => input.zeroThrottle());
     input.on('toggleAssist', () => w.toggleFlightAssist());
+    input.on('toggleVtol', () => w.toggleVtol());
+    input.on('toggleGear', () => w.toggleGear());
+    input.on('autodock', () => w.autodock());
     input.on('toggleDrill', () => w.setDrill(!w.drillOn));
     input.on('dock', () => {
       if (w.player?.dockedAt) {
@@ -123,6 +200,13 @@ export class GameApp {
     input.on('targetReticle', () => w.targetReticle());
     input.onFire((on) => w.setFiring(on));
     input.onMissile(() => w.fireMissile());
+    input.onRmb((on) => {
+      if (w.drillOn) {
+        w.setMiningBeam(on);
+      } else if (on) {
+        w.fireMissile();
+      }
+    });
     input.on('map', () => this.toggleWindow('map'));
     input.on('cargo', () => this.toggleWindow('cargo'));
     input.on('ship', () => this.toggleWindow('shipyard'));
@@ -169,7 +253,29 @@ export class GameApp {
       this.hud.cameraMode = this.camera.mode;
     });
     input.on('rescue', () => w.hailRescue());
+    input.on('lights', () => {
+      this.headlightOn = !this.headlightOn;
+      this.audio.click();
+      this.hud.pushLog(`Headlights ${this.headlightOn ? 'ON' : 'OFF'}.`, '#8ad');
+    });
     input.on('controls', () => this.toggleWindow('controls'));
+    input.on('hail', () => {
+      const ship = w.player;
+      const target = ship?.targetId != null ? w.entities.get(ship.targetId) : null;
+      if (target?.npc === 'merchant') {
+        w.hailMerchant(target.id);
+      } else {
+        // no merchant targeted: hail the nearest one in range
+        if (!ship) return;
+        for (const e of w.entities.values()) {
+          if (e.npc === 'merchant' && !e.dead && vdist(e.pos, ship.pos) < 950) {
+            w.hailMerchant(e.id);
+            return;
+          }
+        }
+        this.hud.pushLog('No trader in hailing range.', '#8a8d90');
+      }
+    });
     this.chat.onOpenChange = (open) => {
       this.input.uiMode = open || this.wm.anyOpen();
     };
@@ -184,6 +290,9 @@ export class GameApp {
 
   applySettings(): void {
     this.audio.applyVolume();
+    this.sm.setShadows(settings.shadows);
+    this.hud.showFps = settings.showFps;
+    this.touchControls?.setVisible(settings.mobileControls);
   }
 
   private assistLevel = 0; // smoothed aim-assist strength (no jerky grabs)
@@ -229,6 +338,101 @@ export class GameApp {
     this.audio.click();
     this.wm.toggle(id);
   }
+
+  // Wandering merchant trade window: their wares (premium prices, the odd
+  // gem) + a fence section that buys your goods at 85% of base.
+  private openMerchantWindow(ev: Extract<import('../sim/types').SimEvent, { type: 'merchant' }>): void {
+    const id = 'merchant';
+    let win = this.merchantWin;
+    if (!win) {
+      win = this.wm.register(id, 'TRADER', true);
+      this.merchantWin = win;
+    }
+    this.wm.setTitle(id, ev.name.toUpperCase());
+    while (win.body.firstChild) win.body.removeChild(win.body.firstChild);
+    const w = this.world;
+    const refreshLater = () => setTimeout(() => w.hailMerchant(ev.entityId), 200);
+
+    win.body.appendChild(el('div', 'vf-subline', 'No customs out here. No refunds either.'));
+    const waresBox = el('div', 'vf-section');
+    waresBox.appendChild(el('div', 'vf-section-title', '— THEIR WARES —'));
+    if (ev.wares.length === 0 && !ev.module) {
+      waresBox.appendChild(el('div', 'vf-empty', 'Cleaned out. Come back another rotation.'));
+    }
+    for (const ware of ev.wares) {
+      const def = GOODS[ware.good];
+      const row = el('div', 'vf-row');
+      const gem = ware.price < def.basePrice;
+      row.appendChild(el('span', `vf-cell name${def.legal ? '' : ' illegal'}`, `${ware.qty}× ${def.name}`));
+      const priceEl = el('span', 'vf-cell num', `${ware.price} cr`);
+      if (gem) {
+        priceEl.style.color = '#7fc97f';
+        priceEl.textContent += ' ◆';
+      }
+      row.appendChild(priceEl);
+      const acts = el('span', 'vf-cell actions');
+      for (const n of [1, ware.qty]) {
+        const b = el('button', 'vf-mini');
+        b.textContent = n === ware.qty ? 'all' : String(n);
+        b.addEventListener('click', () => {
+          this.audio.click();
+          w.merchantBuy(ev.entityId, ware.good, n);
+          refreshLater();
+        });
+        acts.appendChild(b);
+      }
+      row.appendChild(acts);
+      waresBox.appendChild(row);
+    }
+    if (ev.module) {
+      const row = el('div', 'vf-row');
+      row.appendChild(el('span', 'vf-cell name', `⚙ ${MODULE_NAMES[ev.module.slot]} ${MODULE_TIER_TAGS[ev.module.tier]} (salvaged)`));
+      const priceEl = el('span', 'vf-cell num', `${ev.module.price} cr ◆`);
+      priceEl.style.color = '#7fc97f';
+      row.appendChild(priceEl);
+      const b = el('button', 'vf-mini');
+      b.textContent = 'BUY';
+      b.addEventListener('click', () => {
+        this.audio.kaching();
+        w.merchantBuyModule(ev.entityId);
+        refreshLater();
+      });
+      row.appendChild(b);
+      waresBox.appendChild(row);
+    }
+    win.body.appendChild(waresBox);
+
+    // fence: they buy anything
+    const sellBox = el('div', 'vf-section');
+    sellBox.appendChild(el('div', 'vf-section-title', '— THEY BUY (85% of base value) —'));
+    const sellable = w.profile.cargo.filter((c) => !c.contractId);
+    if (sellable.length === 0) sellBox.appendChild(el('div', 'vf-empty', 'Your hold has nothing they want.'));
+    for (const c of sellable) {
+      const def = GOODS[c.good];
+      const row = el('div', 'vf-row');
+      row.appendChild(el('span', 'vf-cell name', `${c.qty}× ${def.name}`));
+      row.appendChild(el('span', 'vf-cell num', `${Math.round(def.basePrice * 0.85)} cr/u`));
+      const acts = el('span', 'vf-cell actions');
+      for (const n of [1, c.qty]) {
+        const b = el('button', 'vf-mini sell');
+        b.textContent = n === c.qty ? 'all' : String(n);
+        b.addEventListener('click', () => {
+          this.audio.kaching();
+          w.merchantSell(ev.entityId, c.good, n);
+          refreshLater();
+        });
+        acts.appendChild(b);
+      }
+      row.appendChild(acts);
+      sellBox.appendChild(row);
+    }
+    win.body.appendChild(sellBox);
+    win.refresh = () => {};
+    this.wm.show(id);
+    this.input.releasePointer();
+  }
+
+  private merchantWin: ReturnType<WindowManager['register']> | null = null;
 
   // Derelict story prompt: short creepy log + breach-or-leave choice.
   private openDerelictWindow(entityId: number, name: string, story: string): void {
@@ -413,6 +617,14 @@ export class GameApp {
     if (dt > 0.25) dt = 0.25;
 
     const w = this.world;
+    this.touchControls?.update(dt); // throttle bar sync + look-stick recenter
+    // single-player pause: the sim freezes entirely (online keeps running —
+    // you can't pause other people's universe)
+    if (this.paused && !w.online) {
+      this.post.render(w.time, 0);
+      this.hud.draw(w, this.sm.origin, this.input.cursorX, this.input.cursorY, true);
+      return;
+    }
     this.input.frame(dt, w.input);
     // E2E bot override: scripts write window.VF.botInput instead of fighting
     // the InputManager for w.input
@@ -440,6 +652,38 @@ export class GameApp {
       this.camera.apply(this.sm, ship, alpha, dt);
       this.entities.showPlayer = this.camera.mode === 'chase';
       this.cockpit.visible = this.camera.mode === 'cockpit' && !ship.dockedAt;
+      this.headlight.visible = this.headlightOn && !ship.dockedAt;
+      // Auto-exposing headlight: the inverse-distance falloff means a fixed
+      // intensity sears anything close (bloom blow-out) and barely touches
+      // anything far. Instead, scale intensity to the nearest surface in front
+      // so whatever you light lands at a roughly constant, useful brightness —
+      // never blinding, always doing something. Open space falls back to max.
+      let nearSurf = Infinity;
+      for (const s of w.system.stations) {
+        const sd = vdist(s.pos, ship.pos) - s.radius;
+        if (sd < nearSurf) nearSurf = sd;
+      }
+      for (const en of w.entities.values()) {
+        if (en.id === w.playerId || en.dead) continue;
+        if (en.kind !== 'asteroid' && en.kind !== 'ship') continue;
+        const sd = vdist(en.pos, ship.pos) - en.radius;
+        if (sd < nearSurf) nearSurf = sd;
+      }
+      // target illuminance ≈ sunlight: intensity = k · distance, clamped, and
+      // fade it right down inside a lit atmosphere (it's daylight, and it only
+      // smears the haze otherwise)
+      const atmoNow = atmosphereAt(w.system, ship.pos);
+      this.frameAtmoDensity = atmoNow.density;
+      this.frameAtmoKind = atmoNow.planet?.kind ?? 'rocky';
+      // lava-world heat: a loud, persistent on-screen warning while you're deep
+      // enough in the air to cook, so you climb out before the hull fails (the
+      // upper atmosphere is a safe approach band — see LAVA_HEAT_SAFE in the sim)
+      if (this.frameAtmoKind === 'lava' && this.frameAtmoDensity > 0.25) {
+        this.hud.flashAlert('⚠ HULL OVERHEATING — CLIMB', '#f6552a', 700);
+      }
+      const base = Math.max(120, Math.min(2000, nearSurf * 2.6));
+      // off in lit atmosphere — it's daylight and only smears the haze
+      this.headlight.intensity = base * Math.max(0, 1 - this.frameAtmoDensity * 2.2);
       // speed-based FOV: subtle at maneuver, pronounced under cruise
       const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
       const maneuverKick = Math.min(1.1, speed / Math.max(1, w.shipStats.maxSpeed)) * 6;
@@ -452,10 +696,127 @@ export class GameApp {
     this.entities.update(w.time);
     this.fx.update(dt);
     this.dust.update();
+    // atmosphere: terrain patch, near-scene haze and the sky tint all key off
+    // how deep in a planet's air column the ship is (computed above for the
+    // headlight)
+    const atmoDensity = ship ? this.frameAtmoDensity : 0;
+    // sky brightness ramps in much higher than the (quadratic) physical density,
+    // so you're inside a blue sky moments after entry — not staring at a lit disc
+    // hanging in black space — while the haze still thickens with the real air
+    const skyD = ship ? skyStrength(atmoDensity) : 0;
+    this.skyColor.setHex(SKY_COLORS[this.frameAtmoKind]);
+    // Pick the surface renderer. The cube-sphere quadtree takes over for the
+    // planet you're descending to (continuous LOD, orbit-to-ground); the patch
+    // terrain is the fallback everywhere else.
+    let surfaceReach = 80_000;
+    let surfacePlanetId = '';
+    const nearPlanet = ship ? atmosphereAt(w.system, ship.pos) : null;
+    const useQuad = GameApp.USE_QUADTREE && nearPlanet?.planet
+      && nearPlanet.altitude < atmoHeight(nearPlanet.planet) * 1.4;
+    if (useQuad && ship && nearPlanet?.planet) {
+      const pl = nearPlanet.planet;
+      if (!this.quadtree || this.quadtreePlanetId !== pl.id) {
+        this.quadtree?.dispose();
+        this.quadtree = new PlanetQuadtree(this.sm, pl);
+        this.quadtreePlanetId = pl.id;
+      }
+      const emis = 0.08 + 0.22 * (1 - Math.min(1, nearPlanet.altitude / atmoHeight(pl)));
+      this.quadtree.setAtmosphere(this.skyColor, atmoDensity, emis);
+      this.quadtree.update(this.sm.origin, this.sm.origin);
+      this.quadtree.drainBuilds();
+      this.terrain.update(w.system, { x: 1e12, y: 1e12, z: 1e12 }, this.skyColor, 0); // park the patch
+      surfaceReach = this.quadtree.reach;
+      surfacePlanetId = pl.id;
+    } else {
+      if (this.quadtree) { this.quadtree.dispose(); this.quadtree = null; this.quadtreePlanetId = ''; }
+      if (ship) this.terrain.update(w.system, ship.pos, this.skyColor, atmoDensity);
+      surfaceReach = this.terrain.active ? this.terrain.reach : 80_000;
+      surfacePlanetId = this.terrain.active ? this.terrain.planetId : '';
+    }
+    // fit the near far-plane to the surface's farthest visible ground, and blend
+    // the far-scene planet toward the ground tone so the handoff is seamless —
+    // gradual ramp so the far sphere fades toward the ground as you descend
+    this.sm.setNearFarPlane(surfaceReach);
+    const entryBlend = surfacePlanetId ? this.terrain.blend : 0;
+    this.bodies.setEntryBlend(surfacePlanetId, entryBlend, atmoDensity);
+    this.sm.setAtmosphere(this.skyColor, skyD, atmoDensity);
+    if (ship) {
+      this.sky.update(w.system, ship.pos, this.skyColor, skyD);
+      this.clouds.update(w.system, ship.pos, w.time, atmoDensity);
+      // dust kicked up when you hover/land close to the ground
+      const gAtmo = atmosphereAt(w.system, ship.pos);
+      if (gAtmo.planet && gAtmo.density > 0.08) {
+        const pl = gAtmo.planet;
+        const agl = gAtmo.altitude - terrainHeight({ pos: pl.pos, radius: pl.radius, kind: pl.kind, colorSeed: pl.colorSeed }, ship.pos);
+        const thr = Math.abs(ship.throttle);
+        const spd = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
+        if (agl < 85 && (thr > 0.08 || w.vtolMode || spd > 2)) {
+          this.dustAcc += dt * (0.6 + thr * 2 + (w.vtolMode ? 1.2 : 0));
+          if (this.dustAcc > 0.05) {
+            this.dustAcc = 0;
+            const ux = ship.pos.x - pl.pos.x, uy = ship.pos.y - pl.pos.y, uz = ship.pos.z - pl.pos.z;
+            const ul = Math.hypot(ux, uy, uz) || 1;
+            const up = new THREE.Vector3(ux / ul, uy / ul, uz / ul);
+            const g = new THREE.Vector3(ship.pos.x - this.sm.origin.x, ship.pos.y - this.sm.origin.y, ship.pos.z - this.sm.origin.z).addScaledVector(up, -agl);
+            this.fx.groundDust(g, up, Math.min(1, 0.4 + thr + spd / 25));
+          }
+        }
+      }
+      // smoke venting from heavily damaged ships nearby (own ship only in chase)
+      this.smokeAcc += dt;
+      if (this.smokeAcc > 0.09) {
+        this.smokeAcc = 0;
+        for (const en of w.entities.values()) {
+          if (en.kind !== 'ship' || en.dead || en.maxHull <= 0 || en.hull / en.maxHull >= 0.4) continue;
+          if (en.id === w.playerId && this.camera.mode !== 'chase') continue;
+          const dx = en.pos.x - this.sm.origin.x, dy = en.pos.y - this.sm.origin.y, dz = en.pos.z - this.sm.origin.z;
+          if (dx * dx + dy * dy + dz * dz > 4000 * 4000) continue;
+          this.fx.damageSmoke(new THREE.Vector3(dx, dy, dz), new THREE.Vector3(0, 1, 0));
+        }
+      }
+    } else {
+      this.sky.update(w.system, this.sm.origin, this.skyColor, 0);
+    }
+    // stars wash out in daylight: fade the starfield as the sky brightens (keyed
+    // to the visual sky strength so they're gone once the blue has filled in)
+    const starFade = 1 - Math.min(1, skyD * 1.25);
+    this.starfield.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.Material & { opacity: number };
+      if (m && 'opacity' in m) {
+        const ud = (m as THREE.Material).userData;
+        ud.baseOpacity ??= m.opacity;
+        m.opacity = ud.baseOpacity * starFade;
+      }
+    });
 
     const hullFrac = ship ? ship.hull / ship.maxHull : 1;
     const damageLevel = hullFrac < 0.25 ? (0.25 - hullFrac) * 4 : 0;
-    this.post.render(w.time, Math.min(1, damageLevel));
+    // hyperjump warp: ramps with cruise speed, with a kick from turbo overburn
+    let warp = 0;
+    if (ship) {
+      if (ship.cruise === 'cruise') warp = 0.55 + 0.45 * Math.min(1, ship.cruiseSpeed / Math.max(1, w.shipStats.cruiseMax));
+      else if (ship.cruise === 'charging') warp = 0.2;
+      else if (w.turboActive) warp = 0.25;
+    }
+    this.warpSmooth += (warp - this.warpSmooth) * Math.min(1, dt * 5);
+    // atmospheric re-entry heat: tearing into thickening air at speed lights up a
+    // plasma sheath. Peaks fast in the upper-mid atmosphere, fades as you slow or
+    // the air thins out — the visual proof you've entered the atmosphere.
+    // Triggers at any speed (cruise or manual) — dropping out of cruise into a
+    // planet's atmosphere is the most dramatic entry path and must read visually.
+    let entryHeat = 0;
+    if (ship) {
+      const sp = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
+      const speedF = Math.max(0, Math.min(1, (sp - 120) / 330));
+      const densF = Math.max(0, Math.min(1, (atmoDensity - 0.01) / 0.28));
+      entryHeat = speedF * densF;
+    }
+    this.entryHeatSmooth += (entryHeat - this.entryHeatSmooth) * Math.min(1, dt * 3);
+    // atmospheric entry turbulence: the camera shakes as you barrel through
+    // thickening air at speed — the heavier the air and the faster you go,
+    // the worse the buffeting, exactly like ED's "you're committed" moment
+    this.camera.entryTurbulence = this.entryHeatSmooth;
+    this.post.render(w.time, Math.min(1, damageLevel), this.skyColor, atmoDensity, this.warpSmooth, this.entryHeatSmooth);
     this.hud.draw(w, this.sm.origin, this.input.cursorX, this.input.cursorY, this.input.uiMode);
     if (this.map.isOpen) this.map.draw();
 
@@ -463,11 +824,30 @@ export class GameApp {
     if (this.hud.destAligned && !this.wasAligned) this.audio.alignSnap();
     this.wasAligned = this.hud.destAligned;
 
+    // approach radar aid proximity beep: rate rises as you near the dock on a
+    // good glidepath (#18)
+    const ap = this.hud.approach;
+    if (ap && ap.active && ap.beep > 0 && ship && !ship.dockedAt) {
+      this.approachBeepAcc += dt * ap.beep;
+      if (this.approachBeepAcc >= 1) {
+        this.approachBeepAcc = 0;
+        this.audio.approachBeep(ap.level === 2);
+      }
+    } else {
+      this.approachBeepAcc = 0;
+    }
+
+    // drill overheat buzz (rising edge — the audio drone already ramps with heat)
+    const overheated = w.drillHeat >= 1;
+    if (overheated && !this.wasOverheated) buzz(HAPTIC.overheat);
+    this.wasOverheated = overheated;
+
     // credits readout
     this.creditsHud.textContent = `${fmtCredits(w.profile.credits)}${w.online ? (w.connected ? ' · ONLINE' : ' · RECONNECTING…') : ''}`;
 
     // dock state transitions
     const docked = !!ship?.dockedAt;
+    this.touchControls?.setDocked(docked);
     if (docked && !this.wasDocked) {
       this.stationUi.updateDockBar();
       this.input.releasePointer();
@@ -509,14 +889,58 @@ export class GameApp {
         cruiseFrac: ship.cruiseSpeed / Math.max(1, w.shipStats.cruiseMax),
         docked,
         hullFrac,
-        mining: this.miningActive,
+        mining: w.miningBeamOn,
+        miningHeat: w.drillHeat,
         dead: false,
         turbo: w.turboActive,
         alarm: performance.now() < this.alarmUntil,
+        atmoDensity,
+        entryHeat: this.entryHeatSmooth,
       });
     }
-    this.miningActive = false; // re-set by mining laser events each tick
   };
+
+  private deathOverlay: HTMLElement | null = null;
+
+  // Death screen (#): a full-screen overlay naming the CAUSE of death, the
+  // insurance outcome, and a CONTINUE button that dismisses it. The sim has
+  // already respawned the ship docked at the respawn station, so CONTINUE simply
+  // returns control with the station UI underneath.
+  private showDeathScreen(cause: string, station: string, lostCargo: number, deductible: number): void {
+    this.audio.explosion(true);
+    this.audio.alarmFuel();
+    this.paused = true;            // freeze the offline sim under the overlay
+    this.input.uiMode = true;
+    this.input.releasePointer();
+    this.input.zeroThrottle();
+    this.deathOverlay?.remove();
+
+    const overlay = el('div', 'vf-death');
+    const box = el('div', 'vf-death-box');
+    box.appendChild(el('div', 'vf-death-title', 'SHIP DESTROYED'));
+    box.appendChild(el('div', 'vf-death-cause', cause));
+    const detail = el('div', 'vf-death-detail');
+    detail.innerHTML =
+      `Insurance recovered your hull at <b>${station}</b>.<br>` +
+      `Cargo lost: <b>${lostCargo}</b> units &nbsp;·&nbsp; Deductible: <b>${fmtCredits(deductible)}</b>`;
+    box.appendChild(detail);
+    const row = el('div', 'vf-menu-row');
+    row.appendChild(button('CONTINUE', 'vf-btn big accept', () => this.dismissDeathScreen()));
+    box.appendChild(row);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    this.deathOverlay = overlay;
+  }
+
+  private dismissDeathScreen(): void {
+    this.audio.click();
+    this.deathOverlay?.remove();
+    this.deathOverlay = null;
+    this.paused = false;
+    // hand control back; the ship is docked, so the window manager / station UI
+    // decides the input mode from here
+    this.input.uiMode = this.wm.anyOpen() || this.chat.open;
+  }
 
   private handleEvent(ev: import('../sim/types').SimEvent): void {
     const w = this.world;
@@ -527,13 +951,13 @@ export class GameApp {
         break;
       case 'laser':
         if (ev.mining && ev.fromId === w.playerId) {
-          this.miningActive = true;
           this.audio.miningTick();
         }
         break;
       case 'shot': {
         if (ev.entityId === w.playerId) {
           this.audio.laser(true);
+          this.camera.kick(0.7); // recoil punch gives the shot weight
         } else {
           const ship = w.player;
           if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 2800) {
@@ -544,8 +968,17 @@ export class GameApp {
       }
       case 'hit': {
         if (ev.entityId === w.playerId) {
-          if (ev.shield) this.audio.hitShield();
-          else this.audio.hitHull();
+          if (ev.shield) {
+            this.audio.hitShield();
+            if (ev.broke) {
+              this.audio.shieldDown();
+              this.hud.flashAlert('SHIELDS DOWN', '#e8402a', 1800);
+              buzz(HAPTIC.hullHit);
+            }
+          } else {
+            this.audio.hitHull();
+            buzz(HAPTIC.hullHit);
+          }
           // hull-critical klaxon: a 3.5 s burst per fresh hit, not a loop
           const p = w.player;
           if (!ev.shield && p && p.hull / p.maxHull < 0.3) {
@@ -566,14 +999,21 @@ export class GameApp {
         break;
       case 'pickup': {
         this.audio.pickup();
-        const bits: string[] = [];
-        if (ev.credits > 0) bits.push(fmtCredits(ev.credits));
-        if (ev.good && ev.qty > 0) bits.push(`${ev.qty}× ${GOODS[ev.good]?.name ?? ev.good}`);
-        if (bits.length) this.hud.pushLog(`Recovered: ${bits.join(' + ')}`, '#7fc97f');
+        // a mined-ore stash (no credits, just goods) gets a crisp "→ hold"
+        // confirmation; recovered salvage/credits keep the "Recovered" wording
+        if (ev.credits <= 0 && ev.good && ev.qty > 0) {
+          this.hud.pushLog(`+${ev.qty} ${GOODS[ev.good]?.name ?? ev.good} → hold`, '#7fc97f');
+        } else {
+          const bits: string[] = [];
+          if (ev.credits > 0) bits.push(fmtCredits(ev.credits));
+          if (ev.good && ev.qty > 0) bits.push(`${ev.qty}× ${GOODS[ev.good]?.name ?? ev.good}`);
+          if (bits.length) this.hud.pushLog(`Recovered: ${bits.join(' + ')}`, '#7fc97f');
+        }
         break;
       }
       case 'docked': {
         this.audio.dockThunk();
+        buzz(HAPTIC.docked);
         const st = w.system.stations.find((s) => s.id === ev.stationId);
         this.hud.pushLog(`Docked at ${st?.name ?? ev.stationId}. Shields charging.`, '#8fb');
         break;
@@ -600,6 +1040,7 @@ export class GameApp {
         break;
       case 'lockWarning':
         this.audio.lockWarning();
+        buzz(HAPTIC.lockWarning);
         this.hud.flashAlert('⚠ MISSILE LOCK ⚠');
         break;
       case 'hostileDetected':
@@ -610,17 +1051,36 @@ export class GameApp {
         this.audio.interdiction();
         this.hud.flashAlert('INTERDICTION — CRUISE DROPPED', '#e8402a', 3200);
         break;
+      case 'touchdown': {
+        // dust kick + camera settle on the rising edge of contact
+        const pl = atmosphereAt(this.world.system, { x: ev.x, y: ev.y, z: ev.z }).planet;
+        if (pl) {
+          const ux = ev.x - pl.pos.x, uy = ev.y - pl.pos.y, uz = ev.z - pl.pos.z;
+          const ul = Math.hypot(ux, uy, uz) || 1;
+          const up = new THREE.Vector3(ux / ul, uy / ul, uz / ul);
+          const g = new THREE.Vector3(ev.x - this.sm.origin.x, ev.y - this.sm.origin.y, ev.z - this.sm.origin.z);
+          const burst = Math.min(1, 0.5 + ev.impact / 30);
+          for (let b = 0; b < 5; b++) this.fx.groundDust(g, up, burst);
+        }
+        this.camera.kick(Math.min(1.1, 0.25 + ev.impact / 40));
+        this.audio.explosion(false);
+        if (ev.entityId === this.world.playerId) {
+          this.hud.flashAlert(ev.hard ? 'HARD LANDING' : 'TOUCHDOWN', ev.hard ? '#f6a23a' : '#8fdc9a', 1500);
+        }
+        break;
+      }
       case 'death':
-        this.hud.flashAlert('SHIP DESTROYED', '#e8402a', 5000);
         this.hud.pushLog(`Insurance recovered your hull. Cargo lost: ${ev.lostCargo} units. Deductible: ${fmtCredits(ev.deductible)}.`, '#e8402a');
         this.input.zeroThrottle();
+        this.showDeathScreen(ev.cause, ev.station, ev.lostCargo, ev.deductible);
         break;
       case 'chat':
         this.chat.addMessage(ev.from, ev.text, ev.channel);
         break;
       case 'comms':
-        this.hud.setComms(ev.text);
         this.audio.commsStatic();
+        // radio lives in the chat (Enter shows the full history)
+        this.chat.addMessage(ev.from ?? '', ev.text, 'radio');
         break;
       case 'econ':
         this.hud.pushLog(`NEWS: ${ev.headline}`, '#7fb1c9');
@@ -645,6 +1105,14 @@ export class GameApp {
       case 'derelict':
         this.audio.commsStatic();
         this.openDerelictWindow(ev.entityId, ev.name, ev.story);
+        break;
+      case 'merchant':
+        this.audio.click();
+        this.openMerchantWindow(ev);
+        break;
+      case 'distress':
+        this.audio.hostileDetected();
+        this.hud.flashAlert('MAYDAY — CIVILIAN UNDER ATTACK', '#e8402a', 3200);
         break;
     }
   }

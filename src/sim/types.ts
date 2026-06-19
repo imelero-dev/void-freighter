@@ -80,6 +80,11 @@ export interface MoonDef {
 
 export type StationService = 'market' | 'contracts' | 'shipyard' | 'refinery' | 'fuel';
 
+// Every station docks the same way now: you fly in through the hatch and set
+// down on the landing pad inside the hangar. The field is kept for forward
+// compatibility (and in case bespoke dock styles return).
+export type DockType = 'hangar';
+
 export interface StationDef {
   id: string;
   name: string;
@@ -88,6 +93,8 @@ export interface StationDef {
   radius: number;       // physical size for render/collision
   dockRadius: number;   // request docking within this range
   safeRadius: number;   // station police zone: no PvP, turrets kill pirates
+  dockType: DockType;   // the docking mechanic this station uses
+  dockPort: Vec3;       // unit world direction from centre to the dock feature
   services: StationService[];
   // economy profile: goods this station produces (cheap) / consumes (expensive)
   produces: Record<string, number>;  // goodId -> units per economy tick
@@ -148,6 +155,9 @@ export type EntityKind = 'ship' | 'asteroid' | 'fragment' | 'loot' | 'missile' |
 export type PirateTier = 'scout' | 'fighter' | 'raider' | 'elite' | 'corvette' | 'turret';
 export type AiState = 'patrol' | 'approach' | 'attack' | 'flee';
 
+// Non-hostile ambient traffic (the AI-LIFE layer)
+export type NpcKind = 'superfreighter' | 'freighter' | 'courier' | 'patrol' | 'merchant';
+
 export interface Entity {
   id: number;
   kind: EntityKind;
@@ -163,6 +173,7 @@ export interface Entity {
   // ships
   isPlayer: boolean;
   pirate: PirateTier | null;
+  npc: NpcKind | null;       // ambient traffic (non-hostile AI-LIFE)
   factionId: string;
   hullId: HullId | 'pirate';
   hull: number;
@@ -198,6 +209,7 @@ export interface Entity {
   rockHp: number;
   rockMaxHp: number;
   rockYield: Record<string, number> | null; // remaining units per goodId
+  hotspots: Vec3[] | null;   // mineral seams (asteroids)
   fieldId: string | null;
   rockIndex: number;
   radius: number;            // collision/visual radius
@@ -338,7 +350,7 @@ export interface Destination {
 export type SimEvent =
   | { type: 'log'; text: string; color?: string; pid?: number }
   // fx/fy/fz: attacker position when known — drives the HUD damage-direction arrows
-  | { type: 'hit'; entityId: number; shield: boolean; amount: number; x: number; y: number; z: number; fx?: number; fy?: number; fz?: number }
+  | { type: 'hit'; entityId: number; shield: boolean; amount: number; x: number; y: number; z: number; fx?: number; fy?: number; fz?: number; broke?: boolean }
   | { type: 'shot'; entityId: number; x: number; y: number; z: number }
   | { type: 'explosion'; entityId: number; big: boolean; x: number; y: number; z: number }
   | { type: 'laser'; fromId: number; toX: number; toY: number; toZ: number; hit: boolean; mining?: boolean }
@@ -352,15 +364,19 @@ export type SimEvent =
   | { type: 'lockWarning'; pid: number }       // an enemy locked onto you
   | { type: 'hostileDetected'; pid: number }
   | { type: 'interdiction'; pid: number }
-  | { type: 'death'; pid: number; lostCargo: number; deductible: number }
+  | { type: 'death'; pid: number; lostCargo: number; deductible: number; cause: string; station: string }
   | { type: 'chat'; from: string; text: string; channel: 'local' | 'station' | 'system'; pid?: number }
-  | { type: 'comms'; pid: number; text: string }  // ambient radio chatter
+  | { type: 'comms'; pid: number; text: string; from?: string }  // radio chatter (callsign optional)
   | { type: 'econ'; headline: string }
   | { type: 'rescue'; pid: number; cost: number }
   | { type: 'fine'; pid: number; amount: number; desc: string }
   | { type: 'forcefield'; pid: number; body: string }
   | { type: 'derelict'; pid: number; entityId: number; name: string; story: string }
+  // wandering merchant inventory (response to a hail)
+  | { type: 'merchant'; pid: number; entityId: number; name: string; wares: Array<{ good: string; qty: number; price: number }>; module: { slot: ModuleSlot; tier: number; price: number } | null }
+  | { type: 'distress'; pid: number; entityId: number; text: string }
   | { type: 'cruiseChange'; entityId: number; state: CruiseState }
+  | { type: 'touchdown'; entityId: number; impact: number; hard: boolean; x: number; y: number; z: number }
   | { type: 'refined'; pid: number; goodIn: string; qtyIn: number; goodOut: string; qtyOut: number };
 
 export function dist(a: Vec3, b: Vec3): number {

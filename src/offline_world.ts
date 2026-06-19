@@ -59,9 +59,14 @@ export class OfflineWorld implements IWorld {
   get time(): number { return this.sim.time; }
   get newsLog(): string[] { return this.sim.newsLog; }
   get flightAssist(): boolean { return this.meta.flightAssist; }
+  get vtolMode(): boolean { return this.meta.vtol; }
+  get gearDown(): boolean { return this.meta.gearDown; }
   get drillOn(): boolean { return this.meta.drillOn; }
   get turboCharge(): number { return this.meta.turboCharge; }
   get turboActive(): boolean { return this.meta.turboActive; }
+  get drillHeat(): number { return this.meta.drillHeat; }
+  get drillOverheated(): boolean { return this.meta.drillOverheated; }
+  get miningBeamOn(): boolean { return this.meta.beamFiring; }
   get input(): ShipInput { return this.meta.input; }
   set input(v: ShipInput) { Object.assign(this.meta.input, v); }
   get renderAlpha(): number { return this.acc / DT; }
@@ -131,12 +136,16 @@ export class OfflineWorld implements IWorld {
   setFiring(on: boolean): void { this.sim.setFiring(this.playerId, on); }
   fireMissile(): void { this.sim.fireMissile(this.playerId); }
   setDrill(on: boolean): void { this.sim.setDrill(this.playerId, on); }
+  setMiningBeam(on: boolean): void { this.sim.setMiningBeam(this.playerId, on); }
   toggleCruise(): void { this.sim.toggleCruise(this.playerId); }
   toggleFlightAssist(): void { this.sim.toggleFlightAssist(this.playerId); }
+  toggleVtol(): void { this.sim.toggleVtol(this.playerId); }
+  toggleGear(): void { this.sim.toggleGear(this.playerId); }
   setTarget(id: number | null): void { this.sim.setTarget(this.playerId, id); }
   tabTarget(): void { this.sim.tabTarget(this.playerId); }
   targetReticle(): void { this.sim.targetReticle(this.playerId); }
   requestDock(): void { this.sim.requestDock(this.playerId); }
+  autodock(): void { this.sim.autodock(this.playerId); }
   undock(): void { this.sim.undock(this.playerId); }
   setDestination(dest: Destination | null): void { this.sim.setDestination(this.playerId, dest); }
   hailRescue(): void { this.sim.hailRescue(this.playerId); }
@@ -151,6 +160,10 @@ export class OfflineWorld implements IWorld {
   restockCannonAmmo(): void { this.sim.restockCannonAmmo(this.playerId); }
   openDerelict(entityId: number): void { this.sim.openDerelict(this.playerId, entityId); }
   buyStationInfo(stationId: string): void { this.sim.buyStationInfo(this.playerId, stationId); }
+  hailMerchant(entityId: number): void { this.sim.traffic.hailMerchant(this.playerId, entityId); }
+  merchantBuy(entityId: number, goodId: string, qty: number): void { this.sim.traffic.merchantBuy(this.playerId, entityId, goodId, qty); }
+  merchantBuyModule(entityId: number): void { this.sim.traffic.merchantBuyModule(this.playerId, entityId); }
+  merchantSell(entityId: number, goodId: string, qty: number): void { this.sim.traffic.merchantSell(this.playerId, entityId, goodId, qty); }
   rentWorkshop(): void { this.sim.rentWorkshop(this.playerId); }
   craftModule(slot: ModuleSlot, tier: number): void { this.sim.craftModule(this.playerId, slot, tier); }
   craftRepairKit(): void { this.sim.craftRepairKit(this.playerId); }

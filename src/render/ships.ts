@@ -2,19 +2,122 @@
 // Forward is -Z. Thruster cones glow with throttle.
 
 import * as THREE from 'three';
+import { Rng } from '../sim/rng';
 import type { Entity, HullId, PirateTier } from '../sim/types';
 
 const HULL_GRAY = 0x6b6f73;
 const HULL_DARK = 0x44474a;
 const RUST = 0x7a4a30;
 
+// Procedural hull plating: panel seams, rivets, weld lines and grime, so the
+// primitive hulls read as built spacecraft instead of toy blocks (#8). One
+// shared greyscale map + roughness map, tinted per material by its colour.
+let hullMap: THREE.CanvasTexture | null = null;
+let hullRough: THREE.CanvasTexture | null = null;
+function buildHullTextures(): void {
+  const S = 256;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const r = document.createElement('canvas'); r.width = r.height = S;
+  const ctx = c.getContext('2d')!, rx = r.getContext('2d')!;
+  ctx.fillStyle = '#b8bcc0'; ctx.fillRect(0, 0, S, S);
+  rx.fillStyle = '#9a9a9a'; rx.fillRect(0, 0, S, S);
+  const rng = new Rng(0x5eed);
+  // panels: a grid of plates with slightly different shade + a darker seam
+  for (let gy = 0; gy < 6; gy++) {
+    for (let gx = 0; gx < 6; gx++) {
+      const x = gx * (S / 6), y = gy * (S / 6), w = S / 6, h = S / 6;
+      const shade = 150 + rng.int(0, 70);
+      ctx.fillStyle = `rgb(${shade},${shade + 4},${shade + 8})`;
+      ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+      // roughness varies per panel (some scuffed)
+      const rr = 120 + rng.int(0, 90);
+      rx.fillStyle = `rgb(${rr},${rr},${rr})`;
+      rx.fillRect(x + 1, y + 1, w - 2, h - 2);
+    }
+  }
+  // seams
+  ctx.strokeStyle = 'rgba(40,44,48,0.7)'; ctx.lineWidth = 1.5;
+  for (let i = 0; i <= 6; i++) {
+    const p = i * (S / 6);
+    ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, S); ctx.moveTo(0, p); ctx.lineTo(S, p); ctx.stroke();
+  }
+  // rivets along the seams
+  ctx.fillStyle = 'rgba(60,64,68,0.8)';
+  for (let i = 0; i <= 6; i++) for (let j = 0; j < S; j += 14) {
+    ctx.fillRect(i * (S / 6) - 1, j, 2, 2); ctx.fillRect(j, i * (S / 6) - 1, 2, 2);
+  }
+  // grime streaks + scratches
+  for (let i = 0; i < 60; i++) {
+    const x = rng.range(0, S), y = rng.range(0, S);
+    ctx.fillStyle = `rgba(30,28,26,${rng.range(0.05, 0.2)})`;
+    ctx.fillRect(x, y, rng.range(1, 3), rng.range(6, 40));
+  }
+  hullMap = new THREE.CanvasTexture(c);
+  hullMap.colorSpace = THREE.SRGBColorSpace;
+  hullMap.wrapS = hullMap.wrapT = THREE.RepeatWrapping;
+  hullRough = new THREE.CanvasTexture(r);
+  hullRough.wrapS = hullRough.wrapT = THREE.RepeatWrapping;
+}
+
 function mat(color: number, rough = 0.8, metal = 0.6): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, flatShading: true });
+  if (!hullMap) buildHullTextures();
+  // a faint emissive keeps hulls from reading as pure-black silhouettes in the
+  // dark (#9); the plating map + roughness map make them read as real hull (#8)
+  return new THREE.MeshStandardMaterial({
+    color, roughness: rough, metalness: metal, flatShading: true,
+    map: hullMap, roughnessMap: hullRough,
+    emissive: 0x0a0c10, emissiveIntensity: 1,
+  });
+}
+
+// Tinted cockpit glass: dark, glossy, a faint inner glow so it reads as a lit
+// canopy rather than a black hole. Returns the glass plus an optional frame.
+function canopy(w: number, h: number, d: number): THREE.Mesh {
+  const glass = new THREE.MeshStandardMaterial({
+    color: 0x0e1820, roughness: 0.12, metalness: 0.95,
+    emissive: 0x16314a, emissiveIntensity: 0.7, flatShading: true,
+  });
+  return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), glass);
+}
+
+// Scatter small hull detail (vents, boxes, conduit) over a region so the
+// primitive forms read as built, lived-in machinery instead of toy blocks.
+function greeble(g: THREE.Group, seed: number, n: number, ext: { x: number; y: number; z: number }): void {
+  const rng = new Rng(seed);
+  for (let i = 0; i < n; i++) {
+    const w = rng.range(0.25, 0.9), h = rng.range(0.15, 0.5), d = rng.range(0.3, 1.4);
+    const b = new THREE.Mesh(
+      new THREE.BoxGeometry(w, h, d),
+      mat(rng.chance(0.5) ? HULL_DARK : HULL_GRAY, rng.range(0.7, 0.95), 0.55),
+    );
+    b.position.set(rng.range(-ext.x, ext.x), ext.y + h * 0.5, rng.range(-ext.z, ext.z));
+    b.rotation.y = rng.chance(0.3) ? rng.range(-0.3, 0.3) : 0;
+    g.add(b);
+  }
+  // a couple of thin antennae/whip aerials
+  for (let i = 0; i < 2; i++) {
+    const len = rng.range(1.2, 2.6);
+    const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, len, 4), mat(0x1c1e20, 0.6, 0.7));
+    ant.position.set(rng.range(-ext.x, ext.x), ext.y + len * 0.5, rng.range(-ext.z, ext.z));
+    ant.rotation.x = rng.range(-0.15, 0.15);
+    g.add(ant);
+  }
+}
+
+// A flared engine intake ring set just ahead of a nacelle's thruster.
+function intakeRing(radius: number, z: number, x: number, y: number): THREE.Mesh {
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(radius, radius * 0.22, 8, 14),
+    mat(0x303336, 0.5, 0.85),
+  );
+  ring.position.set(x, y, z);
+  return ring;
 }
 
 export interface ShipView {
   group: THREE.Group;
   thrusters: THREE.Mesh[];
+  glows: THREE.Sprite[];   // additive engine bloom, reads at range
   kind: string;
 }
 
@@ -24,29 +127,141 @@ function thruster(size: number): THREE.Mesh {
     new THREE.MeshBasicMaterial({ color: 0xff8830, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }),
   );
   m.rotation.x = -Math.PI / 2; // cone points +Z (backwards)
+  m.userData.size = size;      // remembered so engine glow can size to it
   return m;
+}
+
+// shared soft radial sprite for engine bloom / running lights
+let glowTex: THREE.Texture | null = null;
+function getGlowTex(): THREE.Texture {
+  if (glowTex) return glowTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.55)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  glowTex = new THREE.CanvasTexture(c);
+  return glowTex;
+}
+
+// a small steady running light: a bright bloom-friendly point that reads from
+// far away thanks to the bloom pass picking up the saturated colour
+function navLight(color: number, x: number, y: number, z: number, size: number): THREE.Sprite {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: getGlowTex(), color, transparent: true, blending: THREE.AdditiveBlending,
+    depthWrite: false, opacity: 0.95,
+  }));
+  s.position.set(x, y, z);
+  s.scale.setScalar(size);
+  return s;
+}
+
+// Give a finished hull its running lights + engine bloom so it is identifiable
+// at a distance (port red, starboard green, white tail beacon), sized to the
+// hull's bounding box so it scales across every class.
+function addLights(view: ShipView): void {
+  const box = new THREE.Box3().setFromObject(view.group);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const span = Math.max(size.x, size.y, size.z);
+  const navSize = Math.max(1.2, span * 0.16);
+  const cx = (box.min.x + box.max.x) / 2;
+  const cy = (box.min.y + box.max.y) / 2;
+  // forward is -Z: nose at min.z, tail at max.z
+  const nose = box.min.z + size.z * 0.18;
+  const tail = box.max.z - size.z * 0.05;
+  const lights = [
+    navLight(0xff3030, box.min.x, cy, cx ? cx : 0, navSize),   // port (red)
+    navLight(0x30ff44, box.max.x, cy, 0, navSize),             // starboard (green)
+    navLight(0xfff0e0, cx, box.max.y, tail, navSize * 0.9),    // tail beacon (white)
+    navLight(0xffe7c0, cx, cy, nose, navSize * 0.8),           // forward marker
+  ];
+  // fix z positions (navLight set z=0 above for the wing lights)
+  lights[0].position.set(box.min.x, cy, nose + size.z * 0.25);
+  lights[1].position.set(box.max.x, cy, nose + size.z * 0.25);
+  for (const l of lights) view.group.add(l);
+
+  // engine nozzles: a dark flared ring around each thruster so the drives read
+  // as real engine bells, not bare glowing cones (#8)
+  for (const t of view.thrusters) {
+    const sz = (t.userData.size as number) ?? 1;
+    const nozzle = new THREE.Mesh(
+      new THREE.CylinderGeometry(sz * 1.5, sz * 1.15, sz * 1.6, 10, 1, true),
+      new THREE.MeshStandardMaterial({ color: 0x26282b, roughness: 0.6, metalness: 0.8, side: THREE.DoubleSide, emissive: 0x140805, emissiveIntensity: 1 }),
+    );
+    nozzle.rotation.x = Math.PI / 2;
+    nozzle.position.copy(t.position);
+    nozzle.position.z += sz * 0.4;
+    view.group.add(nozzle);
+  }
+
+  // engine bloom: a fat additive sprite behind each thruster, pulsing with
+  // throttle in updateThrusters — this is what makes a burning ship pop
+  for (const t of view.thrusters) {
+    const sz = (t.userData.size as number) ?? 1;
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: getGlowTex(), color: 0xff8a3a, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.0,
+    }));
+    glow.position.copy(t.position);
+    glow.position.z += sz * 1.5;
+    glow.scale.setScalar(sz * 5.5);
+    glow.userData.baseScale = sz * 5.5;
+    view.group.add(glow);
+    view.glows.push(glow);
+  }
 }
 
 function buildShuttle(): ShipView {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.4, 8.5), mat(HULL_GRAY));
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(1.7, 3.2, 4), mat(HULL_DARK));
+  // tapered fuselage: a wider aft body stepping down to a narrow forebody, with
+  // a layered belly — a real airframe silhouette, not a single block
+  const aft = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.5, 4.6), mat(HULL_GRAY));
+  aft.position.z = 1.6;
+  const mid = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.2, 3.4), mat(HULL_GRAY));
+  mid.position.z = -1.4;
+  const fore = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.7, 3.0), mat(HULL_DARK));
+  fore.position.set(0, -0.15, -4.0);
+  const belly = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.9, 8.2), mat(HULL_DARK, 0.9, 0.5));
+  belly.position.set(0, -1.2, 0.4);
+  // chiselled nose (6-sided, flat top) instead of a 4-sided toy cone
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(1.35, 2.8, 6), mat(HULL_DARK));
   nose.rotation.x = -Math.PI / 2;
-  nose.rotation.y = Math.PI / 4;
-  nose.position.z = -5.5;
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.1, 2.2), mat(0x222a30, 0.3, 0.9));
-  cabin.position.set(0, 1.4, -2.2);
-  const engL = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.1, 3.6, 6), mat(RUST));
-  engL.rotation.x = Math.PI / 2;
-  engL.position.set(-2.4, -0.2, 2.6);
-  const engR = engL.clone();
-  engR.position.x = 2.4;
-  const tL = thruster(0.8);
-  tL.position.set(-2.4, -0.2, 4.8);
-  const tR = thruster(0.8);
-  tR.position.set(2.4, -0.2, 4.8);
-  g.add(body, nose, cabin, engL, engR, tL, tR);
-  return { group: g, thrusters: [tL, tR], kind: 'shuttle' };
+  nose.position.set(0, -0.2, -6.2);
+  // raked cockpit canopy + a thin frame brow
+  const glass = canopy(2.0, 0.95, 2.4);
+  glass.position.set(0, 1.05, -2.7);
+  glass.rotation.x = -0.22;
+  const brow = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.25, 0.4), mat(HULL_DARK));
+  brow.position.set(0, 1.55, -3.9);
+  // dorsal spine + winglets
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 5.2), mat(HULL_DARK));
+  spine.position.set(0, 1.35, 0.8);
+  for (const side of [-1, 1]) {
+    const winglet = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.22, 1.8), mat(HULL_DARK, 0.9, 0.45));
+    winglet.position.set(side * 2.7, -0.2, 2.6);
+    winglet.rotation.z = side * 0.18;
+    g.add(winglet);
+  }
+  // twin engine nacelles with intake rings; thrusters at their tails
+  const eng: THREE.Mesh[] = [];
+  const tL = thruster(0.8), tR = thruster(0.8);
+  const ts = [tL, tR];
+  [-1, 1].forEach((side, i) => {
+    const nac = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.05, 4.2, 10), mat(RUST, 0.85, 0.55));
+    nac.rotation.x = Math.PI / 2;
+    nac.position.set(side * 2.3, -0.15, 2.4);
+    eng.push(nac);
+    g.add(intakeRing(0.95, 0.2, side * 2.3, -0.15));
+    ts[i].position.set(side * 2.3, -0.15, 4.7);
+  });
+  g.add(aft, mid, fore, belly, nose, glass, brow, spine, ...eng, tL, tR);
+  greeble(g, 0x5117, 7, { x: 1.4, y: 1.05, z: 2.4 });
+  return { group: g, thrusters: [tL, tR], kind: 'shuttle', glows: [] };
 }
 
 function buildHauler(): ShipView {
@@ -54,13 +269,18 @@ function buildHauler(): ShipView {
   const spine = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 18), mat(HULL_DARK));
   const cab = new THREE.Mesh(new THREE.BoxGeometry(4.6, 3.6, 4), mat(HULL_GRAY));
   cab.position.z = -10;
-  const window = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1, 0.4), mat(0x223038, 0.3, 0.9));
-  window.position.set(0, 0.8, -12);
+  const glass = canopy(3.6, 1.1, 0.5);
+  glass.position.set(0, 0.8, -12);
+  glass.rotation.x = -0.12;
   for (let i = 0; i < 3; i++) {
     const box = new THREE.Mesh(new THREE.BoxGeometry(5.4, 4.2, 4.6), mat(i % 2 ? 0x5a4f3a : 0x4a5560, 0.95, 0.3));
     box.position.z = -3.5 + i * 5.4;
     box.position.y = 0.5;
     g.add(box);
+    // cargo strap ribs across each container
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(5.7, 0.3, 0.5), mat(0x2a2c2e, 0.9, 0.4));
+    rib.position.set(0, 0.5, box.position.z);
+    g.add(rib);
   }
   const eng = new THREE.Mesh(new THREE.BoxGeometry(5, 4, 3), mat(RUST));
   eng.position.z = 10;
@@ -68,16 +288,22 @@ function buildHauler(): ShipView {
   t1.position.set(-1.4, 0, 12.2);
   const t2 = thruster(1.1);
   t2.position.set(1.4, 0, 12.2);
-  g.add(spine, cab, window, eng, t1, t2);
-  return { group: g, thrusters: [t1, t2], kind: 'hauler' };
+  g.add(intakeRing(1.1, 11, -1.4, 0), intakeRing(1.1, 11, 1.4, 0));
+  g.add(spine, cab, glass, eng, t1, t2);
+  greeble(g, 0x4a17, 6, { x: 1.8, y: 1.5, z: 4 });
+  return { group: g, thrusters: [t1, t2], kind: 'hauler', glows: [] };
 }
 
 function buildProspector(): ShipView {
   const g = new THREE.Group();
-  const pod = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 7, 8), mat(HULL_GRAY));
+  const pod = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 7, 10), mat(HULL_GRAY));
   pod.rotation.x = Math.PI / 2;
-  const cab = new THREE.Mesh(new THREE.SphereGeometry(1.9, 10, 8), mat(0x2a3238, 0.4, 0.8));
+  const cab = new THREE.Mesh(new THREE.SphereGeometry(1.9, 12, 9), mat(0x2a3238, 0.4, 0.8));
   cab.position.z = -4.2;
+  const visor = canopy(2.0, 1.0, 1.4);
+  visor.position.set(0, 0.7, -4.6);
+  visor.rotation.x = -0.25;
+  g.add(visor);
   // drill arms
   for (const side of [-1, 1]) {
     const arm = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 6.5), mat(HULL_DARK));
@@ -87,34 +313,41 @@ function buildProspector(): ShipView {
     drill.position.set(side * 3.1, -0.6, -6.6);
     g.add(arm, drill);
   }
-  const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 4, 8), mat(RUST));
+  const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 4, 10), mat(RUST));
   tank.rotation.z = Math.PI / 2;
   tank.position.set(0, 2.4, 1);
   const t1 = thruster(1.0);
   t1.position.set(0, 0, 4.8);
-  g.add(pod, cab, tank, t1);
-  return { group: g, thrusters: [t1], kind: 'prospector' };
+  g.add(pod, cab, tank, t1, intakeRing(1.0, 3.0, 0, 0));
+  greeble(g, 0x9317, 5, { x: 1.6, y: 2.6, z: 2 });
+  return { group: g, thrusters: [t1], kind: 'prospector', glows: [] };
 }
 
 function buildInterceptor(): ShipView {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.ConeGeometry(1.8, 11, 5), mat(HULL_GRAY));
+  const body = new THREE.Mesh(new THREE.ConeGeometry(1.8, 11, 6), mat(HULL_GRAY));
   body.rotation.x = -Math.PI / 2;
-  const cab = new THREE.Mesh(new THREE.SphereGeometry(1.1, 8, 6), mat(0x202c34, 0.3, 0.9));
-  cab.position.set(0, 0.9, -1);
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 7), mat(HULL_DARK));
+  spine.position.set(0, 0.7, 1.5);
+  const glass = canopy(1.3, 0.8, 2.0);
+  glass.position.set(0, 0.85, -1.2);
+  glass.rotation.x = -0.3;
   for (const side of [-1, 1]) {
     const wingShape = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.3, 3.4), mat(HULL_DARK));
     wingShape.position.set(side * 3.6, 0, 1.8);
     wingShape.rotation.z = side * 0.12;
+    // wingtip + cannon
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 2.2), mat(0x6e3326, 0.8, 0.5));
+    tip.position.set(side * 6.4, 0.1, 1.6);
     const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 3.4, 6), mat(0x303336, 0.4, 0.9));
     gun.rotation.x = Math.PI / 2;
     gun.position.set(side * 5.6, -0.2, -0.6);
-    g.add(wingShape, gun);
+    g.add(wingShape, tip, gun);
   }
   const t1 = thruster(1.0);
   t1.position.set(0, 0, 5.9);
-  g.add(body, cab, t1);
-  return { group: g, thrusters: [t1], kind: 'interceptor' };
+  g.add(body, spine, glass, t1);
+  return { group: g, thrusters: [t1], kind: 'interceptor', glows: [] };
 }
 
 function buildFreighter(): ShipView {
@@ -122,11 +355,18 @@ function buildFreighter(): ShipView {
   const spine = new THREE.Mesh(new THREE.BoxGeometry(5, 5, 34), mat(HULL_DARK));
   const bridge = new THREE.Mesh(new THREE.BoxGeometry(7, 6, 5), mat(HULL_GRAY));
   bridge.position.set(0, 1.5, -17);
+  const glass = canopy(5.4, 1.2, 0.6);
+  glass.position.set(0, 2.6, -19.4);
+  glass.rotation.x = -0.15;
   for (let i = 0; i < 4; i++) {
     for (const side of [-1, 1]) {
       const rack = new THREE.Mesh(new THREE.BoxGeometry(5.5, 6.5, 6.5), mat(i % 2 ? 0x55492f : 0x3f4c58, 0.95, 0.25));
       rack.position.set(side * 5.4, 0, -9 + i * 6.9);
       g.add(rack);
+      // container locking ribs
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(5.8, 6.8, 0.5), mat(0x26282a, 0.9, 0.4));
+      rib.position.set(side * 5.4, 0, rack.position.z);
+      g.add(rib);
     }
   }
   const eng = new THREE.Mesh(new THREE.BoxGeometry(9, 7, 5), mat(RUST));
@@ -136,10 +376,11 @@ function buildFreighter(): ShipView {
     const t = thruster(1.5);
     t.position.set(x, 0, 22.5);
     ts.push(t);
-    g.add(t);
+    g.add(t, intakeRing(1.5, 20, x, 0));
   }
-  g.add(spine, bridge, eng);
-  return { group: g, thrusters: ts, kind: 'freighter' };
+  g.add(spine, bridge, glass, eng);
+  greeble(g, 0xf317, 9, { x: 2.2, y: 2.5, z: 14 });
+  return { group: g, thrusters: ts, kind: 'freighter', glows: [] };
 }
 
 function buildCorvette(): ShipView {
@@ -171,7 +412,7 @@ function buildCorvette(): ShipView {
     g.add(t);
   }
   g.add(hull, prow, bridge);
-  return { group: g, thrusters: ts, kind: 'pirate_corvette' };
+  return { group: g, thrusters: ts, kind: 'pirate_corvette', glows: [] };
 }
 
 function buildTurret(): ShipView {
@@ -186,7 +427,7 @@ function buildTurret(): ShipView {
     g.add(barrel);
   }
   g.add(base, head);
-  return { group: g, thrusters: [], kind: 'pirate_turret' };
+  return { group: g, thrusters: [], kind: 'pirate_turret', glows: [] };
 }
 
 function buildPirate(tier: PirateTier): ShipView {
@@ -212,10 +453,10 @@ function buildPirate(tier: PirateTier): ShipView {
   t1.position.set(0, 0, 4.4);
   g.add(body, wingL, wingR, spike, t1);
   g.scale.setScalar(scale);
-  return { group: g, thrusters: [t1], kind: `pirate_${tier}` };
+  return { group: g, thrusters: [t1], kind: `pirate_${tier}`, glows: [] };
 }
 
-export function buildShipMesh(hullId: HullId | 'pirate', pirateTier?: PirateTier | null): ShipView {
+function buildHull(hullId: HullId | 'pirate', pirateTier?: PirateTier | null): ShipView {
   switch (hullId) {
     case 'shuttle': return buildShuttle();
     case 'hauler': return buildHauler();
@@ -226,12 +467,35 @@ export function buildShipMesh(hullId: HullId | 'pirate', pirateTier?: PirateTier
   }
 }
 
+export function buildShipMesh(hullId: HullId | 'pirate', pirateTier?: PirateTier | null): ShipView {
+  const view = buildHull(hullId, pirateTier);
+  addLights(view);
+  return view;
+}
+
 // Per-frame thruster glow update from entity state.
 export function updateThrusters(view: ShipView, e: Entity): void {
-  const power = e.cruise === 'cruise' ? 1.4 : Math.max(Math.abs(e.throttle), 0.06);
+  const cruising = e.cruise === 'cruise';
+  const power = cruising ? 1.5 : Math.max(Math.abs(e.throttle), 0.06);
+  // afterburner: the plume stretches and shifts blue-white at cruise/full burn
+  const burn = cruising || power > 0.98;
+  const lenMul = cruising ? 3.6 : power > 0.98 ? 2.8 : 2.2;
+  const flameHex = burn ? 0x9ad0ff : 0xff8830;
   for (const t of view.thrusters) {
     const flicker = 0.85 + Math.random() * 0.3; // visual only — not sim state
-    t.scale.set(power * flicker, power * 2.2 * flicker, power * flicker);
-    (t.material as THREE.MeshBasicMaterial).opacity = Math.min(1, 0.25 + power * 0.7);
+    t.scale.set(power * flicker, power * lenMul * flicker, power * flicker);
+    const m = t.material as THREE.MeshBasicMaterial;
+    m.color.setHex(flameHex);
+    m.opacity = Math.min(1, 0.25 + power * 0.7);
+  }
+  // engine bloom tracks throttle so a thrusting ship lights up and stands out
+  // against the dark long before knife range
+  for (const glow of view.glows) {
+    const flicker = 0.88 + Math.random() * 0.24;
+    const base = glow.userData.baseScale as number;
+    glow.scale.setScalar(base * (0.5 + power * 0.9) * flicker * (burn ? 1.25 : 1));
+    const gm = glow.material as THREE.SpriteMaterial;
+    gm.color.setHex(burn ? 0xbfe0ff : 0xff8a3a);
+    gm.opacity = Math.min(0.82, 0.1 + power * 0.6);
   }
 }

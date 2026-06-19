@@ -4,20 +4,23 @@
 import type { ShipInput } from '../sim/types';
 import { binds } from '../ui/keybinds';
 import { settings } from '../ui/settings';
+import { isMobile } from './touch';
 
 export type GameAction =
   | 'toggleCruise' | 'zeroThrottle' | 'toggleAssist' | 'toggleDrill'
-  | 'dock' | 'tab' | 'targetReticle' | 'fireMissile' | 'rescue'
+  | 'dock' | 'tab' | 'targetReticle' | 'fireMissile' | 'rescue' | 'hail'
   | 'map' | 'cargo' | 'ship' | 'journal' | 'market' | 'contacts' | 'chat'
-  | 'setDestination' | 'escape' | 'toggleCamera' | 'help' | 'controls';
+  | 'setDestination' | 'escape' | 'toggleCamera' | 'help' | 'controls' | 'lights'
+  | 'toggleVtol' | 'toggleGear' | 'autodock';
 
 // bind id -> discrete action (axis-style binds are read in frame())
 const BIND_ACTIONS: Record<string, GameAction> = {
   cruise: 'toggleCruise', cutThrottle: 'zeroThrottle', assist: 'toggleAssist',
+  vtol: 'toggleVtol', gear: 'toggleGear', autodock: 'autodock',
   drill: 'toggleDrill', dock: 'dock', tab: 'tab', reticle: 'targetReticle',
   map: 'map', cargo: 'cargo', ship: 'ship', journal: 'journal',
   market: 'market', contacts: 'contacts', chat: 'chat', dest: 'setDestination',
-  camera: 'toggleCamera', rescue: 'rescue', help: 'help',
+  camera: 'toggleCamera', rescue: 'rescue', help: 'help', hail: 'hail', lights: 'lights',
 };
 
 export class InputManager {
@@ -28,24 +31,37 @@ export class InputManager {
   firing = false;
   pointerLocked = false;
   uiMode = false; // true while a window has focus: flight input suspended
+  // roll-hold state written by TouchControls (no key code to bind to)
+  touchRollLeft = false;
+  touchRollRight = false;
+  // strafe stick written by TouchControls drag-from-roll, [-1, 1]
+  touchStrafeX = 0;
+  touchStrafeY = 0;
+  // touch throttle pushed into the reserved top band -> turbo overburn
+  mobileBoost = false;
 
   private keys = new Set<string>();
   private listeners = new Map<GameAction, Array<() => void>>();
   private fireListeners: Array<(on: boolean) => void> = [];
   private missileListeners: Array<() => void> = [];
+  private rmbListeners: Array<(on: boolean) => void> = [];
 
   constructor(private canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (ev) => this.onKeyDown(ev));
     window.addEventListener('keyup', (ev) => this.keys.delete(ev.code));
     window.addEventListener('blur', () => this.keys.clear());
-    canvas.addEventListener('click', () => {
-      if (!this.uiMode && !this.pointerLocked) void canvas.requestPointerLock();
-    });
+    // mobile: no pointer lock — TouchControls writes cursorX/Y directly
+    if (!isMobile()) {
+      canvas.addEventListener('click', () => {
+        if (!this.uiMode && !this.pointerLocked) void canvas.requestPointerLock();
+      });
+    }
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === canvas;
       if (!this.pointerLocked) {
         this.firing = false;
         for (const fn of this.fireListeners) fn(false);
+        for (const fn of this.rmbListeners) fn(false);
       }
     });
     window.addEventListener('mousemove', (ev) => {
@@ -61,13 +77,16 @@ export class InputManager {
         this.firing = true;
         for (const fn of this.fireListeners) fn(true);
       } else if (ev.button === 2) {
-        for (const fn of this.missileListeners) fn();
+        for (const fn of this.rmbListeners) fn(true);
       }
     });
     window.addEventListener('mouseup', (ev) => {
       if (ev.button === 0 && this.firing) {
         this.firing = false;
         for (const fn of this.fireListeners) fn(false);
+      }
+      if (ev.button === 2) {
+        for (const fn of this.rmbListeners) fn(false);
       }
     });
     window.addEventListener('contextmenu', (ev) => ev.preventDefault());
@@ -121,6 +140,26 @@ export class InputManager {
     this.missileListeners.push(fn);
   }
 
+  // raw right-mouse-button hold state (app routes: mining beam vs missile)
+  onRmb(fn: (on: boolean) => void): void {
+    this.rmbListeners.push(fn);
+  }
+
+  // programmatic hold inputs (TouchControls): same paths as the mouse buttons
+  fireOn(on: boolean): void {
+    if (this.firing === on) return;
+    this.firing = on;
+    for (const fn of this.fireListeners) fn(on);
+  }
+
+  rmbOn(on: boolean): void {
+    for (const fn of this.rmbListeners) fn(on);
+  }
+
+  triggerMissile(): void {
+    for (const fn of this.missileListeners) fn();
+  }
+
   private emit(action: GameAction): void {
     for (const fn of this.listeners.get(action) ?? []) fn();
   }
@@ -155,11 +194,12 @@ export class InputManager {
     if (up) this.throttle = clamp(this.throttle + dt * 0.8, -0.3, 1);
     if (down) this.throttle = clamp(this.throttle - dt * 0.8, -0.3, 1);
     out.thrustForward = this.throttle;
-    // pinned at 100% and still pushing -> turbo overburn
-    out.turbo = up && this.throttle >= 1;
-    out.thrustRight = (b('strafeRight') ? 1 : 0) - (b('strafeLeft') ? 1 : 0);
-    out.thrustUp = (b('strafeUp') ? 1 : 0) - (b('strafeDown') ? 1 : 0);
-    out.roll = (b('rollRight') ? 1 : 0) - (b('rollLeft') ? 1 : 0);
+    // pinned at 100% and still pushing -> turbo overburn (keyboard or the
+    // touch throttle pushed into its reserved boost band)
+    out.turbo = (up && this.throttle >= 1) || this.mobileBoost;
+    out.thrustRight = clamp((b('strafeRight') ? 1 : 0) - (b('strafeLeft') ? 1 : 0) + this.touchStrafeX, -1, 1);
+    out.thrustUp = clamp((b('strafeUp') ? 1 : 0) - (b('strafeDown') ? 1 : 0) + this.touchStrafeY, -1, 1);
+    out.roll = (b('rollRight') || this.touchRollRight ? 1 : 0) - (b('rollLeft') || this.touchRollLeft ? 1 : 0);
     out.brake = down && this.throttle <= 0.02;
     // virtual cursor with a small deadzone and smooth curve
     const dead = 0.04;

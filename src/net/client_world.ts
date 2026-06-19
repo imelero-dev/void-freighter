@@ -5,7 +5,8 @@
 import { shipStats, ROCK_TYPES, TURBO_ACCEL_MULT, TURBO_SPEED, type ShipStats } from '../sim/data';
 import { integrateFlight } from '../sim/flight';
 import { blankEntity, defaultProfile, SHIP_RADIUS } from '../sim/sim';
-import { dangerAt, generateSystem, rockSpawn } from '../sim/system';
+import { ATMO_DRAG, atmoGravity, atmosphereAt, dangerAt, generateSystem, rockSpawn } from '../sim/system';
+import { vtolUpRef } from '../sim/docking';
 import {
   emptyShipInput, type Contract, type Destination, type Entity, type HullId, type MarketEntry,
   type ModuleSlot, type PlayerProfile, type ShipInput, type SimEvent, type StationDef,
@@ -75,9 +76,14 @@ export class ClientWorld implements IWorld {
   newsLog: string[] = [];
   destination: Destination | null = null;
   flightAssist = true;
+  vtolMode = false;
+  gearDown = false;
   drillOn = false;
   turboCharge = 1;
   turboActive = false;
+  drillHeat = 0;
+  drillOverheated = false;
+  miningBeamOn = false;
   connected = false;
   time = 0;
   ready: Promise<void>;
@@ -216,10 +222,23 @@ export class ClientWorld implements IWorld {
         // predict locally with the shared integrator (turbo overrides the cap,
         // mirroring the server's perf calculation)
         const stats = this.shipStats;
-        const perf = this.turboActive
-          ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate }
-          : stats;
+        // mirror the server's perf: VTOL reference up + atmospheric weight, so
+        // local prediction matches the authoritative flight near planets
+        const vtolUp = this.vtolMode ? (vtolUpRef(this.system, e.pos) ?? undefined) : undefined;
+        const gravity = this.vtolMode ? undefined : (atmoGravity(this.system, e.pos) ?? undefined);
+        const perf = this.vtolMode
+          ? { maxSpeed: stats.maxSpeed * 0.22, accel: stats.accel * 1.4, turnRate: stats.turnRate * 0.8, massFactor: stats.massFactor, vtol: true, vtolUp }
+          : this.turboActive
+            ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate, massFactor: stats.massFactor, gravity }
+            : { ...stats, gravity };
         integrateFlight(e, this.input, perf, dt, this.flightAssist);
+        // atmospheric drag parity with the server so prediction stays aligned
+        // near planets (#16)
+        const atmo = atmosphereAt(this.system, e.pos);
+        if (atmo.density > 0) {
+          const f = Math.max(0, 1 - ATMO_DRAG * atmo.density * dt);
+          e.vel.x *= f; e.vel.y *= f; e.vel.z *= f;
+        }
         // reconcile against extrapolated server state
         const age = (performance.now() - this.lastSnapAt) / 1000;
         const sx = sv.x + sv.vx * age, sy = sv.y + sv.vy * age, sz = sv.z + sv.vz * age;
@@ -290,6 +309,7 @@ export class ClientWorld implements IWorld {
         for (const y of def.yields) wsum += y.weight;
         rock.rockYield = {};
         for (const y of def.yields) rock.rockYield[y.good] = Math.round(total * (y.weight / wsum));
+        rock.hotspots = spawn.hotspots;
         this.entities.set(rock.id, rock);
         this.rockEntityIds.set(key, rock.id);
       }
@@ -396,6 +416,7 @@ export class ClientWorld implements IWorld {
           e.cruiseSpeed = w.cs;
           e.dockedAt = w.dk ?? null;
           e.derelict = !!w.dl;
+          e.npc = w.np ?? null;
           break;
         }
         case 'f':
@@ -461,6 +482,9 @@ export class ClientWorld implements IWorld {
       e.throttle = s.th;
       this.turboCharge = (s.tb ?? 100) / 100;
       this.turboActive = !!s.ta;
+      this.drillHeat = (s.dh ?? 0) / 100;
+      this.drillOverheated = !!s.do;
+      this.miningBeamOn = !!s.mb;
       if (performance.now() > this.targetLockUntil) {
         e.targetId = s.tg ?? null;
       }
@@ -470,6 +494,8 @@ export class ClientWorld implements IWorld {
       this.destination = (snap.dest as Destination | null) ?? null;
       this.flightAssist = snap.fa !== 0;
       this.drillOn = snap.drill === 1;
+      if (snap.vt !== undefined) this.vtolMode = snap.vt === 1;
+      if (snap.gr !== undefined) this.gearDown = snap.gr === 1;
       if (snap.news) this.newsLog = snap.news;
     }
 
@@ -512,7 +538,20 @@ export class ClientWorld implements IWorld {
     if (this.shipStats.drillRate > 0) this.drillOn = on;
     this.cmd({ cmd: 'drill', on });
   }
+  setMiningBeam(on: boolean): void {
+    // optimistic: the drone starts with the click, not a snapshot later
+    this.miningBeamOn = on && this.drillOn && !this.drillOverheated;
+    this.cmd({ cmd: 'beam', on });
+  }
   toggleCruise(): void { this.cmd({ cmd: 'cruise' }); }
+  toggleVtol(): void {
+    this.vtolMode = !this.vtolMode;
+    this.cmd({ cmd: 'vtol' });
+  }
+  toggleGear(): void {
+    this.gearDown = !this.gearDown;
+    this.cmd({ cmd: 'gear' });
+  }
   toggleFlightAssist(): void {
     this.flightAssist = !this.flightAssist;
     this.cmd({ cmd: 'fa' });
@@ -533,6 +572,7 @@ export class ClientWorld implements IWorld {
     this.cmd({ cmd: 'reticle' });
   }
   requestDock(): void { this.cmd({ cmd: 'dock' }); }
+  autodock(): void { this.cmd({ cmd: 'autodock' }); }
   undock(): void { this.cmd({ cmd: 'undock' }); }
   setDestination(dest: Destination | null): void {
     this.destination = dest;
@@ -550,6 +590,10 @@ export class ClientWorld implements IWorld {
   restockCannonAmmo(): void { this.cmd({ cmd: 'ammo' }); }
   openDerelict(entityId: number): void { this.cmd({ cmd: 'derelict', id: entityId }); }
   buyStationInfo(stationId: string): void { this.cmd({ cmd: 'buyinfo', id: stationId }); }
+  hailMerchant(entityId: number): void { this.cmd({ cmd: 'hail', id: entityId }); }
+  merchantBuy(entityId: number, goodId: string, qty: number): void { this.cmd({ cmd: 'mbuy', id: entityId, good: goodId, qty }); }
+  merchantBuyModule(entityId: number): void { this.cmd({ cmd: 'mbuymod', id: entityId }); }
+  merchantSell(entityId: number, goodId: string, qty: number): void { this.cmd({ cmd: 'msell', id: entityId, good: goodId, qty }); }
   rentWorkshop(): void { this.cmd({ cmd: 'rentws' }); }
   craftModule(slot: ModuleSlot, tier: number): void { this.cmd({ cmd: 'craft', slot, tier }); }
   craftRepairKit(): void { this.cmd({ cmd: 'craftkit' }); }

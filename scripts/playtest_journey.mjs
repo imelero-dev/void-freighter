@@ -104,12 +104,13 @@ async function main() {
   const t0 = Date.now();
   let lastLog = 0;
   let arrived = false;
-  while (Date.now() - t0 < 240_000) {
-    const state = await page.evaluate(() => {
+  while (Date.now() - t0 < 420_000) {
+    const state = await page.evaluate((destId) => {
       const w = window.VF.world;
       const V = window.VF.vec;
       const e = w.player;
-      const dest = w.destination;
+      const st = w.system.stations.find((s) => s.id === destId);
+      const dest = w.destination ?? { pos: st.pos, name: st.name };
       if (!e || !dest) return null;
       const to = V.vnorm(V.vsub(dest.pos, e.pos));
       // direction in ship-local frame (conjugate rotate)
@@ -126,7 +127,7 @@ async function main() {
       const d = Math.hypot(dest.pos.x - e.pos.x, dest.pos.y - e.pos.y, dest.pos.z - e.pos.z);
       if (aligned && e.cruise === 'off' && d > 60_000) w.toggleCruise();
       return { d, cruise: e.cruise, speed: Math.hypot(e.vel.x, e.vel.y, e.vel.z), fuel: w.profile.fuel, docked: e.dockedAt };
-    });
+    }, contract.dest);
     if (!state) throw new Error('lost world state');
     if (Date.now() - lastLog > 10_000) {
       lastLog = Date.now();
@@ -143,12 +144,11 @@ async function main() {
   await page.screenshot({ path: join(SHOTS, '10_journey_arrival.png') });
 
   // creep to dock range and request docking
-  const approach = await page.evaluate(async () => {
+  const approach = await page.evaluate(async (destId) => {
     const w = window.VF.world;
     const V = window.VF.vec;
     const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
-    const dest = w.destination;
-    const st = w.system.stations.find((s) => s.id === dest.id);
+    const st = w.system.stations.find((s) => s.id === destId);
     const telemetry = [];
     for (let i = 0; i < 1500; i++) {
       const e = w.player;
@@ -181,7 +181,7 @@ async function main() {
       await sleep(100);
     }
     return { docked: null, telemetry };
-  });
+  }, contract.dest);
   await page.evaluate(() => { delete window.VF.botInput; });
   const docked = approach.docked;
   if (docked !== contract.dest) {

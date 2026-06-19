@@ -23,9 +23,14 @@ export interface IWorld {
   readonly connected: boolean;
   readonly online: boolean;
   readonly flightAssist: boolean;
+  readonly vtolMode: boolean;     // VTOL hover flight mode engaged
+  readonly gearDown: boolean;     // landing gear deployed
   readonly drillOn: boolean;
   readonly turboCharge: number;  // 0..1 burst gauge
   readonly turboActive: boolean;
+  readonly drillHeat: number;    // 0..1 mining beam heat
+  readonly drillOverheated: boolean;
+  readonly miningBeamOn: boolean; // beam actually firing (RMB + drill + not overheated)
   // 0..1 fraction between the previous and current sim tick, for render interpolation
   readonly renderAlpha: number;
 
@@ -44,12 +49,16 @@ export interface IWorld {
   setFiring(on: boolean): void;
   fireMissile(): void;
   setDrill(on: boolean): void;
+  setMiningBeam(on: boolean): void;
   toggleCruise(): void;
   toggleFlightAssist(): void;
+  toggleVtol(): void;
+  toggleGear(): void;
   setTarget(id: number | null): void;
   tabTarget(): void;
   targetReticle(): void;
   requestDock(): void;
+  autodock(): void;
   undock(): void;
   setDestination(dest: Destination | null): void;
   hailRescue(): void;
@@ -66,6 +75,11 @@ export interface IWorld {
   restockCannonAmmo(): void;
   openDerelict(entityId: number): void;
   buyStationInfo(stationId: string): void;
+  // wandering merchants
+  hailMerchant(entityId: number): void;
+  merchantBuy(entityId: number, goodId: string, qty: number): void;
+  merchantBuyModule(entityId: number): void;
+  merchantSell(entityId: number, goodId: string, qty: number): void;
   // workshop & warehouse
   rentWorkshop(): void;
   craftModule(slot: ModuleSlot, tier: number): void;

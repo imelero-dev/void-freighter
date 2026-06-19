@@ -1,0 +1,25 @@
+# Void Freighter — game server (HTTP API + WS world on :8788)
+# Instalar: sudo cp deploy/voidfreighter.service /etc/systemd/system/
+#           sudo systemctl daemon-reload && sudo systemctl enable --now voidfreighter
+# Logs:     journalctl -u voidfreighter -f
+
+[Unit]
+Description=Void Freighter game server
+After=network.target
+
+[Service]
+Type=simple
+User=ivan
+WorkingDirectory=/home/ivan/void_freighter
+Environment=PORT=8788
+Environment=NODE_ENV=production
+# node vive en nvm — systemd no ve el PATH del shell, ruta absoluta obligatoria
+ExecStart=/home/ivan/.nvm/versions/node/v22.22.3/bin/node /home/ivan/void_freighter/dist-server/server.cjs
+Restart=always
+RestartSec=3
+
+# sin DATABASE_URL el estado vive en memoria; quitar este comentario y
+# definir Environment=DATABASE_URL=postgres://... cuando haya Postgres
+
+[Install]
+WantedBy=multi-user.target

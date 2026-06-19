@@ -2,7 +2,17 @@
 // online client for own-ship prediction. Pure math, no state of its own.
 
 import type { ShipInput } from './types';
-import { clamp, qIntegrate, qrot, v3, vlen, vscale, vsub, type Quat, type Vec3 } from './vec';
+import {
+  clamp, qaxisAngle, qForward, qIntegrate, qLookAt, qnlerp, qRight, qrot, qUp,
+  v3, vadd, vcross, vdot, vlen, vnorm, vscale, vsub, type Quat, type Vec3,
+} from './vec';
+
+// VTOL is true vertical flight, not a slowdown: the throttle/up keys drive
+// motion along the local vertical and horizontal axes, decoupled from where the
+// nose points, while the deck auto-levels to `up`. You hang in place, rise and
+// descend straight, and slide gently sideways — the way you set down on a pad.
+const VTOL_CLIMB = 80;   // m/s vertical authority (collective)
+const VTOL_HORIZ = 60;   // m/s lateral/forward authority
 
 export interface FlightBody {
   pos: Vec3;
@@ -16,48 +26,118 @@ export interface FlightPerf {
   maxSpeed: number;
   accel: number;
   turnRate: number;
+  massFactor?: number; // inertia multiplier; heavier hulls ramp/settle slower
+  vtol?: boolean;      // true vertical-flight hover mode
+  vtolUp?: Vec3;       // world "up" reference for VTOL (planet/hangar vertical)
+  gravity?: Vec3;      // weight acceleration in atmosphere (toward the planet)
 }
 
 export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPerf, dt: number, assist: boolean): void {
+  if (perf.vtol) { vtolFlight(b, input, perf, dt); return; }
   // speed-dependent handling: nimble at low speed (dogfights), heavy at full
   // burn — turn authority drops from 125% at standstill to 80% at max speed
   const speedFrac = Math.min(1, vlen(b.vel) / Math.max(1, perf.maxSpeed));
   const turnRate = perf.turnRate * (1.25 - 0.45 * speedFrac);
-  // rotation: approach commanded angular velocity
-  const targetAng = v3(
-    clamp(input.pitch, -1, 1) * turnRate,
-    clamp(input.yaw, -1, 1) * turnRate,
-    clamp(input.roll, -1, 1) * turnRate,
-  );
-  const angAccel = turnRate * 10; // snappy rotation onset
-  b.angVel.x += clamp(targetAng.x - b.angVel.x, -angAccel * dt, angAccel * dt);
-  b.angVel.y += clamp(targetAng.y - b.angVel.y, -angAccel * dt, angAccel * dt);
-  b.angVel.z += clamp(targetAng.z - b.angVel.z, -angAccel * dt, angAccel * dt);
+  // rotational inertia: a heavy freighter is slow to start AND stop turning;
+  // a light scout snaps. This is what makes mass perceptible at the stick.
+  const mass = perf.massFactor ?? 1;
+  const angAccel = (turnRate * 10) / Math.sqrt(mass);
+  const pitch = clamp(input.pitch, -1, 1);
+  const yaw = clamp(input.yaw, -1, 1);
+  const roll = clamp(input.roll, -1, 1);
+  if (assist) {
+    // FA on: active gyros drive angular velocity toward the commanded rate, so
+    // releasing the stick bleeds the spin back to zero
+    const targetAng = v3(pitch * turnRate, yaw * turnRate, roll * turnRate);
+    b.angVel.x += clamp(targetAng.x - b.angVel.x, -angAccel * dt, angAccel * dt);
+    b.angVel.y += clamp(targetAng.y - b.angVel.y, -angAccel * dt, angAccel * dt);
+    b.angVel.z += clamp(targetAng.z - b.angVel.z, -angAccel * dt, angAccel * dt);
+  } else {
+    // FA off: pure Newtonian rotation — input applies torque (adds angular
+    // momentum), nothing damps it. To stop spinning you counter-rotate. A spin
+    // cap keeps a twitchy stick from winding up to nonsense rates.
+    b.angVel.x += pitch * angAccel * dt;
+    b.angVel.y += yaw * angAccel * dt;
+    b.angVel.z += roll * angAccel * dt;
+    // cap off the BASE turn rate, not the speed-adjusted one — otherwise
+    // accelerating would retroactively clamp an existing spin, which is exactly
+    // the damping FA-off promises never happens
+    const maxSpin = perf.turnRate * 1.8;
+    b.angVel.x = clamp(b.angVel.x, -maxSpin, maxSpin);
+    b.angVel.y = clamp(b.angVel.y, -maxSpin, maxSpin);
+    b.angVel.z = clamp(b.angVel.z, -maxSpin, maxSpin);
+  }
   b.orient = qIntegrate(b.orient, b.angVel, dt);
 
   b.throttle = clamp(input.thrustForward, -0.3, 1);
   if (assist && !input.brake) {
+    const lat = 0.85;
     const desiredLocal = v3(
-      clamp(input.thrustRight, -1, 1) * 0.6,
-      clamp(input.thrustUp, -1, 1) * 0.6,
+      clamp(input.thrustRight, -1, 1) * lat,
+      clamp(input.thrustUp, -1, 1) * lat,
       -b.throttle,
     );
     const desired = vscale(qrot(b.orient, desiredLocal), perf.maxSpeed);
-    const delta = vsub(desired, b.vel);
-    const dl = vlen(delta);
-    // assist corrects the velocity vector faster than raw thrust accelerates —
-    // turns feel planted instead of floaty
-    const maxDelta = perf.accel * 1.35 * dt;
-    if (dl > 1e-6) {
-      const f = Math.min(1, maxDelta / dl);
-      b.vel.x += delta.x * f;
-      b.vel.y += delta.y * f;
-      b.vel.z += delta.z * f;
+    // assist corrects the velocity vector much faster than raw thrust — a
+    // futuristic ship should feel planted, not like a barge.
+    const maxDelta = perf.accel * 1.6 * dt;
+    if (perf.gravity) {
+      // In a planet's gravity the assist PLANTS you horizontally but never
+      // velocity-matches the vertical (gravity) axis — that axis is Newtonian:
+      // your actual thrust projection plus weight. So pointing the nose down and
+      // burning is a real power dive, pointing up is a real climb, and flying
+      // level lets your weight pull you down. (Velocity-matching the vertical
+      // axis is what cancelled downward thrust and made every descent a crawl.)
+      const g = perf.gravity;
+      const gl = vlen(g) || 1;
+      const gx = g.x / gl, gy = g.y / gl, gz = g.z / gl;
+      const dDes = desired.x * gx + desired.y * gy + desired.z * gz;
+      const dVel = b.vel.x * gx + b.vel.y * gy + b.vel.z * gz;
+      // horizontal error only (strip the gravity-axis component from both)
+      const ex = (desired.x - gx * dDes) - (b.vel.x - gx * dVel);
+      const ey = (desired.y - gy * dDes) - (b.vel.y - gy * dVel);
+      const ez = (desired.z - gz * dDes) - (b.vel.z - gz * dVel);
+      const el = Math.hypot(ex, ey, ez);
+      if (el > 1e-6) {
+        const f = Math.min(1, maxDelta / el);
+        b.vel.x += ex * f; b.vel.y += ey * f; b.vel.z += ez * f;
+      }
+      // vertical: thrust projected onto the gravity axis (the nose direction),
+      // applied directly so a dive actually accelerates you toward the ground
+      const tw = qrot(b.orient, v3(
+        clamp(input.thrustRight, -1, 1),
+        clamp(input.thrustUp, -1, 1),
+        -clamp(input.thrustForward, -1, 1),
+      ));
+      const vThrust = (tw.x * gx + tw.y * gy + tw.z * gz) * perf.accel * 1.6 * dt;
+      b.vel.x += gx * vThrust; b.vel.y += gy * vThrust; b.vel.z += gz * vThrust;
+    } else {
+      const delta = vsub(desired, b.vel);
+      const dl = vlen(delta);
+      if (dl > 1e-6) {
+        const f = Math.min(1, maxDelta / dl);
+        b.vel.x += delta.x * f;
+        b.vel.y += delta.y * f;
+        b.vel.z += delta.z * f;
+      }
+    }
+    // overspeed bleed: past the cap (turbo release, cruise drop) excess
+    // velocity decays fast instead of taking half a minute to settle
+    const sp = vlen(b.vel);
+    if (sp > perf.maxSpeed * 1.02) {
+      const excess = sp - perf.maxSpeed;
+      const bleed = Math.min(excess, excess * 1.6 * dt + perf.accel * dt);
+      const f = (sp - bleed) / sp;
+      b.vel.x *= f;
+      b.vel.y *= f;
+      b.vel.z *= f;
     }
   } else if (input.brake) {
+    // braking power scales with speed: dumping 1 km/s of turbo takes ~2.5 s,
+    // not twenty
     const dl = vlen(b.vel);
     if (dl > 1e-6) {
-      const dec = Math.min(dl, perf.accel * 1.2 * dt);
+      const dec = Math.min(dl, (perf.accel * 2 + dl * 1.1) * dt);
       const f = -dec / dl;
       b.vel.x += b.vel.x * f;
       b.vel.y += b.vel.y * f;
@@ -81,6 +161,61 @@ export function integrateFlight(b: FlightBody, input: ShipInput, perf: FlightPer
       b.vel.y *= f;
       b.vel.z *= f;
     }
+  }
+  // gravity: weight pulls you toward the planet whenever you're in its air
+  if (perf.gravity) {
+    b.vel.x += perf.gravity.x * dt;
+    b.vel.y += perf.gravity.y * dt;
+    b.vel.z += perf.gravity.z * dt;
+  }
+  b.pos.x += b.vel.x * dt;
+  b.pos.y += b.vel.y * dt;
+  b.pos.z += b.vel.z * dt;
+}
+
+// True VTOL: the ship holds the deck level to `up`, yaw steers the heading, and
+// translation happens along world-decoupled vertical/horizontal axes. Press up
+// and you rise straight; release and you hover (no gravity to fight). This is
+// what makes a precise vertical touchdown a skill rather than a slowdown.
+function vtolFlight(b: FlightBody, input: ShipInput, perf: FlightPerf, dt: number): void {
+  const up = perf.vtolUp ? vnorm(perf.vtolUp) : qUp(b.orient);
+
+  // --- attitude: auto-level to `up`, yaw to turn ---
+  let heading = vsub(qForward(b.orient), vscale(up, vdot(qForward(b.orient), up)));
+  if (vlen(heading) < 1e-4) {
+    const rt = qRight(b.orient);
+    heading = vsub(rt, vscale(up, vdot(rt, up)));
+  }
+  heading = vnorm(heading);
+  const yaw = clamp(input.yaw, -1, 1);
+  if (Math.abs(yaw) > 1e-4) {
+    heading = vnorm(qrot(qaxisAngle(up, -yaw * perf.turnRate * dt), heading));
+  }
+  const target = qLookAt(heading, up);
+  b.orient = qnlerp(b.orient, target, Math.min(1, perf.turnRate * 1.6 * dt));
+  b.angVel = v3(0, 0, 0);
+
+  // --- translation: the THROTTLE is the collective — push it up to rise, down
+  //     to descend, leave it at neutral to hold altitude. This is what makes
+  //     VTOL real vertical flight (take off and land straight up/down) instead
+  //     of a hoverboard. Strafe nudges you sideways, the up/down keys fore/aft,
+  //     all decoupled from where the nose points. ---
+  b.throttle = clamp(input.thrustForward, -0.3, 1);
+  const collective = b.throttle >= 0 ? b.throttle : b.throttle * 2.6; // full descent from the short reverse range
+  const climb = clamp(collective, -1, 1) * VTOL_CLIMB;
+  const right = vnorm(vcross(heading, up));
+  let fwd = clamp(input.thrustUp, -1, 1) * VTOL_HORIZ;   // R/F → forward / back
+  let side = clamp(input.thrustRight, -1, 1) * VTOL_HORIZ; // A/D → strafe
+  if (input.brake) { fwd = 0; side = 0; } // brake kills horizontal drift, vertical still flies
+  const desired = vadd(vscale(up, climb), vadd(vscale(heading, fwd), vscale(right, side)));
+  const delta = vsub(desired, b.vel);
+  const dl = vlen(delta);
+  const maxDelta = perf.accel * 3.0 * dt; // crisp, planted hover
+  if (dl > 1e-6) {
+    const f = Math.min(1, maxDelta / dl);
+    b.vel.x += delta.x * f;
+    b.vel.y += delta.y * f;
+    b.vel.z += delta.z * f;
   }
   b.pos.x += b.vel.x * dt;
   b.pos.y += b.vel.y * dt;

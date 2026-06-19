@@ -1,0 +1,460 @@
+// Focused visual inspection for the hangar / VTOL / atmosphere rework.
+//   npm run build && CHROME_BIN=... node scripts/inspect.mjs
+import { createServer } from 'node:http';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { join, extname, resolve } from 'node:path';
+import puppeteer from 'puppeteer-core';
+
+const DIST = resolve(import.meta.dirname, '..', 'dist');
+const SHOTS = resolve(import.meta.dirname, '..', 'screenshots', 'inspect');
+const PORT = 4791;
+const CHROME = process.env.CHROME_BIN || '/root/.cache/puppeteer/chrome/linux-149.0.7827.22/chrome-linux64/chrome';
+const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json' };
+
+function serve() {
+  const server = createServer((req, res) => {
+    let path = (req.url ?? '/').split('?')[0];
+    if (path === '/') path = '/index.html';
+    const file = join(DIST, path);
+    if (!file.startsWith(DIST) || !existsSync(file)) { res.writeHead(404); res.end('nf'); return; }
+    res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream' });
+    res.end(readFileSync(file));
+  });
+  return new Promise((ok) => server.listen(PORT, () => ok(server)));
+}
+
+const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+
+async function main() {
+  mkdirSync(SHOTS, { recursive: true });
+  const server = await serve();
+  const browser = await puppeteer.launch({
+    executablePath: CHROME, headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--window-size=1600,900', '--mute-audio'],
+    defaultViewport: { width: 1600, height: 900 },
+  });
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+  const shot = async (n) => { await page.screenshot({ path: join(SHOTS, `${n}.png`) }); console.log(`📸 ${n}`); };
+
+  await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle0' });
+  await sleep(800);
+  await page.evaluate(() => { const i = document.querySelector('.vf-input'); if (i) i.value = 'Inspector'; });
+  await page.evaluate(() => { [...document.querySelectorAll('button')].find((b) => /LAUNCH|CONTINUE/.test(b.textContent ?? ''))?.click(); });
+  await sleep(3000);
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  await page.keyboard.press('Space'); // undock
+  await sleep(1500);
+
+  // helper installed in page: frame + place
+  await page.evaluate(() => {
+    const V = window.VF.vec;
+    window.IN = {
+      frame(st) {
+        const f = V.vnorm(st.dockPort);
+        const ref = Math.abs(f.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+        const u = V.vnorm(V.vcross(ref, f));
+        const v = V.vnorm(V.vcross(f, u));
+        return { f, u, v, R: st.radius };
+      },
+      place(pos, lookDir, upHint) {
+        const w = window.VF.world; const V = window.VF.vec;
+        const e = w.sim.entities.get(w.playerId);
+        e.dockedAt = null; e.cruise = 'off'; e.cruiseSpeed = 0;
+        e.pos = { ...pos }; e.prevPos = { ...pos }; e.vel = { x: 0, y: 0, z: 0 };
+        e.orient = V.qLookAt(V.vnorm(lookDir), upHint || { x: 0, y: 1, z: 0 });
+        e.prevOrient = { ...e.orient };
+      },
+    };
+    // Find an outward (up) direction over a planet that sits on a mountain RANGE
+    // (high terrain) within the lit hemisphere, so descent shots show dramatic
+    // relief rather than whatever random plains the fixed direction landed on.
+    window.findPeakUp = (p, sun) => {
+      const V = window.VF.vec; const th = window.VF.terrainHeight;
+      const seed = { x: sun.x * 0.6 + 0.2, y: 0.78, z: sun.z * 0.6 + 0.1 };
+      let best = V.vnorm(seed), bestH = -1e9;
+      const ref = Math.abs(V.vnorm(seed).y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+      const t1 = V.vnorm(V.vcross(ref, V.vnorm(seed)));
+      const t2 = V.vnorm(V.vcross(V.vnorm(seed), t1));
+      for (let i = 0; i < 220; i++) {
+        const a = i * 2.399963; // golden-angle spiral over a cap around the seed dir
+        const rad = 0.55 * Math.sqrt(i / 220);
+        const un = V.vnorm(V.vadd(V.vnorm(seed), V.vadd(V.vscale(t1, Math.cos(a) * rad), V.vscale(t2, Math.sin(a) * rad))));
+        if (V.vdot(un, sun) < 0.15) continue; // keep it lit
+        const at = V.vadd(p.pos, V.vscale(un, p.radius));
+        const h = th({ pos: p.pos, radius: p.radius, kind: p.kind, colorSeed: p.colorSeed }, at);
+        if (h > bestH) { bestH = h; best = un; }
+      }
+      return best;
+    };
+  });
+
+  // ---- player ship beauty shot: daylit terran surface, chase cam ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const e = w.sim.entities.get(w.playerId);
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 900));
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    window.IN.place(pos, horiz, un);
+    e.throttle = 0.5;
+  });
+  await page.keyboard.press('KeyV'); // chase
+  await sleep(900);
+  await shot('00_ship_chase');
+  await page.keyboard.press('KeyV');
+  await sleep(300);
+
+  // ---- station: morrow_granary (terran neighbour, lit) ----
+  const stInfo = await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const st = w.system.stations.find((s) => s.id === 'morrow_granary') || w.system.stations[0];
+    const fr = window.IN.frame(st);
+    const mouth = V.vadd(st.pos, V.vscale(fr.f, fr.R * 0.92));
+    // exterior: 5.5 km out in front of the hatch, slightly above
+    const pos = V.vadd(V.vadd(mouth, V.vscale(fr.f, 5500)), V.vscale(fr.v, 700));
+    window.IN.place(pos, V.vscale(fr.f, -1), fr.v);
+    return { id: st.id, R: fr.R };
+  });
+  console.log('station', JSON.stringify(stInfo));
+  await sleep(900);
+  await shot('01_hangar_exterior');
+
+  // closer: 2.2 km out, centred on the slot
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const st = w.system.stations.find((s) => s.id === 'morrow_granary');
+    const fr = window.IN.frame(st);
+    const mouth = V.vadd(st.pos, V.vscale(fr.f, fr.R * 0.92));
+    window.IN.place(V.vadd(mouth, V.vscale(fr.f, 2200)), V.vscale(fr.f, -1), fr.v);
+  });
+  await sleep(700);
+  await shot('02_hangar_mouth');
+
+  // inside the hangar, just past the mouth, looking in toward the pad
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const st = w.system.stations.find((s) => s.id === 'morrow_granary');
+    const fr = window.IN.frame(st);
+    const inside = V.vadd(st.pos, V.vscale(fr.f, fr.R * 0.55));
+    window.IN.place(V.vadd(inside, V.vscale(fr.v, 200)), V.vscale(fr.f, -1), fr.v);
+  });
+  await sleep(700);
+  await shot('03_hangar_interior');
+
+  // chase cam on the pad (VTOL + gear) to see the ship sitting in the bay
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const sim = w.sim; const meta = sim.meta(w.playerId);
+    const st = w.system.stations.find((s) => s.id === 'morrow_granary');
+    const fr = window.IN.frame(st);
+    const pad = V.vadd(V.vadd(st.pos, V.vscale(fr.f, fr.R * 0.47)), V.vscale(fr.v, -fr.R * 0.26 + 120));
+    meta.vtol = true; meta.gearDown = true;
+    window.IN.place(pad, V.vscale(fr.f, -1), fr.v);
+  });
+  await page.keyboard.press('KeyV'); // chase
+  await sleep(800);
+  await shot('04_on_pad_chase');
+  await page.keyboard.press('KeyV');
+  await sleep(300);
+
+  // ---- atmosphere: on a terran surface in daylight ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const up = { x: 0.3, y: 0.9, z: 0.18 };
+    const un = V.vnorm(up);
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 60));
+    // look at the horizon (perpendicular to up)
+    const look = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    window.IN.place(pos, look, un);
+  });
+  await sleep(1200);
+  await shot('05_surface_daylight_horizon');
+
+  // terrain relief: ~1.5 km up, nose pitched down toward the ground
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 1500));
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.7))); // pitched down ~35°
+    window.IN.place(pos, look, un);
+  });
+  await sleep(1000);
+  await shot('05b_terrain_relief');
+
+  // sweep yaw to scan the sky for any planets bleeding through the fog
+  await page.evaluate(() => { window.VF.botInput = { thrustForward: 0, thrustRight: 0, thrustUp: 0, pitch: 0.15, yaw: 0.6, roll: 0, brake: false }; });
+  await sleep(1500);
+  await page.evaluate(() => { delete window.VF.botInput; });
+  await sleep(400);
+  await shot('06_surface_sky_scan');
+
+  // control: the day-lit side from space — planets visible, cloud layer on show
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const sun = V.vnorm(V.vscale(p.pos, -1)); // toward the star = the lit hemisphere
+    const off = V.vnorm({ x: sun.z, y: 0.5, z: -sun.x });
+    const dir = V.vnorm(V.vadd(sun, V.vscale(off, 0.5)));
+    const pos = V.vadd(p.pos, V.vscale(dir, p.radius + 700000));
+    window.IN.place(pos, V.vscale(dir, -1), { x: 0, y: 1, z: 0 });
+  });
+  await sleep(900);
+  await shot('07_space_control');
+
+  // cross-system spacing: sit out past the outer orbit and look toward the star,
+  // so the whole system is roughly in front — are the planets crowded or distant?
+  for (const [n, planetId] of [['08_spacing_from_morrow', 'morrow'], ['09_spacing_from_halcyon', 'halcyon']]) {
+    await page.evaluate((pid) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.id === pid) || w.system.planets[2];
+      const out = V.vnorm({ x: p.pos.x, y: 0, z: p.pos.z }); // radially outward
+      const pos = V.vadd(p.pos, V.vscale(out, p.radius + 3_000_000)); // 3000 km off the world
+      const look = V.vnorm(V.vsub({ x: 0, y: 0, z: 0 }, pos)); // toward the star/system
+      window.IN.place(pos, look, { x: 0, y: 1, z: 0 });
+    }, planetId);
+    await sleep(900);
+    await shot(n);
+  }
+
+  // VTOL hover aid: hovering over a planet surface, gear down, drifting a touch
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const sim = w.sim; const meta = sim.meta(w.playerId);
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 600));
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    window.IN.place(pos, horiz, un);
+    meta.vtol = true; meta.gearDown = true;
+    try { window.VF.app.camera.mode = 'cockpit'; } catch (e) { /* best effort */ }
+  });
+  await page.evaluate(() => { window.VF.botInput = { thrustForward: 0, thrustRight: 0.22, thrustUp: -0.25, pitch: 0, yaw: 0, roll: 0, brake: false }; });
+  await sleep(700);
+  await shot('10_vtol_aid');
+  await page.evaluate(() => { delete window.VF.botInput; });
+
+  // landing dust: sit just over the terrain in VTOL with some throttle
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const sim = w.sim; const meta = sim.meta(w.playerId);
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 30)); // below the terrain → lands on it
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    meta.vtol = true; meta.gearDown = true;
+    window.IN.place(pos, horiz, un);
+    try { window.VF.app.camera.mode = 'chase'; } catch (e) { /* */ }
+  });
+  await page.evaluate(() => { window.VF.botInput = { thrustForward: 0.5, thrustRight: 0, thrustUp: 0, pitch: 0, yaw: 0, roll: 0, brake: false }; });
+  await sleep(900);
+  await shot('11_landing_dust');
+  await page.evaluate(() => { delete window.VF.botInput; });
+
+  // ---- approach from space: the atmospheric halo arcing the planet's limb ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    // the lit hemisphere faces the star at the origin: sit on that side, well
+    // back, so the planet is a 3/4 disc with the glowing limb clearly arcing it
+    const toSun = V.vnorm(V.vscale(p.pos, -1));
+    const side = V.vnorm(V.vcross(toSun, { x: 0, y: 1, z: 0 }));
+    const dir = V.vnorm(V.vadd(V.vscale(toSun, 0.7), V.vadd(V.vscale(side, 0.5), { x: 0, y: 0.35, z: 0 })));
+    const pos = V.vadd(p.pos, V.vscale(dir, p.radius + 900_000)); // ~900 km out
+    const look = V.vnorm(V.vsub(p.pos, pos));
+    window.IN.place(pos, look, { x: 0, y: 1, z: 0 });
+  });
+  await sleep(1000);
+  await shot('12_entry_space');
+
+  // ---- atmospheric entry transition: descend the day side, nose down, fast.
+  //      Captures the surface resolving + the re-entry plasma sheath. ----
+  for (const altKm of [70, 45, 22, 9]) {
+    await page.evaluate((altKm) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+      const sun = V.vnorm(V.vscale(p.pos, -1)); // lit hemisphere
+      const un = window.findPeakUp(p, sun); // descend toward a mountain range, not random plains
+      const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
+      const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.45))); // ~25° descent view, like a pilot picking a spot
+      window.IN.place(pos, look, un);
+      const e = w.sim.entities.get(w.playerId);
+      e.vel = V.vscale(look, 360); // diving fast → entry heat
+    }, altKm);
+    await sleep(900);
+    const lc = await page.evaluate(() => { try { return window.VF.app.quadtree?.leafCount ?? -1; } catch (e) { return -2; } });
+    console.log(`  ${altKm}km leafCount=${lc}`);
+    await shot(`12_entry_${altKm}km`);
+  }
+
+  // ---- look STRAIGHT DOWN from altitude: this is the view the player reported
+  //      as "a square on a bare sphere" — verify the ground now fills the disc. ----
+  for (const altKm of [40, 18, 8]) {
+    await page.evaluate((altKm) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+      const sun = V.vnorm(V.vscale(p.pos, -1));
+      const un = window.findPeakUp(p, sun);
+      const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
+      const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -1.0))); // ~45° down: ground fills the lower frame
+      window.IN.place(pos, look, un);
+      const e = w.sim.entities.get(w.playerId);
+      e.vel = { x: 0, y: 0, z: 0 }; // no dive → no plasma sheath blocking the view
+    }, altKm);
+    await sleep(900);
+    await shot(`12b_down_${altKm}km`);
+  }
+
+  // ---- LAVA world (Cinder) entry, grazing-ish — the world the player tested ----
+  for (const altKm of [30, 8]) {
+    await page.evaluate((altKm) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.kind === 'lava') || w.system.planets[0];
+      const sun = V.vnorm(V.vscale(p.pos, -1));
+      const un = V.vnorm({ x: sun.x * 0.5 + 0.3, y: 0.7, z: sun.z * 0.5 + 0.2 });
+      const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
+      const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.3))); // shallow, toward the horizon
+      window.IN.place(pos, look, un);
+      const e = w.sim.entities.get(w.playerId);
+      e.vel = V.vscale(look, 290);
+    }, altKm);
+    await sleep(900);
+    await shot(`14_lava_${altKm}km`);
+  }
+
+  // ---- LANDED: the ship resting on the terrain (chase cam), gear down ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const e = w.sim.entities.get(w.playerId);
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    // place just above the mean radius (below the relief); the sim's surface
+    // contact seats it on the terrain within a tick or two
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + e.radius + 30));
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    window.IN.place(pos, horiz, un);
+    e.vel = { x: 0, y: 0, z: 0 };
+    const m = w.sim.meta(w.playerId); if (m) { m.gearDown = true; m.vtol = true; }
+  });
+  await page.keyboard.press('KeyV'); // chase cam
+  await sleep(1200);
+  await shot('16_landed');
+  await page.keyboard.press('KeyV');
+  await sleep(300);
+
+  // ---- CLOSE-UP: low over the deck looking along the ground, to judge the
+  //      per-pixel surface texture (detail bump + speckle), not the macro shape ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec; const th = window.VF.terrainHeight;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const un = V.vnorm({ x: 0.3, y: 0.9, z: 0.18 });
+    const ground = th({ pos: p.pos, radius: p.radius, kind: p.kind, colorSeed: p.colorSeed }, V.vadd(p.pos, V.vscale(un, p.radius)));
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + ground + 14)); // ~14 m over the deck
+    const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+    const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.12))); // nearly level, just dipped at the ground
+    window.IN.place(pos, look, un);
+    w.sim.entities.get(w.playerId).vel = { x: 0, y: 0, z: 0 };
+  });
+  await sleep(900);
+  await shot('17_surface_detail');
+
+  // ---- CLOUD layers: flying down through the cloud decks on a terran world ----
+  for (const altKm of [10, 6, 4.2, 1.5]) {
+    await page.evaluate((altKm) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+      const sun = V.vnorm(V.vscale(p.pos, -1));
+      const un = V.vnorm({ x: sun.x * 0.5 + 0.25, y: 0.8, z: sun.z * 0.5 + 0.15 });
+      const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
+      const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.4)));
+      window.IN.place(pos, look, un);
+    }, altKm);
+    await sleep(900);
+    await shot(`15_clouds_${String(altKm).replace('.', '_')}km`);
+  }
+
+  // ---- GRAZING views: look out toward the horizon from altitude (the angle that
+  //      makes coarse chunks sliver into streaks). Deterministic teleports. ----
+  for (const altKm of [40, 18, 6]) {
+    await page.evaluate((altKm) => {
+      const w = window.VF.world; const V = window.VF.vec;
+      const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+      const sun = V.vnorm(V.vscale(p.pos, -1));
+      const un = V.vnorm({ x: sun.x * 0.6 + 0.2, y: 0.78, z: sun.z * 0.6 + 0.1 });
+      const pos = V.vadd(p.pos, V.vscale(un, p.radius + altKm * 1000));
+      const horiz = V.vnorm(V.vcross(un, { x: 1, y: 0, z: 0 }));
+      const look = V.vnorm(V.vadd(horiz, V.vscale(un, -0.18))); // ~10° down — near-level grazing
+      window.IN.place(pos, look, un);
+    }, altKm);
+    await sleep(900);
+    const lc = await page.evaluate(() => { try { return window.VF.app.quadtree?.leafCount ?? -1; } catch (e) { return -2; } });
+    console.log(`  grazing ${altKm}km leafCount=${lc}`);
+    await shot(`13_grazing_${altKm}km`);
+  }
+
+  // ---- SUNSET: position on the terminator (sun at the horizon) so the sky
+  //      shows gold/orange sunset tones and the atmosphere rim is warm. ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const toSun = V.vnorm(V.vscale(p.pos, -1));
+    // place on the terminator: tangent to the sun direction (sun at the horizon)
+    const tangent = V.vnorm(V.vcross(toSun, { x: 0, y: 1, z: 0 }));
+    const un = V.vnorm(V.vadd(tangent, V.vscale(toSun, 0.05))); // just barely on the lit side
+    const pos = V.vadd(p.pos, V.vscale(un, p.radius + 200));
+    // look toward the sun (low on the horizon)
+    const look = V.vnorm(V.vadd(toSun, V.vscale(un, -0.15)));
+    window.IN.place(pos, look, un);
+    w.sim.entities.get(w.playerId).vel = { x: 0, y: 0, z: 0 };
+  });
+  await sleep(1200);
+  await shot('18_sunset');
+
+  // ---- ORBIT ATMOSPHERE: 3/4 view of the terran planet from ~400 km out,
+  //      showing the enhanced rim glow halo from orbit ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const toSun = V.vnorm(V.vscale(p.pos, -1));
+    const side = V.vnorm(V.vcross(toSun, { x: 0, y: 1, z: 0 }));
+    // 3/4 lit view: mostly lit hemisphere with one terminator edge visible
+    const dir = V.vnorm(V.vadd(V.vscale(toSun, 0.55), V.vadd(V.vscale(side, 0.7), { x: 0, y: 0.3, z: 0 })));
+    const pos = V.vadd(p.pos, V.vscale(dir, p.radius + 400_000));
+    const look = V.vnorm(V.vsub(p.pos, pos));
+    window.IN.place(pos, look, { x: 0, y: 1, z: 0 });
+  });
+  await sleep(1000);
+  await shot('19_orbit_atmosphere');
+
+  // ---- TERMINATOR from orbit: dark side with the atmosphere rim arcing ----
+  await page.evaluate(() => {
+    const w = window.VF.world; const V = window.VF.vec;
+    const p = w.system.planets.find((pp) => pp.kind === 'terran') || w.system.planets[2];
+    const toSun = V.vnorm(V.vscale(p.pos, -1));
+    const side = V.vnorm(V.vcross(toSun, { x: 0, y: 1, z: 0 }));
+    // mostly dark side with the terminator's rim glow visible
+    const dir = V.vnorm(V.vadd(V.vscale(toSun, -0.35), V.vadd(V.vscale(side, 0.8), { x: 0, y: 0.25, z: 0 })));
+    const pos = V.vadd(p.pos, V.vscale(dir, p.radius + 500_000));
+    const look = V.vnorm(V.vsub(p.pos, pos));
+    window.IN.place(pos, look, { x: 0, y: 1, z: 0 });
+  });
+  await sleep(1000);
+  await shot('20_terminator_orbit');
+
+  await browser.close();
+  server.close();
+  if (errors.length) { console.error('PAGE ERRORS:\n' + errors.join('\n')); process.exit(1); }
+  console.log('done');
+}
+main().catch((e) => { console.error(e); process.exit(1); });

@@ -30,6 +30,7 @@ export class StationUi {
     this.buildShipyard();
     this.buildRefinery();
     this.buildCargo();
+    this.buildModuleDocs();
   }
 
   // Docked services bar (top of screen while docked)
@@ -508,11 +509,63 @@ export class StationUi {
 
   // -------------------------------------------------------------------------
 
+  // Module documentation: what every upgrade actually does, per tier.
+  private buildModuleDocs(): void {
+    const win = this.wm.register('moduledocs', 'MODULE REFERENCE', true);
+    const DOCS: Array<[ModuleSlot, string, (t: number) => string]> = [
+      ['engine', 'Main drive. Sets your maneuvering top speed, acceleration and cruise ceiling.',
+        (t) => `+${Math.round((0.15 * (t - 1)) * 100)}% speed · +${Math.round((0.20 * (t - 1)) * 100)}% accel · +${Math.round((0.28 * (t - 1)) * 100)}% cruise`],
+      ['gyro', 'Attitude control. Higher tiers turn the nose faster — the dogfight stat.',
+        (t) => `+${Math.round((0.16 * (t - 1)) * 100)}% turn rate`],
+      ['shield', 'Regenerating barrier that absorbs damage before your hull does.',
+        (t) => `${Math.round((1 + 0.35 * (t - 1)) * 100)}% capacity · ${(2 + 1.5 * t).toFixed(1)} hp/s regen`],
+      ['armor', 'Hull plating. More integrity; repairs cost credits at stations.',
+        (t) => `+${Math.round(0.25 * t * 100)}% max hull`],
+      ['cargo', 'Cargo racks. More hold volume = bigger trade runs and contracts.',
+        (t) => `+${Math.round(0.4 * t * 100)}% hold volume`],
+      ['weapon', 'Pulse cannon. Fires physical bolts (1100 m/s) — lead your target.',
+        (t) => `${6 + 4 * t} dmg/shot · ${(0.34 - 0.015 * t).toFixed(2)}s interval · ${1000 + 120 * t} m range · ${240 + 80 * t} rounds`],
+      ['missile', 'Lock-on missiles. High burst damage, limited ammo, target must stay in your forward cone to lock.',
+        (t) => `${50 + 35 * t} dmg · ${Math.max(1.2, 3.0 - 0.3 * t).toFixed(1)}s lock · ${2 + 2 * t} ammo`],
+      ['drill', 'Mining beam (hold RMB with drill deployed). Watch the heat gauge; carve the glowing seams for real ore.',
+        (t) => `${(1.2 + 0.8 * t).toFixed(1)} u/s extraction · ${500 + 150 * t} m range`],
+      ['collector', 'Magnetic scoop. Pulls ore fragments and salvage toward your hold.',
+        (t) => `${80 + 60 * t} m collection radius`],
+      ['scanner', 'Sensor suite. Detection range, contact resolution; Mk III+ reads asteroid composition.',
+        (t) => `${(6 * (1 + 0.5 * (t - 1))).toFixed(1)} km detect · ${(2.5 * (1 + 0.4 * (t - 1))).toFixed(1)} km resolve${t >= 3 ? ' · composition scan' : ''}`],
+      ['fueltank', 'Fuel reserves for the cruise drive. Bigger tank, longer hauls.',
+        (t) => `${100 + 60 * (t - 1)} units capacity`],
+      ['nav', 'Nav computer. Drives the GPS marker quality and ETA readouts.',
+        (t) => t >= 1 ? 'full GPS marker + ETA' : 'degraded marker'],
+    ];
+    for (const [slot, blurb, tierFn] of DOCS) {
+      const row = el('div', 'vf-section');
+      const head = el('div', 'vf-mod-row');
+      const ic = document.createElement('img');
+      ic.src = moduleIcon(slot);
+      ic.className = 'vf-mod-icon';
+      head.appendChild(ic);
+      head.appendChild(el('span', 'vf-mod-name', MODULE_NAMES[slot]));
+      row.appendChild(head);
+      row.appendChild(el('div', 'vf-subline', blurb));
+      const tiers = el('div', 'vf-stats');
+      tiers.textContent = [1, 2, 3, 4, 5].map((t) => `Mk ${t}: ${tierFn(t)}`).join('  |  ');
+      row.appendChild(tiers);
+      win.body.appendChild(row);
+    }
+    win.refresh = () => {};
+  }
+
   // WORKSHOP tab: rent the fabrication bay, craft modules + kits from materials.
   private renderWorkshop(win: { body: HTMLElement; refresh(): void }, st: StationDef): void {
     const prof = this.world.profile;
     const active = this.world.workshopActive(st.id);
     const head = el('div', 'vf-section');
+    const infoBtn = button('ⓘ MODULE REFERENCE', 'vf-btn', () => {
+      this.audio.click();
+      this.wm.show('moduledocs');
+    });
+    head.appendChild(infoBtn);
     if (active) {
       const left = (prof.workshopRentals[st.id] ?? 0) - this.world.time;
       head.appendChild(el('div', 'vf-ws-status active', `⚒ FABRICATION BAY ACTIVE — ${fmtTime(left)} remaining`));

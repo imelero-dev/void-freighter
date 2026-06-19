@@ -13,6 +13,7 @@ function good(id: string, name: string, category: GoodDef['category'], basePrice
 }
 
 // raw (minable)
+good('stone', 'Regolith', 'raw', 2, 0.15, 1.0); // mining gangue — mostly worthless
 good('iron_ore', 'Iron Ore', 'raw', 14, 0.30, 1.0);
 good('copper_ore', 'Copper Ore', 'raw', 22, 0.35, 1.0);
 good('ice', 'Water Ice', 'raw', 8, 0.25, 1.2);
@@ -71,31 +72,31 @@ export const HULLS: Record<HullId, HullDef> = {
   shuttle: {
     id: 'shuttle', name: 'CL-7 Vagrant', description: 'Surplus courier shuttle. It leaks, but it flies.',
     price: 0, baseCargo: 30, baseHull: 80, baseShield: 50,
-    accel: 36, maxSpeed: 190, turnRate: 2.2, cruiseMax: 220_000, massFactor: 1,
+    accel: 36, maxSpeed: 190, turnRate: 2.2, cruiseMax: 660_000, massFactor: 1,
     slots: slots({}),
   },
   hauler: {
     id: 'hauler', name: 'KM-300 Mule', description: 'Boxy mid-range hauler. The freight line workhorse.',
     price: 16_000, baseCargo: 140, baseHull: 150, baseShield: 80,
-    accel: 26, maxSpeed: 165, turnRate: 1.5, cruiseMax: 260_000, massFactor: 1.5,
+    accel: 26, maxSpeed: 165, turnRate: 1.5, cruiseMax: 780_000, massFactor: 1.5,
     slots: slots({ cargo: 5, weapon: 2, missile: 2, drill: 2, fueltank: 4, armor: 3 }),
   },
   prospector: {
     id: 'prospector', name: 'DV-9 Magpie', description: 'Mining frame with oversized drill mounts and ore scoops.',
     price: 34_000, baseCargo: 90, baseHull: 140, baseShield: 100,
-    accel: 31, maxSpeed: 180, turnRate: 1.7, cruiseMax: 250_000, massFactor: 1.3,
+    accel: 31, maxSpeed: 180, turnRate: 1.7, cruiseMax: 750_000, massFactor: 1.3,
     slots: slots({ drill: 5, collector: 5, scanner: 5, weapon: 2, missile: 1, cargo: 4 }),
   },
   interceptor: {
     id: 'interceptor', name: 'SX-4 Harrier', description: 'Ex-militia gunship. Fast, angry, and cramped.',
     price: 62_000, baseCargo: 45, baseHull: 190, baseShield: 170,
-    accel: 48, maxSpeed: 265, turnRate: 2.9, cruiseMax: 300_000, massFactor: 0.8,
+    accel: 48, maxSpeed: 265, turnRate: 2.9, cruiseMax: 900_000, massFactor: 0.8,
     slots: slots({ weapon: 5, missile: 5, shield: 5, armor: 4, engine: 5, gyro: 5, cargo: 2, drill: 1 }),
   },
   freighter: {
     id: 'freighter', name: 'TT-90 Leviathan', description: 'Heavy freight platform. A warehouse with engines.',
     price: 150_000, baseCargo: 420, baseHull: 340, baseShield: 200,
-    accel: 18, maxSpeed: 140, turnRate: 1.0, cruiseMax: 280_000, massFactor: 2.5,
+    accel: 18, maxSpeed: 140, turnRate: 1.0, cruiseMax: 840_000, massFactor: 2.5,
     slots: slots({ cargo: 5, armor: 5, shield: 4, weapon: 3, missile: 3, fueltank: 5, drill: 2 }),
   },
 };
@@ -133,6 +134,7 @@ export interface ShipStats {
   maxSpeed: number;       // m/s maneuver
   accel: number;          // m/s²
   turnRate: number;       // rad/s
+  massFactor: number;     // rotational/linear inertia: heavy hulls feel sluggish
   cruiseMax: number;      // m/s
   maxHull: number;
   maxShield: number;
@@ -167,6 +169,7 @@ export function shipStats(hullId: HullId, modules: Partial<Record<ModuleSlot, nu
     maxSpeed: h.maxSpeed * (1 + 0.15 * (eng - 1)),
     accel: h.accel * (1 + 0.20 * (eng - 1)),
     turnRate: h.turnRate * (1 + 0.16 * (gyro - 1)),
+    massFactor: h.massFactor,
     cruiseMax: h.cruiseMax * (1 + 0.28 * (eng - 1)),
     maxHull: Math.round(h.baseHull * (1 + 0.25 * armor)),
     maxShield: shield === 0 ? 0 : Math.round(h.baseShield * (1 + 0.35 * (shield - 1))),
@@ -325,6 +328,54 @@ export const PIRATES: Record<PirateTier, PirateDef> = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Ambient traffic (AI-LIFE)
+// ---------------------------------------------------------------------------
+
+export interface NpcDef {
+  kind: import('./types').NpcKind;
+  hull: number;
+  shield: number;
+  maxSpeed: number;
+  accel: number;
+  turnRate: number;
+  laneSpeed: number;      // m/s while riding a trade lane
+  shotDamage: number;     // 0 = unarmed
+  shotInterval: number;
+  weaponRange: number;
+  aimError: number;
+  radius: number;
+}
+
+export const NPC_DEFS: Record<import('./types').NpcKind, NpcDef> = {
+  superfreighter: {
+    kind: 'superfreighter', hull: 4000, shield: 1500, maxSpeed: 60, accel: 5, turnRate: 0.1,
+    laneSpeed: 260, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 280,
+  },
+  freighter: {
+    kind: 'freighter', hull: 320, shield: 160, maxSpeed: 115, accel: 14, turnRate: 0.7,
+    laneSpeed: 460, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 26,
+  },
+  courier: {
+    kind: 'courier', hull: 90, shield: 60, maxSpeed: 200, accel: 34, turnRate: 1.8,
+    laneSpeed: 640, shotDamage: 0, shotInterval: 1, weaponRange: 0, aimError: 0, radius: 10,
+  },
+  patrol: {
+    kind: 'patrol', hull: 220, shield: 200, maxSpeed: 230, accel: 42, turnRate: 2.2,
+    laneSpeed: 600, shotDamage: 16, shotInterval: 0.3, weaponRange: 1300, aimError: 0.025, radius: 12,
+  },
+  merchant: {
+    kind: 'merchant', hull: 260, shield: 220, maxSpeed: 120, accel: 16, turnRate: 0.9,
+    laneSpeed: 380, shotDamage: 12, shotInterval: 0.5, weaponRange: 1000, aimError: 0.04, radius: 16,
+  },
+};
+
+export const MERCHANT_HAIL_RANGE = 900;     // m to open trade
+export const MERCHANT_SELL_FACTOR = 0.85;   // they fence your goods at 85% base
+export const DISTRESS_REWARD_MIN = 300;
+export const DISTRESS_REWARD_MAX = 900;
+export const CIV_KILL_REP_PENALTY = 4;      // shooting civilians has consequences
+
 // Pirate loot: goods rolled from this table (id, min, max, weight).
 export const PIRATE_GOOD_DROPS: Array<{ good: string; min: number; max: number; weight: number }> = [
   { good: 'steel', min: 2, max: 8, weight: 3 },
@@ -367,6 +418,15 @@ export const ROCK_TYPES: Record<string, RockDef> = {
 };
 
 export const ASTEROID_RESPAWN_S = 600; // mined-out rock regrows after 10 min
+// Mining beam: hold-to-fire with heat. Grindy by design — most pulls are
+// worthless regolith unless you work the glowing seams (hotspots).
+export const DRILL_HEAT_PER_S = 1 / 6;     // ~6 s of continuous beam to overheat
+export const DRILL_COOL_PER_S = 1 / 5;
+export const DRILL_OVERHEAT_RESUME = 0.35; // must cool below this to re-fire
+export const MINING_RATE_FACTOR = 0.4;     // global slowdown vs old auto-miner
+export const ORE_CHANCE_BASE = 0.28;       // real material odds per fragment
+export const ORE_CHANCE_HOTSPOT = 0.75;    // when carving a hotspot seam
+export const HOTSPOT_CONE = 0.5;           // rad from hotspot axis that counts
 
 // ---------------------------------------------------------------------------
 // Reputation
@@ -383,19 +443,20 @@ export const SMUGGLING_INSPECTION_CHANCE = 0.3;
 // ---------------------------------------------------------------------------
 
 export const DOCK_MAX_SPEED = 60;       // m/s relative to station for docking
+export const DOCK_ALIGN = 0.7;          // min nose·bearing alignment to dock (~45°)
 export const STATION_TURRET_DPS = 45;   // applied to hostiles inside safeRadius
 export const SHIELD_REGEN_DELAY = 6;    // s without damage before regen
-export const CRUISE_CHARGE_S = 3;       // spool-up time
-export const CRUISE_ACCEL_DOUBLE_S = 2.2; // cruise speed doubles every N s
-export const CRUISE_MIN_SPEED = 800;    // m/s entry speed
+export const CRUISE_CHARGE_S = 1.6;     // spool-up time (snappier hyperjump)
+export const CRUISE_ACCEL_DOUBLE_S = 1.25; // cruise speed doubles every N s
+export const CRUISE_MIN_SPEED = 2200;   // m/s entry speed — kicks in hard
 export const CRUISE_MASS_LOCK = 220_000; // m from planet/station center: cruise drops out (scaled by body)
 export const CRUISE_DROP_SPEED = 220;   // exit speed after cruise
 export const COLLISION_DAMAGE_SPEED = 90; // m/s impact over this damages hull
 
 // Turbo overburn: hold throttle-up at 100% to push past the speed cap.
 // Free in safe space; with hostiles nearby it drains a burst gauge.
-export const TURBO_SPEED = 1000;          // m/s ceiling
-export const TURBO_ACCEL_MULT = 2.2;
+export const TURBO_SPEED = 1500;          // m/s ceiling — fast enough that a planetary descent isn't a chore
+export const TURBO_ACCEL_MULT = 2.8;
 export const TURBO_BURST_S = 3.5;         // gauge duration in combat
 export const TURBO_RECHARGE_S = 9;        // empty -> full
 export const TURBO_ENEMY_RADIUS = 6000;   // hostiles inside this force burst mode

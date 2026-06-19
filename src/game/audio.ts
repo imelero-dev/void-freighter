@@ -20,6 +20,9 @@ export class AudioEngine {
   private stationGain!: GainNode;
   private alarmGain!: GainNode;
   private miningGain!: GainNode;
+  private miningOsc!: OscillatorNode;
+  private windGain!: GainNode;
+  private windFilter!: BiquadFilterNode;
   private alarmTimer = 0;
 
   muted = false;
@@ -132,6 +135,7 @@ export class AudioEngine {
     const mOsc = ctx.createOscillator();
     mOsc.type = 'sawtooth';
     mOsc.frequency.value = 86;
+    this.miningOsc = mOsc;
     const mTrem = ctx.createOscillator();
     mTrem.frequency.value = 13;
     const mTremGain = ctx.createGain();
@@ -149,6 +153,18 @@ export class AudioEngine {
     this.miningGain.connect(this.master);
     mOsc.start();
     mTrem.start();
+
+    // --- atmospheric wind ---
+    this.windGain = ctx.createGain();
+    this.windGain.gain.value = 0;
+    this.windFilter = ctx.createBiquadFilter();
+    this.windFilter.type = 'bandpass';
+    this.windFilter.frequency.value = 220;
+    this.windFilter.Q.value = 0.6;
+    const windSrc = this.loopNoise();
+    windSrc.connect(this.windFilter);
+    this.windFilter.connect(this.windGain);
+    this.windGain.connect(this.master);
   }
 
   private loopNoise(): AudioBufferSourceNode {
@@ -173,8 +189,9 @@ export class AudioEngine {
   // Per-frame state tracking. All values already smoothed by setTargetAtTime.
   setState(s: {
     throttle: number; cruise: 'off' | 'charging' | 'cruise'; cruiseFrac: number;
-    docked: boolean; hullFrac: number; mining: boolean; dead: boolean; turbo: boolean;
-    alarm: boolean;
+    docked: boolean; hullFrac: number; mining: boolean; miningHeat: number;
+    dead: boolean; turbo: boolean; alarm: boolean;
+    atmoDensity: number; entryHeat: number;
   }): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
@@ -190,6 +207,13 @@ export class AudioEngine {
     // a permanent klaxon just trains the player to mute the game
     ramp(this.alarmGain, flying && s.alarm && !s.dead ? 0.07 : 0, 0.05);
     ramp(this.miningGain, s.mining ? 0.12 : 0, 0.08);
+    // the drone climbs as the drill heats up — an audible overheat warning
+    this.miningOsc.frequency.setTargetAtTime(86 + s.miningHeat * 74, t, 0.2);
+    // atmospheric wind: filtered noise rising with air density, higher pitch
+    // and louder with entry heat for the dramatic re-entry roar
+    const windVol = s.atmoDensity * 0.10 + s.entryHeat * 0.18;
+    ramp(this.windGain, flying ? windVol : 0, 0.4);
+    this.windFilter.frequency.setTargetAtTime(180 + s.entryHeat * 600 + s.atmoDensity * 120, t, 0.3);
   }
 
   // ------------------------------------------------------------------
@@ -239,13 +263,22 @@ export class AudioEngine {
   }
 
   miningTick(): void {
-    // handled by the continuous drone; occasional crackle
-    if (Math.random() < 0.1) this.noiseBurst('bandpass', 700, 300, 0.06, 0.03);
+    // the continuous drone carries the beam; layer in frequent crackle so the
+    // cut sounds like it's biting rock rather than humming in a vacuum
+    if (Math.random() < 0.22) this.noiseBurst('bandpass', 700, 300, 0.06, 0.035);
+    if (Math.random() < 0.12) this.noiseBurst('highpass', 2200, 1400, 0.04, 0.02);
   }
 
   hitShield(): void {
     this.blip(1300, 700, 0.12, 'sine', 0.1);
     this.noiseBurst('highpass', 2500, 1200, 0.08, 0.05);
+  }
+
+  // the moment a shield collapses: a downward electric whine + crackle, clearly
+  // different from a normal shield ping so the player feels the layer drop
+  shieldDown(): void {
+    this.blip(900, 180, 0.45, 'sawtooth', 0.12);
+    this.noiseBurst('bandpass', 2400, 400, 0.4, 0.09);
   }
 
   hitHull(): void {
@@ -310,6 +343,12 @@ export class AudioEngine {
 
   alignSnap(): void {
     this.blip(880, 1240, 0.12, 'sine', 0.05);
+  }
+
+  // approach radar aid proximity beep: a clean high tone when on glidepath, a
+  // lower flatter tone when the approach is off (#18)
+  approachBeep(good: boolean): void {
+    this.blip(good ? 1500 : 760, good ? 1500 : 760, 0.05, 'square', 0.045);
   }
 
   alarmFuel(): void {

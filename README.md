@@ -25,6 +25,12 @@ contains zero binary assets.
 One shared star system, one shared economy: every player's trades move the
 same prices. Stations are safe ground; deep space is not.
 
+The void is worked, not empty: bulk carriers and couriers ride the trade
+lanes (and actually deliver the stock they carry), faction patrols hunt
+pirates, wandering merchants sell what customs wouldn't approve ([U] to
+hail), and sometimes a MAYDAY crackles in from a civilian who won't last
+another minute without you.
+
 ## Quick start (offline)
 
 ```bash
@@ -77,9 +83,10 @@ Notes:
 | Ctrl / S | throttle down — hold past zero to brake |
 | Caps Lock | cruise drive ("hypervelocity") · X cut throttle |
 | A D R F | strafe · Q E roll · mouse pitch/yaw · Z flight assist |
+| O / P | VTOL hover mode · landing gear |
 | LMB / RMB | cannon / missile (when locked) |
 | Tab / T | cycle hostiles / target reticle |
-| G | mining drill · Space dock/undock · H rescue tow |
+| G | mining drill · Space dock/undock · Y autodock · H rescue tow |
 | M B C J K L | map · cargo · ship · journal · market · contacts |
 | N / V / Enter / F1 | set destination · camera · chat · help |
 

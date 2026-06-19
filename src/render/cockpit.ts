@@ -141,9 +141,16 @@ export function buildCockpit(): THREE.Group {
   g.add(sill);
 
   // warm instrument glow
-  const glow = new THREE.PointLight(0xd9a441, 0.9, 2.4);
+  const glow = new THREE.PointLight(0xd9a441, 0.45, 2.4);
   glow.position.set(0, -0.3, -0.5);
   g.add(glow);
 
+  g.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (mesh.isMesh) {
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+    }
+  });
   return g;
 }

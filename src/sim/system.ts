@@ -3,9 +3,20 @@
 
 import { Rng } from './rng';
 import type { BeltDef, FactionDef, FieldDef, MoonDef, PlanetDef, RockType, StationDef, SystemDef } from './types';
-import { v3, type Vec3 } from './vec';
+import { v3, vnorm, vscale, vsub, type Vec3 } from './vec';
 
 export const WORLD_SEED = 7741;
+
+// Planets in the source topology are sized for a compact map; this scales them
+// up to feel like real worlds (a ship is a speck against them) without changing
+// the orbital layout. Atmosphere height stays absolute (below) so descents
+// don't get longer as planets grow.
+export const PLANET_SCALE = 8;
+
+// Planets are huge, so to keep them reading as distant worlds (not giant balls
+// hanging next to each other) the orbits are spread well apart. Combined with
+// the daylight atmospheric haze, you no longer see the neighbours looming.
+export const ORBIT_SCALE = 1.7;
 
 export const FACTIONS: FactionDef[] = [
   { id: 'helion', name: 'Helion Combine', color: 0xcc8833, pirate: false },
@@ -145,45 +156,49 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
 
   for (const spec of PLANETS) {
     const angle = rng.range(0, Math.PI * 2);
-    const y = rng.range(-2e5, 2e5);
-    const pos = v3(Math.cos(angle) * spec.orbit, y, Math.sin(angle) * spec.orbit);
+    const y = rng.range(-2e5, 2e5) * ORBIT_SCALE;
+    const orbit = spec.orbit * ORBIT_SCALE;
+    const pos = v3(Math.cos(angle) * orbit, y, Math.sin(angle) * orbit);
+    const radius = spec.radius * PLANET_SCALE;
     const planet: PlanetDef = {
-      id: spec.id, name: spec.name, kind: spec.kind, pos, radius: spec.radius,
+      id: spec.id, name: spec.name, kind: spec.kind, pos, radius,
       ringed: spec.ringed, colorSeed: rng.int(1, 1e9), stationId: spec.station?.id ?? null,
     };
     planets.push(planet);
     for (let m = 0; m < spec.moons; m++) {
       const ma = rng.range(0, Math.PI * 2);
-      const md = spec.radius * rng.range(3.5, 6);
+      const md = radius * rng.range(3.5, 6);
       moons.push({
         id: `${spec.id}_moon${m}`, planetId: spec.id,
-        pos: v3(pos.x + Math.cos(ma) * md, pos.y + rng.range(-0.4, 0.4) * spec.radius, pos.z + Math.sin(ma) * md),
-        radius: spec.radius * rng.range(0.12, 0.25), colorSeed: rng.int(1, 1e9),
+        pos: v3(pos.x + Math.cos(ma) * md, pos.y + rng.range(-0.4, 0.4) * radius, pos.z + Math.sin(ma) * md),
+        radius: radius * rng.range(0.12, 0.25), colorSeed: rng.int(1, 1e9),
       });
     }
     if (spec.station) {
-      // Station orbits just outside the planet, offset sunward-ish for light.
+      // Station orbits just outside the planet. Its hangar faces away from the
+      // planet (into open space) so the approach is unobstructed and lit.
       const sa = rng.range(0, Math.PI * 2);
-      const sd = spec.radius * 2.2;
-      stations.push(makeStation(spec.station, v3(
-        pos.x + Math.cos(sa) * sd, pos.y + spec.radius * 0.3, pos.z + Math.sin(sa) * sd,
-      ), rng.int(1, 1e9)));
+      const sd = radius + 1.6e6; // a fixed standoff above the (now large) surface
+      const spos = v3(pos.x + Math.cos(sa) * sd, pos.y + radius * 0.1, pos.z + Math.sin(sa) * sd);
+      stations.push(makeStation(spec.station, spos, rng.int(1, 1e9), vnorm(vsub(spos, pos))));
     }
   }
 
   for (const spec of FREE_STATIONS) {
     const angle = rng.range(0, Math.PI * 2);
-    stations.push(makeStation(spec, v3(
-      Math.cos(angle) * spec.orbit, spec.offPlane, Math.sin(angle) * spec.orbit,
-    ), rng.int(1, 1e9)));
+    const orbit = spec.orbit * ORBIT_SCALE;
+    const spos = v3(Math.cos(angle) * orbit, spec.offPlane * ORBIT_SCALE, Math.sin(angle) * orbit);
+    // free stations open their hangar toward the star (sunward) for light
+    stations.push(makeStation(spec, spos, rng.int(1, 1e9), vnorm(vscale(spos, -1))));
   }
 
   const belts: BeltDef[] = BELTS.map((spec) => {
     const fields: FieldDef[] = [];
     const baseAngle = rng.range(0, Math.PI * 2);
+    const ring = spec.ring * ORBIT_SCALE;
     for (let i = 0; i < spec.fieldCount; i++) {
       const angle = baseAngle + (i / spec.fieldCount) * Math.PI * 2 + rng.range(-0.25, 0.25);
-      const r = spec.ring + rng.range(-6e5, 6e5);
+      const r = ring + rng.range(-6e5, 6e5);
       fields.push({
         id: `${spec.id}_f${i}`,
         beltId: spec.id,
@@ -196,7 +211,7 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
       });
     }
     return {
-      id: spec.id, name: spec.name, center: v3(0, 0, 0), ringRadius: spec.ring,
+      id: spec.id, name: spec.name, center: v3(0, 0, 0), ringRadius: ring,
       fields, danger: spec.danger, composition: spec.composition,
     };
   });
@@ -207,10 +222,14 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
   };
 }
 
-function makeStation(spec: StationSpec, pos: Vec3, seed: number): StationDef {
+function makeStation(spec: StationSpec, pos: Vec3, seed: number, port: Vec3): StationDef {
+  // A big solid hull with a single hangar facing `port`. The station is large
+  // enough to fly inside (radius ~2 km) so the landing pad lives in the hangar,
+  // not on a floating slab out in space.
   return {
     id: spec.id, name: spec.name, factionId: spec.faction, pos,
-    radius: 900, dockRadius: 2200, safeRadius: 14_000,
+    radius: 2000, dockRadius: 6500, safeRadius: 16_000,
+    dockType: 'hangar', dockPort: port,
     services: spec.services,
     produces: { ...spec.produces },
     consumes: { ...spec.consumes },
@@ -229,6 +248,8 @@ export interface RockSpawn {
   radius: number;
   type: RockType;
   spinSeed: number;
+  // glowing mineral seams: surface directions where the good ore lives
+  hotspots: Vec3[];
 }
 
 export function rockSpawn(field: FieldDef, belt: BeltDef, index: number): RockSpawn {
@@ -247,13 +268,91 @@ export function rockSpawn(field: FieldDef, belt: BeltDef, index: number): RockSp
   // rare rocks are smaller; big rocks are rarer (power distribution)
   const sizeRoll = Math.pow(rng.next(), 2.2);
   const radius = type === 'rare' ? 18 + sizeRoll * 60 : 25 + sizeRoll * 175;
-  return { pos, radius, type, spinSeed: rng.int(1, 1e9) };
+  const hotspots: Vec3[] = [];
+  const nSpots = rng.int(1, 3);
+  for (let h = 0; h < nSpots; h++) {
+    const az = rng.range(0, Math.PI * 2);
+    const el = rng.range(-1, 1);
+    const c = Math.sqrt(1 - el * el);
+    hotspots.push(v3(Math.cos(az) * c, el, Math.sin(az) * c));
+  }
+  return { pos, radius, type, spinSeed: rng.int(1, 1e9), hotspots };
 }
 
 // Buying nav intel on an unvisited station: base fee + range surcharge.
 export function stationInfoCost(from: Vec3, st: StationDef): number {
   const d = Math.hypot(st.pos.x - from.x, st.pos.y - from.y, st.pos.z - from.z);
   return Math.round((500 + (d / 1e6) * 35) / 10) * 10;
+}
+
+// Atmospheric shell thickness as a fraction of planet radius. Drag ramps from
+// zero at the top of the shell to peak at the surface.
+export const ATMO_DRAG = 0.28;         // peak per-second drag: felt in the handling, but it no longer caps a powered dive to a crawl
+export const SOFT_LAND_SPEED = 35;     // m/s closing speed for a clean touchdown
+
+// Atmosphere shell height in metres (absolute, not a fraction of radius) so the
+// descent stays a sane length on a huge planet. Thicker on gas giants.
+export function atmoHeight(p: PlanetDef): number {
+  const base = p.kind === 'gas' ? 220_000 : p.kind === 'terran' ? 90_000 : 55_000;
+  return base;
+}
+
+// Gas giants and lava worlds have no firm ground; we give them a dense cloud
+// deck / molten crust you still rest on, so every body is landable.
+export function isLandable(kind: PlanetDef['kind']): boolean {
+  return kind !== 'gas' && kind !== 'lava';
+}
+
+// Atmosphere at a world position: nearest planet, your altitude above its
+// surface, and the air density there (0 in vacuum, 1 at the surface). Shared by
+// the sim (drag), the online client (prediction parity) and the HUD readout.
+
+// Visual sky strength (0..1) for a given physical air density. The physical
+// density is quadratic in depth — near zero through the whole upper atmosphere —
+// which keeps the drag honest but would leave the sky pitch-black until you're
+// nearly on the deck. For RENDERING we want the blue to fill in much higher (you
+// see a sky the moment you enter, like a real atmospheric world from a cockpit),
+// so we take the square root: that turns the quadratic depth back into a linear
+// ramp, present from the top of the air down.
+export function skyStrength(density: number): number {
+  return Math.min(1, Math.sqrt(Math.max(0, density)) * 1.25);
+}
+
+export function atmosphereAt(system: SystemDef, pos: Vec3): { density: number; planet: PlanetDef | null; altitude: number } {
+  let planet: PlanetDef | null = null;
+  let altitude = Infinity;
+  for (const p of system.planets) {
+    const d = Math.hypot(pos.x - p.pos.x, pos.y - p.pos.y, pos.z - p.pos.z);
+    const alt = d - p.radius;
+    if (alt < altitude) {
+      altitude = alt;
+      planet = p;
+    }
+  }
+  let density = 0;
+  if (planet) {
+    const shell = atmoHeight(planet);
+    if (altitude < shell) {
+      // denser low down (quadratic) like a real column of air
+      const t = Math.max(0, 1 - altitude / shell);
+      density = Math.min(1, t * t);
+    }
+  }
+  return { density, planet, altitude };
+}
+
+// Weight you feel inside a planet's atmosphere: an acceleration toward the
+// nearest planet's centre, full near the surface and easing to nothing at the
+// top of the air shell (so it fades in as you enter, not a sudden jolt). null
+// in vacuum. Shared by the Sim and the online client so prediction matches.
+export const GRAVITY = 9.81; // m/s² — Earth-normal weight in atmosphere
+export function atmoGravity(system: SystemDef, pos: Vec3): Vec3 | null {
+  const a = atmosphereAt(system, pos);
+  if (!a.planet) return null;
+  const shell = atmoHeight(a.planet);
+  if (a.altitude >= shell) return null;
+  const gf = Math.max(0, Math.min(1, (shell - a.altitude) / (shell * 0.6)));
+  return vscale(vnorm(vsub(pos, a.planet.pos)), -GRAVITY * gf);
 }
 
 // Danger level (0..1) at a world position: belts/fields project danger near

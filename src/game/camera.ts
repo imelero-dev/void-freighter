@@ -27,10 +27,17 @@ const COCKPIT_OFFSETS: Record<string, Vec3> = {
 export class CameraRig {
   mode: 'cockpit' | 'chase' = 'cockpit';
   private smoothing: { pos: Vec3; quat: Quat } | null = null;
+  private recoil = 0; // transient weapon-fire screen kick, decays fast
+  entryTurbulence = 0; // 0..1 atmospheric entry shake intensity
 
   toggle(): void {
     this.mode = this.mode === 'cockpit' ? 'chase' : 'cockpit';
     this.smoothing = null;
+  }
+
+  // brief camera punch when the player fires — gives shots weight (#12)
+  kick(mag = 1): void {
+    this.recoil = Math.min(1.5, this.recoil + mag);
   }
 
   // Computes camera world pos + orientation from the (interpolated) ship state.
@@ -41,9 +48,12 @@ export class CameraRig {
     let camQuat: Quat;
     if (this.mode === 'cockpit') {
       const off = { ...(COCKPIT_OFFSETS[ship.hullId] ?? COCKPIT_OFFSETS.shuttle) };
-      // engine rumble: subtle cockpit shake scaling with throttle/cruise
+      // engine rumble + atmospheric entry turbulence
       if (!ship.dockedAt) {
-        const shake = ship.cruise === 'cruise' ? 0.1 : Math.abs(ship.throttle) * 0.07;
+        const engineShake = ship.cruise === 'cruise' ? 0.1 : Math.abs(ship.throttle) * 0.07;
+        const turb = this.entryTurbulence;
+        const atmoShake = turb * (0.35 + 0.15 * Math.sin(Date.now() * 0.023) * Math.sin(Date.now() * 0.011));
+        const shake = Math.max(engineShake, atmoShake);
         off.x += (Math.random() - 0.5) * shake;
         off.y += (Math.random() - 0.5) * shake;
       }
@@ -52,16 +62,27 @@ export class CameraRig {
       this.smoothing = null;
     } else {
       const off = CHASE_OFFSETS[ship.hullId] ?? CHASE_OFFSETS.shuttle;
-      const target = vadd(pos, qrot(orient, off));
       if (!this.smoothing) {
-        this.smoothing = { pos: target, quat: orient };
+        this.smoothing = { pos: pos, quat: orient };
       } else {
+        // orientation eases for a cinematic feel; position is RIGID relative
+        // to the ship — positional lag at cruise/turbo speeds (km per frame)
+        // would leave the ship a dot on the horizon
         const k = 1 - Math.exp(-dt * 7);
-        this.smoothing.pos = vlerp(this.smoothing.pos, target, k);
         this.smoothing.quat = qnlerp(this.smoothing.quat, orient, k);
       }
-      camPos = this.smoothing.pos;
       camQuat = this.smoothing.quat;
+      camPos = vadd(pos, qrot(camQuat, off));
+    }
+    // weapon recoil: a small, fast-decaying back-and-jitter kick in camera space
+    if (this.recoil > 0) {
+      const j = this.recoil;
+      camPos = vadd(camPos, qrot(camQuat, {
+        x: (Math.random() - 0.5) * 0.14 * j,
+        y: (Math.random() - 0.5) * 0.1 * j,
+        z: 0.09 * j,
+      }));
+      this.recoil = Math.max(0, this.recoil - dt * 9);
     }
     sm.setCamera(camPos, new THREE.Quaternion(camQuat.x, camQuat.y, camQuat.z, camQuat.w));
   }

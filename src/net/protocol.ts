@@ -52,8 +52,12 @@ export interface WireShip {
   ca?: number; // cannon ammo (self only)
   pl?: 1;  // is a player
   dl?: 1;  // derelict hulk
+  np?: import('../sim/types').NpcKind; // ambient traffic kind
   tb?: number; // turbo charge ×100 (self only)
   ta?: 1;  // turbo active
+  dh?: number; // drill heat ×100 (self only)
+  do?: 1;  // drill overheated
+  mb?: 1;  // mining beam firing (self only)
 }
 
 export interface WireRock {
@@ -95,6 +99,8 @@ export interface SnapMsg {
   dest?: { kind: string; id: string; name: string; pos: { x: number; y: number; z: number } } | null;
   fa?: 0 | 1;      // flight assist
   drill?: 0 | 1;
+  vt?: 0 | 1;      // VTOL hover mode
+  gr?: 0 | 1;      // landing gear deployed
   news?: string[];
 }
 
@@ -158,6 +164,7 @@ export function wireShip(e: Entity): WireShip {
   w.ca = e.cannonAmmo;
   if (e.isPlayer) w.pl = 1;
   if (e.derelict) w.dl = 1;
+  if (e.npc) w.np = e.npc;
   return w;
 }
 

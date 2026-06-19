@@ -69,10 +69,17 @@ function fragMat(goodId: string | null): THREE.MeshStandardMaterial {
 }
 const lootGeo = new THREE.BoxGeometry(2.6, 2.6, 2.6);
 const lootMat = new THREE.MeshStandardMaterial({ color: 0x8a6a2a, roughness: 0.5, metalness: 0.7, emissive: 0x332200 });
-// weapon bolts: shared elongated tracer (cylinder axis +Y), oriented per frame
-const boltGeo = new THREE.CylinderGeometry(0.45, 0.45, 9, 5, 1, true);
+// weapon bolts: shared elongated tracer (cylinder axis +Y), oriented per frame.
+// Beefier than a thin line so shots read with weight (#12).
+const boltGeo = new THREE.CylinderGeometry(0.7, 0.7, 14, 6, 1, true);
 const boltMat = new THREE.MeshBasicMaterial({
-  color: 0xff6a3a, transparent: true, opacity: 0.95,
+  color: 0xff7a3a, transparent: true, opacity: 0.98,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+// soft glow sleeve around the tracer core — shared, never disposed
+const boltGlowGeo = new THREE.CylinderGeometry(1.7, 1.7, 16, 6, 1, true);
+const boltGlowMat = new THREE.MeshBasicMaterial({
+  color: 0xffae5a, transparent: true, opacity: 0.35,
   blending: THREE.AdditiveBlending, depthWrite: false,
 });
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
@@ -99,7 +106,7 @@ export class EntitiesLayer {
       // own ship handled by the camera layer (cockpit hides it; 3rd person shows it)
       seen.add(e.id);
       let view = this.views.get(e.id);
-      const kindKey = e.kind === 'ship' ? `ship_${e.hullId}_${e.pirate ?? ''}${e.derelict ? '_dead' : ''}` : e.kind;
+      const kindKey = e.kind === 'ship' ? `ship_${e.hullId}_${e.pirate ?? ''}_${e.npc ?? ''}${e.derelict ? '_dead' : ''}` : e.kind;
       if (view && view.kindKey !== kindKey) {
         this.dispose(e.id);
         view = undefined;
@@ -124,14 +131,13 @@ export class EntitiesLayer {
         tmpQ2.set(e.orient.x, e.orient.y, e.orient.z, e.orient.w);
         view.obj.quaternion.slerpQuaternions(tmpQ1, tmpQ2, alpha);
         if (view.ship) updateThrusters(view.ship, e);
+        const strobe = view.obj.userData.strobe as THREE.Mesh | undefined;
+        if (strobe) strobe.visible = Math.sin(time * 7 + e.id) > 0.2;
         if (e.id === world.playerId && !this.showPlayer) view.obj.visible = false;
         if (e.dockedAt) view.obj.visible = false;
       } else if (e.kind === 'bolt') {
         tmpDir.set(e.vel.x, e.vel.y, e.vel.z).normalize();
         view.obj.quaternion.setFromUnitVectors(Y_AXIS, tmpDir);
-      } else if (e.kind === 'asteroid') {
-        const spin = time * 0.04 + e.rockIndex * 1.3;
-        view.obj.rotation.set(spin * 0.4, spin, spin * 0.23);
       } else if (e.kind === 'fragment' || e.kind === 'loot') {
         const spin = time * 1.2 + e.id;
         view.obj.rotation.set(spin * 0.7, spin, 0);
@@ -156,8 +162,60 @@ export class EntitiesLayer {
     switch (e.kind) {
       case 'ship': {
         const ship = buildShipMesh(e.hullId, e.pirate);
+        // ambient traffic paint jobs
+        if (e.npc) {
+          if (e.npc === 'superfreighter') {
+            ship.group.scale.setScalar(14); // half a kilometre of cargo sliding past
+          } else if (e.npc === 'patrol') {
+            // police: pale hull + blue strobe
+            ship.group.traverse((node) => {
+              const mesh = node as THREE.Mesh;
+              if (mesh.isMesh) {
+                const m = mesh.material as THREE.MeshStandardMaterial;
+                if (m.color) m.color.lerp(new THREE.Color(0xcdd8e4), 0.55);
+              }
+            });
+            const strobe = new THREE.Mesh(
+              new THREE.SphereGeometry(0.8, 6, 6),
+              new THREE.MeshBasicMaterial({ color: 0x55aaff }),
+            );
+            strobe.position.set(0, 2.2, 0);
+            ship.group.add(strobe);
+            ship.group.userData.strobe = strobe;
+          } else if (e.npc === 'merchant') {
+            ship.group.traverse((node) => {
+              const mesh = node as THREE.Mesh;
+              if (mesh.isMesh) {
+                const m = mesh.material as THREE.MeshStandardMaterial;
+                if (m.color) m.color.lerp(new THREE.Color(0xd8b46a), 0.3);
+              }
+            });
+            const lamp = new THREE.Mesh(
+              new THREE.SphereGeometry(0.7, 6, 6),
+              new THREE.MeshBasicMaterial({ color: 0xffcc66 }),
+            );
+            lamp.position.set(0, 3.4, 0);
+            ship.group.add(lamp);
+          } else {
+            // civilian liveries: muted blue-gray
+            ship.group.traverse((node) => {
+              const mesh = node as THREE.Mesh;
+              if (mesh.isMesh) {
+                const m = mesh.material as THREE.MeshStandardMaterial;
+                if (m.color) m.color.lerp(new THREE.Color(0x8fa3b0), 0.22);
+              }
+            });
+          }
+        }
+        ship.group.traverse((node) => {
+          const m = node as THREE.Mesh;
+          if (m.isMesh) {
+            m.castShadow = true;
+            m.receiveShadow = true;
+          }
+        });
         if (e.derelict) {
-          // cold hull: darken everything, kill thruster glow
+          // cold hull: darken everything, kill thruster glow + running lights
           ship.group.traverse((node) => {
             const mesh = node as THREE.Mesh;
             if (mesh.isMesh) {
@@ -166,9 +224,11 @@ export class EntitiesLayer {
               if ('emissive' in m && m.emissive) m.emissive.setHex(0x000000);
               m.opacity = 1;
             }
+            if ((node as THREE.Sprite).isSprite) node.visible = false; // nav lights + engine bloom
           });
           for (const t of ship.thrusters) t.visible = false;
           ship.thrusters.length = 0;
+          ship.glows.length = 0;
         }
         view = { obj: ship.group, ship, kindKey };
         break;
@@ -176,7 +236,23 @@ export class EntitiesLayer {
       case 'asteroid': {
         const mesh = new THREE.Mesh(rockGeo(e.rockIndex), rockMat(e.rockType ?? 'rocky'));
         mesh.scale.setScalar(e.radius);
-        view = { obj: mesh, kindKey };
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        const wrapper = new THREE.Group();
+        wrapper.add(mesh);
+        // glowing mineral seams: mine these spots for the good ore
+        if (e.hotspots) {
+          const seamColor = e.rockType === 'rare' ? 0xc9a0ff : e.rockType === 'icy' ? 0x9fdcff : 0xffd27a;
+          for (const h of e.hotspots) {
+            const seam = new THREE.Mesh(
+              new THREE.SphereGeometry(Math.max(2, e.radius * 0.07), 6, 6),
+              new THREE.MeshBasicMaterial({ color: seamColor }),
+            );
+            seam.position.set(h.x * e.radius * 0.98, h.y * e.radius * 0.98, h.z * e.radius * 0.98);
+            wrapper.add(seam);
+          }
+        }
+        view = { obj: wrapper, kindKey };
         break;
       }
       case 'fragment': {
@@ -191,6 +267,7 @@ export class EntitiesLayer {
       }
       case 'bolt': {
         const mesh = new THREE.Mesh(boltGeo, boltMat); // shared pool — never disposed
+        mesh.add(new THREE.Mesh(boltGlowGeo, boltGlowMat)); // glow sleeve
         view = { obj: mesh, kindKey };
         break;
       }
@@ -232,6 +309,10 @@ export class EntitiesLayer {
           const mat = mesh.material as THREE.Material | THREE.Material[];
           if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
           else mat?.dispose();
+        } else if ((node as THREE.Sprite).isSprite) {
+          // nav-light / engine-glow sprites own their material (the glow
+          // texture is shared and must survive)
+          (node as THREE.Sprite).material?.dispose();
         }
       });
     }

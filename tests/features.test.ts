@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { blankEntity, Sim } from '../src/sim/sim';
-import { vadd, vdist, v3 } from '../src/sim/vec';
+import { vadd, vdist, vscale, v3 } from '../src/sim/vec';
+import { terrainHeight } from '../src/sim/terrain';
+import { TURBO_SPEED } from '../src/sim/data';
 
 function runTicks(sim: Sim, n: number) {
   const events = [];
@@ -20,7 +22,7 @@ function deepSpacePlayer(sim: Sim) {
 }
 
 describe('turbo overburn', () => {
-  it('pinned throttle in empty space sails past the speed cap toward 1 km/s', () => {
+  it('pinned throttle in empty space sails past the speed cap toward the turbo ceiling', () => {
     const sim = new Sim();
     const { pid, e, meta } = deepSpacePlayer(sim);
     meta.input.thrustForward = 1;
@@ -28,7 +30,7 @@ describe('turbo overburn', () => {
     runTicks(sim, 20 * 25);
     const speed = Math.hypot(e.vel.x, e.vel.y, e.vel.z);
     expect(speed).toBeGreaterThan(meta.stats.maxSpeed * 1.5);
-    expect(speed).toBeLessThanOrEqual(1001);
+    expect(speed).toBeLessThanOrEqual(TURBO_SPEED + 1);
     // free overburn: the gauge stays charged with nobody around
     expect(meta.turboCharge).toBeGreaterThan(0.9);
   });
@@ -313,19 +315,28 @@ describe('station info intel', () => {
   });
 });
 
-describe('planetary exclusion field', () => {
-  it('bounces ships off and raises a warning event', () => {
+describe('planetary landing', () => {
+  it('lets a ship descend to the surface instead of bouncing off a field', () => {
     const sim = new Sim();
     const { pid, e } = deepSpacePlayer(sim);
-    const planet = sim.system.planets[0];
-    // drop the ship just inside the shell, flying inward
-    const shell = planet.radius * 1.15;
-    e.pos = vadd(planet.pos, v3(shell - 2000, 0, 0));
-    e.vel = v3(-300, 0, 0);
-    const events = runTicks(sim, 10);
-    expect(events.some((ev) => ev.type === 'forcefield' && ev.pid === pid)).toBe(true);
-    expect(vdist(e.pos, planet.pos)).toBeGreaterThanOrEqual(shell);
-    expect(e.hull).toBe(e.maxHull); // the wall shoves, it doesn't wreck you
+    const meta = sim.meta(pid)!;
+    meta.flightAssist = false;
+    meta.gearDown = true;
+    // a non-lava world (lava cooks the hull on the way down — by design)
+    const planet = sim.system.planets.find((p) => p.kind !== 'lava')!;
+    // the ground is a heightfield now, so find how tall the terrain is right
+    // beneath the descent and start just above it
+    const up = v3(0, 1, 0);
+    const body = { pos: planet.pos, radius: planet.radius, kind: planet.kind, colorSeed: planet.colorSeed };
+    const groundH = terrainHeight(body, vadd(planet.pos, vscale(up, planet.radius + 5000)));
+    e.pos = vadd(planet.pos, vscale(up, planet.radius + groundH + e.radius + 40));
+    e.vel = vscale(up, -25);
+    const events = runTicks(sim, 50);
+    // no exclusion field, and the ship comes to rest ON the terrain (no clip)
+    expect(events.some((ev) => ev.type === 'forcefield')).toBe(false);
+    const alt = vdist(e.pos, planet.pos) - planet.radius;
+    expect(alt).toBeGreaterThan(groundH - 5);            // didn't clip through the ground
+    expect(alt).toBeLessThan(groundH + e.radius + 30);   // settled on the terrain, not floating
   });
 });
 

@@ -4,6 +4,8 @@
 import { GameApp } from './game/app';
 import { OfflineWorld } from './offline_world';
 import * as vec from './sim/vec';
+import { terrainHeight, heightField, TERRAIN } from './sim/terrain';
+import { atmosphereAt } from './sim/system';
 import { Menu } from './ui/menu';
 import type { IWorld } from './world_api';
 
@@ -40,6 +42,7 @@ const menu = new Menu({
   },
   resume() {
     menu.hide();
+    if (app) app.paused = false;
   },
   settingsChanged() {
     app?.applySettings();
@@ -48,16 +51,19 @@ const menu = new Menu({
 
 function startGame(w: IWorld): void {
   world = w;
-  (window as any).VF = { world: w, vec }; // exposed for E2E scripts/bots
+  (window as any).VF = { world: w, vec, terrainHeight, heightField, TERRAIN, atmosphereAt }; // exposed for E2E scripts/bots
   app = new GameApp(w, canvas);
+  (window as any).VF.app = app;
   app.menuHelp = () => menu.toggleHelp();
   // Esc with no windows open toggles the pause menu; the world keeps running
   // underneath and the save is flushed on every pause
   app.onExit = () => {
     if (menu.visible) {
       menu.hide();
+      app!.paused = false;
     } else {
       if (world instanceof OfflineWorld) world.save();
+      app!.paused = true; // offline: the universe truly stops
       menu.show();
     }
   };
@@ -67,3 +73,11 @@ function startGame(w: IWorld): void {
 window.addEventListener('beforeunload', () => {
   if (world instanceof OfflineWorld) world.save();
 });
+
+// PWA: installable + offline shell (issue #5). Dev server stays uncached so
+// HMR keeps working.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => { /* http origin or unsupported */ });
+  });
+}

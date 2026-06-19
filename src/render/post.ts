@@ -15,6 +15,10 @@ const GritShader = {
     time: { value: 0 },
     aspect: { value: 1 },
     damage: { value: 0 },   // 0..1 — red pulse when hull critical
+    atmoColor: { value: new THREE.Color(0x6fa8d6) }, // sky tint inside an atmosphere
+    atmoDensity: { value: 0 }, // 0..1 how deep in the air column you are
+    warp: { value: 0 }, // 0..1 cruise/hyperjump warp intensity
+    entryHeat: { value: 0 }, // 0..1 atmospheric re-entry plasma glow
   },
   vertexShader: `
     varying vec2 vUv;
@@ -27,6 +31,10 @@ const GritShader = {
     uniform float time;
     uniform float aspect;
     uniform float damage;
+    uniform vec3 atmoColor;
+    uniform float atmoDensity;
+    uniform float warp;
+    uniform float entryHeat;
     varying vec2 vUv;
 
     float hash(vec2 p) {
@@ -37,13 +45,32 @@ const GritShader = {
       vec2 uv = vUv;
       vec2 center = uv - 0.5;
 
-      // subtle chromatic aberration, stronger at the edges
-      float ca = 0.0022 * dot(center, center) * 4.0;
+      // hyperjump warp: radial smear toward the centre stretches stars/lights
+      // into speed-streaks rushing past, intensifying with cruise speed
+      vec3 streak = vec3(0.0);
+      if (warp > 0.001) {
+        float steps = 12.0;
+        for (float s = 1.0; s <= 12.0; s += 1.0) {
+          float t = (s / steps) * 0.5 * warp;
+          streak += texture2D(tDiffuse, uv - center * t).rgb;
+        }
+        streak /= steps;
+      }
+
+      // subtle chromatic aberration, stronger at the edges (amped under warp).
+      // Kept gentle so high-contrast edges (a planet limb against space) don't
+      // fringe into a rainbow that reads as a rendering fault.
+      float ca = 0.0014 * dot(center, center) + warp * 0.011;
       vec2 dir = normalize(center + 1e-6);
       float r = texture2D(tDiffuse, uv + dir * ca).r;
       float g = texture2D(tDiffuse, uv).g;
       float b = texture2D(tDiffuse, uv - dir * ca).b;
       vec3 col = vec3(r, g, b);
+      if (warp > 0.001) {
+        // bright speed lines + a tunnel darkening toward the edges
+        col = max(col, streak * (0.5 + 0.8 * warp));
+        col *= 1.0 - warp * 0.18 * smoothstep(0.12, 0.5, length(center));
+      }
 
       // film grain
       float grain = hash(uv * vec2(1920.0, 1080.0) + fract(time) * 43.0) - 0.5;
@@ -51,6 +78,39 @@ const GritShader = {
 
       // scanlines (very faint)
       col *= 1.0 - 0.05 * (0.5 + 0.5 * sin(uv.y * 900.0));
+
+      // atmosphere: the sky itself is drawn as the far-scene background; here we
+      // just add a soft horizon brightening low on screen for depth.
+      if (atmoDensity > 0.001) {
+        float horizon = smoothstep(0.4, 0.05, vUv.y) * atmoDensity * 0.18;
+        col = mix(col, atmoColor * 1.25, horizon);
+      }
+
+      // atmospheric re-entry: a hot plasma sheath glows up from the screen edges
+      // and flickers when you tear into thick air at speed — the unmistakable cue
+      // that you've hit the atmosphere and are committing to the descent.
+      if (entryHeat > 0.001) {
+        float edge = length(center * vec2(aspect, 1.0));
+        // multi-frequency flicker: turbulent, not a clean sine
+        float flick = 0.65 + 0.20 * sin(time * 38.0) * sin(time * 17.0)
+                     + 0.15 * sin(time * 63.0 + 2.3);
+        float sheath = smoothstep(0.25, 0.9, edge) * entryHeat * flick;
+        vec3 plasma = mix(vec3(1.0, 0.38, 0.08), vec3(1.0, 0.82, 0.48), entryHeat);
+        col += plasma * sheath * 1.1;
+        // bow shock: bright leading flare below centre (ahead of the cockpit)
+        float bow = smoothstep(0.4, 0.0, vUv.y) * entryHeat;
+        col += plasma * bow * 0.65;
+        // plasma streaks: turbulent hot lines rushing past the cockpit,
+        // sparse and random so they read as individual ionised trails
+        float sx = floor(vUv.x * 55.0);
+        float sp = hash(vec2(sx, 0.3)) * 6.28;
+        float ss = 14.0 + hash(vec2(sx, 1.3)) * 22.0;
+        float st = smoothstep(0.97, 1.0, sin(vUv.y * 35.0 + time * ss + sp));
+        float stMask = st * step(0.72, hash(vec2(sx, 2.3))) * smoothstep(0.22, 0.58, edge);
+        col += plasma * stMask * entryHeat * 0.45 * flick;
+        // whole-screen warm wash at high heat — the cockpit glows orange
+        col = mix(col, col * vec3(1.12, 0.88, 0.72), entryHeat * 0.25);
+      }
 
       // vignette
       float vig = smoothstep(0.95, 0.35, length(center * vec2(aspect, 1.0) * 0.9));
@@ -92,9 +152,13 @@ export class PostPipeline {
     this.grit.uniforms.aspect.value = window.innerWidth / window.innerHeight;
   }
 
-  render(time: number, damageLevel: number): void {
+  render(time: number, damageLevel: number, atmoColor?: THREE.Color, atmoDensity = 0, warp = 0, entryHeat = 0): void {
     this.grit.uniforms.time.value = time;
     this.grit.uniforms.damage.value = damageLevel;
+    if (atmoColor) (this.grit.uniforms.atmoColor.value as THREE.Color).copy(atmoColor);
+    this.grit.uniforms.atmoDensity.value = atmoDensity;
+    this.grit.uniforms.warp.value = warp;
+    this.grit.uniforms.entryHeat.value = entryHeat;
     this.composer.render();
   }
 }

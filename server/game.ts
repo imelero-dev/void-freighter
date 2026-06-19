@@ -160,12 +160,16 @@ export class GameServer {
       case 'fire': sim.setFiring(pid, !!msg.on); break;
       case 'missile': sim.fireMissile(pid); break;
       case 'drill': sim.setDrill(pid, !!msg.on); break;
+      case 'beam': sim.setMiningBeam(pid, !!msg.on); break;
       case 'cruise': sim.toggleCruise(pid); break;
       case 'fa': sim.toggleFlightAssist(pid); break;
+      case 'vtol': sim.toggleVtol(pid); break;
+      case 'gear': sim.toggleGear(pid); break;
       case 'target': sim.setTarget(pid, msg.id === null ? null : int(msg.id)); break;
       case 'tab': sim.tabTarget(pid); break;
       case 'reticle': sim.targetReticle(pid); break;
       case 'dock': sim.requestDock(pid); break;
+      case 'autodock': sim.autodock(pid); break;
       case 'undock': sim.undock(pid); break;
       case 'rescue': sim.hailRescue(pid); break;
       case 'fuelcells': sim.useFuelCells(pid, int(msg.qty)); break;
@@ -179,6 +183,10 @@ export class GameServer {
       case 'ammo': sim.restockCannonAmmo(pid); break;
       case 'derelict': sim.openDerelict(pid, int(msg.id)); break;
       case 'buyinfo': if (typeof msg.id === 'string') sim.buyStationInfo(pid, msg.id.slice(0, 64)); break;
+      case 'hail': sim.traffic.hailMerchant(pid, int(msg.id)); break;
+      case 'mbuy': if (typeof msg.good === 'string') sim.traffic.merchantBuy(pid, int(msg.id), msg.good, int(msg.qty)); break;
+      case 'mbuymod': sim.traffic.merchantBuyModule(pid, int(msg.id)); break;
+      case 'msell': if (typeof msg.good === 'string') sim.traffic.merchantSell(pid, int(msg.id), msg.good, int(msg.qty)); break;
       case 'rentws': sim.rentWorkshop(pid); break;
       case 'craft':
         if (typeof msg.slot === 'string' && msg.slot in MODULE_NAMES) sim.craftModule(pid, msg.slot as ModuleSlot, int(msg.tier));
@@ -278,6 +286,9 @@ export class GameServer {
       const selfWire = wireShip(p);
       selfWire.tb = Math.round(meta.turboCharge * 100);
       if (meta.turboActive) selfWire.ta = 1;
+      selfWire.dh = Math.round(meta.drillHeat * 100);
+      if (meta.drillOverheated) selfWire.do = 1;
+      if (meta.beamFiring) selfWire.mb = 1;
       const snap: Record<string, unknown> = {
         t: 'snap', tick: this.sim.tickCount, time: Math.round(this.sim.time * 100) / 100,
         self: selfWire, ents,
@@ -289,6 +300,8 @@ export class GameServer {
         snap.dest = meta.destination;
         snap.fa = meta.flightAssist ? 1 : 0;
         snap.drill = meta.drillOn ? 1 : 0;
+        snap.vt = meta.vtol ? 1 : 0;
+        snap.gr = meta.gearDown ? 1 : 0;
         snap.news = this.sim.newsLog.slice(0, 8);
       }
       this.send(session, snap);
