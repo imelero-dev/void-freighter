@@ -675,6 +675,12 @@ export class GameApp {
       const atmoNow = atmosphereAt(w.system, ship.pos);
       this.frameAtmoDensity = atmoNow.density;
       this.frameAtmoKind = atmoNow.planet?.kind ?? 'rocky';
+      // lava-world heat: a loud, persistent on-screen warning while you're deep
+      // enough in the air to cook, so you climb out before the hull fails (the
+      // upper atmosphere is a safe approach band — see LAVA_HEAT_SAFE in the sim)
+      if (this.frameAtmoKind === 'lava' && this.frameAtmoDensity > 0.25) {
+        this.hud.flashAlert('⚠ HULL OVERHEATING — CLIMB', '#f6552a', 700);
+      }
       const base = Math.max(120, Math.min(2000, nearSurf * 2.6));
       // off in lit atmosphere — it's daylight and only smears the haze
       this.headlight.intensity = base * Math.max(0, 1 - this.frameAtmoDensity * 2.2);

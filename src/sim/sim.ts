@@ -40,7 +40,8 @@ const FRAGMENT_CHUNK = 3;        // mined units per fragment entity
 const FRAGMENT_TTL = 150;
 const VTOL_SPEED_FACTOR = 0.22;  // forward-speed envelope in VTOL hover mode
 const ZERO_VEL: Vec3 = { x: 0, y: 0, z: 0 }; // stationary collider reference
-const LAVA_HEAT_DPS = 55;        // hull heat per second in a lava world's air
+const LAVA_HEAT_DPS = 16;        // hull heat per second deep in a lava world's air
+const LAVA_HEAT_SAFE = 0.25;     // air density below this is a safe approach band (no heat)
 const CRUISE_PLANET_STANDOFF = 95_000;  // hard cap on the drop altitude; the real standoff is the planet's own atmosphere height (~3 min powered descent at full turbo)
 const DOCK_SETTLE_S = 0.7;       // settle dwell on the pad before the dock menu opens
 const CRUISE_MOON_STANDOFF = 35_000;    // m above a moon surface (airless, so a closer drop)
@@ -582,11 +583,17 @@ export class Sim {
       if (atmo.density > 0) {
         const f = Math.max(0, 1 - ATMO_DRAG * atmo.density * dt);
         e.vel = vscale(e.vel, f);
-        // a lava world's air cooks the hull — landing there is a fire dare
+        // a lava world's air cooks the hull the deeper you go — but the upper
+        // atmosphere is a safe approach band, so you get clear warning and time to
+        // climb out before it bites. Only the lower air (dense, near the surface)
+        // actually burns, ramping from zero at the safe band to full at the deck.
         if (atmo.planet?.kind === 'lava') {
-          this.applyDamage(e, LAVA_HEAT_DPS * atmo.density * dt, -1, true, `Burned up in ${atmo.planet.name}'s atmosphere`);
-          if (this.tickCount % 20 === 0) {
-            this.events.push({ type: 'log', text: `WARNING: ${atmo.planet.name} surface heat — hull cooking.`, color: '#f44', pid: meta.pid });
+          const heatFrac = Math.max(0, (atmo.density - LAVA_HEAT_SAFE) / (1 - LAVA_HEAT_SAFE));
+          if (heatFrac > 0) {
+            this.applyDamage(e, LAVA_HEAT_DPS * heatFrac * dt, -1, true, `Burned up in ${atmo.planet.name}'s atmosphere`);
+            if (this.tickCount % 12 === 0) {
+              this.events.push({ type: 'log', text: `⚠ ${atmo.planet.name.toUpperCase()} HEAT — hull cooking, CLIMB to cool`, color: '#f44', pid: meta.pid });
+            }
           }
         }
       }
