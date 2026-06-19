@@ -20,7 +20,7 @@ import * as THREE from 'three';
 import type { PlanetKind, SystemDef } from '../sim/types';
 import { atmoHeight, atmosphereAt } from '../sim/system';
 import { heightField, TERRAIN } from '../sim/terrain';
-import { fbm2 } from '../sim/rng';
+import { fbm3 } from '../sim/rng';
 import type { SceneManager } from './scene';
 
 const SNOW_C = new THREE.Color(0xeef2f6);
@@ -269,13 +269,15 @@ export class TerrainPatch {
     const horizonPlanar = R * Math.sqrt(Math.max(0, 1 - cosH * cosH));
     const coarseHalf = Math.min(MAX_SPAN_HALF, horizonPlanar * 1.22);
     const fineHalf = Math.min(coarseHalf * 0.5, alt * 0.7 + 3_000, 16_000);
-    // amplitude the coarse cap carries at the fine patch's rim, so the fine relief
-    // can fade down to exactly that and the two meet without a step. Kept off the
-    // floor so distant ground still has some form (not a flat pancake to the rim).
-    const coarseRelief = Math.max(0.28, Math.min(1, 50_000 / (coarseHalf * 2)));
-
-    this.buildCapIfNeeded(this.coarse, p, wx, wy, wz, coarseHalf, coarseRelief, 0);
-    this.buildCapIfNeeded(this.fine, p, wx, wy, wz, fineHalf, 1, coarseRelief);
+    // BOTH caps carry FULL relief and sample the SAME heightfield, so mountain
+    // ranges read all the way to the horizon (Elite-Dangerous style) and the two
+    // caps align without a step where they overlap. The fine cap just adds
+    // resolution + per-pixel detail near the ship; the coarse cap carries the
+    // macro massifs out to the skyline. A circular alpha fade on each dissolves
+    // the square grid into a disc (the fine into the coarse, the coarse into haze
+    // past the horizon), so no straight edge ever crosses the curved horizon.
+    this.buildCapIfNeeded(this.coarse, p, wx, wy, wz, coarseHalf, 1, 1, true);
+    this.buildCapIfNeeded(this.fine, p, wx, wy, wz, fineHalf, 1, 1, true);
 
     // place & orient both caps
     for (const c of [this.coarse, this.fine]) {
@@ -311,19 +313,19 @@ export class TerrainPatch {
     this.planetId = p.id;
   }
 
-  private buildCapIfNeeded(c: Cap, p: { id: string; kind: PlanetKind; colorSeed: number; radius: number }, wx: number, wy: number, wz: number, spanHalf: number, reliefCenter: number, reliefRim: number): void {
+  private buildCapIfNeeded(c: Cap, p: { id: string; kind: PlanetKind; colorSeed: number; radius: number }, wx: number, wy: number, wz: number, spanHalf: number, reliefCenter: number, reliefRim: number, fadeRim: boolean): void {
     const moved = Math.hypot(wx - c.lastBuild.x, wy - c.lastBuild.y, wz - c.lastBuild.z);
     const spanChanged = Math.abs(spanHalf - c.lastSpan) > c.lastSpan * REBUILD_SPAN;
     if (moved <= REBUILD_MOVE && !spanChanged && this.lastPlanet === p.id) return;
     c.lastBuild.set(wx, wy, wz);
     c.lastSpan = spanHalf;
-    this.rebuild(c.mesh, p, wx, wz, spanHalf, reliefCenter, reliefRim);
+    this.rebuild(c.mesh, p, wx, wz, spanHalf, reliefCenter, reliefRim, fadeRim);
   }
 
   // Build one cap. Relief runs from `reliefCenter` (under the ship) to `reliefRim`
-  // at the cap edge: the coarse cap fades to 0 (flat at the horizon), the fine
-  // patch fades to the coarse amplitude (so they overlap seamlessly).
-  private rebuild(mesh: THREE.Mesh, p: { kind: PlanetKind; colorSeed: number; radius: number }, wx: number, wz: number, spanHalf: number, reliefCenter: number, reliefRim: number): void {
+  // at the cap edge. `fadeRim` turns on the circular alpha fade that dissolves the
+  // square grid into a disc at the rim (so no straight edges cross the horizon).
+  private rebuild(mesh: THREE.Mesh, p: { kind: PlanetKind; colorSeed: number; radius: number }, wx: number, wz: number, spanHalf: number, reliefCenter: number, reliefRim: number, fadeRim: boolean): void {
     const def = GROUND[p.kind];
     const prm = TERRAIN[p.kind];
     const seed = p.colorSeed;
@@ -343,21 +345,31 @@ export class TerrainPatch {
       const lx = this.baseXY[i * 2] * span, ly = this.baseXY[i * 2 + 1] * span;
       const u = wx + this.t1.x * lx + this.t2.x * ly;
       const vv = wz + this.t1.z * lx + this.t2.z * ly;
+      // 3-D direction from the planet centre to this vertex (sub-ship surface
+      // point is up*R; offset along the tangent axes). Sampling the heightfield
+      // and tone fields on this direction — not on world (X,Z) — is what keeps
+      // the relief seamless and spike-free at any orientation on the globe.
+      const rx = this.up.x * R + this.t1.x * lx + this.t2.x * ly;
+      const ry = this.up.y * R + this.t1.y * lx + this.t2.y * ly;
+      const rz = this.up.z * R + this.t1.z * lx + this.t2.z * ly;
       const s2 = lx * lx + ly * ly;
       const edge = Math.sqrt(s2) / spanHalf;
-      // circular fade (coarse cap only): inscribed circle of the square grid →
-      // smooth disc shape so no straight edges ever cross the curved horizon.
-      // Fine cap sits inside the coarse and doesn't need fading.
-      const coarseFade = reliefRim === 0;
-      const ef = !coarseFade ? 1 : edge < 0.88 ? 1 : edge > 1.02 ? 0 : 1 - Math.pow((edge - 0.88) / 0.14, 2);
+      // circular fade: inscribed circle of the square grid → smooth disc so no
+      // straight edges ever cross the curved horizon. Applied to BOTH caps now —
+      // the fine cap dissolves into the coarse, the coarse into the haze.
+      const ef = !fadeRim ? 1 : edge < 0.88 ? 1 : edge > 1.02 ? 0 : 1 - Math.pow((edge - 0.88) / 0.14, 2);
       ae.setX(i, Math.max(0, ef));
-      // relief amplitude: center value, easing to the rim value over the outer 25%
-      const k = edge < 0.75 ? 0 : (edge - 0.75) / 0.25;
+      // relief amplitude: center value, easing to the rim value over the outer
+      // 25%. k MUST be clamped to [0,1]: the square patch's corners sit at
+      // edge≈1.41, and an unclamped smoothstep k²(3−2k) explodes hugely negative
+      // there, multiplying the relief into a 30 km spike at the fine patch corners
+      // (the "pico"/"cuadrado" artifact). Clamped, corners settle to the rim amp.
+      const k = edge < 0.75 ? 0 : Math.min(1, (edge - 0.75) / 0.25);
       const relief = reliefCenter + (reliefRim - reliefCenter) * (k * k * (3 - 2 * k));
-      const r = heightField(u, vv, seed, prm);
+      const r = heightField(rx, ry, rz, R, seed, prm);
       rawH[i] = r;
-      vary[i] = fbm2(u * 0.00085, vv * 0.00085, seed ^ 0x55a3, 3);
-      biome[i] = fbm2(u * 0.00014, vv * 0.00014, seed ^ 0xb0b1, 2);
+      vary[i] = fbm3(rx * 0.00085, ry * 0.00085, rz * 0.00085, seed ^ 0x55a3, 3);
+      biome[i] = fbm3(rx * 0.00014, ry * 0.00014, rz * 0.00014, seed ^ 0xb0b1, 2);
       const h = r * relief;
       const drop = R - Math.sqrt(Math.max(0, R * R - s2)); // exact sphere curvature
       pos.setXYZ(i, lx, ly, h - drop);

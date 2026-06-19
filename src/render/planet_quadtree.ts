@@ -125,7 +125,7 @@ export class PlanetQuadtree {
     const cy = F.n.y + F.a.y * cu + F.b.y * cv;
     const cz = F.n.z + F.a.z * cu + F.b.z * cv;
     const dir = cubeToSphere(cx, cy, cz, new THREE.Vector3());
-    const h = heightField(this.planet.pos.x + dir.x * R, this.planet.pos.z + dir.z * R, this.planet.colorSeed, TERRAIN[this.planet.kind]);
+    const h = heightField(dir.x, dir.y, dir.z, R, this.planet.colorSeed, TERRAIN[this.planet.kind]);
     const anchor = new THREE.Vector3(
       this.planet.pos.x + dir.x * (R + h),
       this.planet.pos.y + dir.y * (R + h),
@@ -289,7 +289,7 @@ export class PlanetQuadtree {
         const u = node.u0 + (node.u1 - node.u0) * (i / GRID);
         cubeToSphere(F.n.x + F.a.x * u + F.b.x * v, F.n.y + F.a.y * u + F.b.y * v, F.n.z + F.a.z * u + F.b.z * v, dir);
         const wx = this.planet.pos.x + dir.x * R, wz = this.planet.pos.z + dir.z * R;
-        const r = heightField(wx, wz, seed, prm);
+        const r = heightField(dir.x, dir.y, dir.z, R, seed, prm);
         const h = r * reliefFactor;
         const k = j * n + i;
         heights[k] = h; rawH[k] = r;
