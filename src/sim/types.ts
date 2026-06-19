@@ -364,7 +364,7 @@ export type SimEvent =
   | { type: 'lockWarning'; pid: number }       // an enemy locked onto you
   | { type: 'hostileDetected'; pid: number }
   | { type: 'interdiction'; pid: number }
-  | { type: 'death'; pid: number; lostCargo: number; deductible: number }
+  | { type: 'death'; pid: number; lostCargo: number; deductible: number; cause: string; station: string }
   | { type: 'chat'; from: string; text: string; channel: 'local' | 'station' | 'system'; pid?: number }
   | { type: 'comms'; pid: number; text: string; from?: string }  // radio chatter (callsign optional)
   | { type: 'econ'; headline: string }

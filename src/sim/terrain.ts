@@ -79,6 +79,16 @@ export function heightField(dx: number, dy: number, dz: number, radius: number, 
   return ((plains + ranges) + detail * 0.16) * p.amp;
 }
 
+// Conservative upper bound on heightField output for a world kind (m above the
+// mean sphere). The shape maxes at ~(plains 0.42 + ranges 2.6 + detail 0.08)·amp;
+// 3.2·amp covers it with margin. Collision uses this to know how far above the
+// mean radius it must still test for terrain — TOO LOW a bound lets the ship fly
+// freely INTO a tall peak, then a single huge correction when it finally tests
+// reads as a massive impact and kills you ("sudden death on entry").
+export function maxRelief(kind: PlanetKind): number {
+  return TERRAIN[kind].amp * 3.2;
+}
+
 // Terrain height (m above mean radius) directly beneath a world position.
 export function terrainHeight(body: TerrainBody, pos: Vec3): number {
   const dx = pos.x - body.pos.x, dy = pos.y - body.pos.y, dz = pos.z - body.pos.z;

@@ -20,7 +20,7 @@ import { Economy } from './economy';
 import { Rng } from './rng';
 import { ATMO_DRAG, atmoGravity, atmoHeight, atmosphereAt, dangerAt, generateSystem, rockSpawn, SOFT_LAND_SPEED, stationInfoCost, WORLD_SEED } from './system';
 import { dockCheck, hangarFrame, insideHangar, padPoint, vtolUpRef } from './docking';
-import { terrainHeight, terrainNormal, type TerrainBody } from './terrain';
+import { terrainHeight, terrainNormal, maxRelief, type TerrainBody } from './terrain';
 import { TrafficSystem } from './traffic';
 import {
   DT, emptyShipInput, type CargoItem, type Contract, type Destination, type Entity,
@@ -584,7 +584,7 @@ export class Sim {
         e.vel = vscale(e.vel, f);
         // a lava world's air cooks the hull — landing there is a fire dare
         if (atmo.planet?.kind === 'lava') {
-          this.applyDamage(e, LAVA_HEAT_DPS * atmo.density * dt, -1, true);
+          this.applyDamage(e, LAVA_HEAT_DPS * atmo.density * dt, -1, true, `Burned up in ${atmo.planet.name}'s atmosphere`);
           if (this.tickCount % 20 === 0) {
             this.events.push({ type: 'log', text: `WARNING: ${atmo.planet.name} surface heat — hull cooking.`, color: '#f44', pid: meta.pid });
           }
@@ -676,7 +676,7 @@ export class Sim {
       // outright and tears into the hull on the way out
       e.shield = 0;
       const dmg = e.maxHull * this.rng.range(0.12, 0.22);
-      this.applyDamage(e, dmg, -1, true);
+      this.applyDamage(e, dmg, -1, true, 'Killed escaping a derelict');
       this.events.push({ type: 'log', text: 'Hull breach — you got out, but the ship took a beating escaping the wreck.', color: '#f44', pid });
       this.events.push({ type: 'comms', pid, text: 'You do not talk about what was in the hold. Nobody would believe you anyway.' });
     }
@@ -875,7 +875,7 @@ export class Sim {
     // star burn
     const starD = vlen(e.pos);
     if (starD < this.system.starRadius * STAR_BURN_RADIUS_MULT) {
-      this.applyDamage(e, 60 * dt, -1, true);
+      this.applyDamage(e, 60 * dt, -1, true, 'Incinerated by the star');
       if (this.tickCount % 20 === 0) {
         this.events.push({ type: 'log', text: 'WARNING: hull temperature critical.', color: '#f44', pid: meta.pid });
       }
@@ -938,7 +938,7 @@ export class Sim {
       e.vel = vadd(otherVel, newRel);
       const impact = -vn; // closing speed along the normal
       if (impact > COLLISION_DAMAGE_SPEED) {
-        this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * dmgScale * meta.stats.massFactor, -1, true);
+        this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * dmgScale * meta.stats.massFactor, -1, true, 'Hull collision');
       }
       if (e.cruise !== 'off' && impact > 40) this.dropCruise(e, 'collision');
     }
@@ -1010,7 +1010,7 @@ export class Sim {
     const center = body.pos;
     const rx = e.pos.x - center.x, ry = e.pos.y - center.y, rz = e.pos.z - center.z;
     const d = Math.hypot(rx, ry, rz);
-    if (d >= body.radius + 3300 + e.radius) return; // clear of any possible relief
+    if (d >= body.radius + maxRelief(body.kind) + e.radius) return; // clear of any possible relief
     // the ground is the mean sphere plus the local terrain relief — collision
     // matches what you see, so you stop on the mountains and rest in the valleys
     const h = terrainHeight(body, e.pos);
@@ -1034,7 +1034,7 @@ export class Sim {
       }
       if (impact > softLimit) {
         const penalty = meta.gearDown ? 0.4 : 1.4; // gear-up slams the hull
-        this.applyDamage(e, (impact - softLimit) * penalty * meta.stats.massFactor, -1, true);
+        this.applyDamage(e, (impact - softLimit) * penalty * meta.stats.massFactor, -1, true, `Crashed into ${name}`);
         if (!wasResting) {
           this.events.push({
             type: 'log',
@@ -1331,7 +1331,7 @@ export class Sim {
   }
 
   // Apply damage with all protection rules. sourceId -1 = environment.
-  applyDamage(target: Entity, amount: number, sourceId: number, environmental: boolean): void {
+  applyDamage(target: Entity, amount: number, sourceId: number, environmental: boolean, cause = ''): void {
     if (target.dead || target.dockedAt) return;
     if (target.derelict && !environmental) return; // hulks just soak fire
     const meta = target.isPlayer ? this.players.get(target.id) : undefined;
@@ -1379,11 +1379,11 @@ export class Sim {
     if (remaining > 0) {
       target.hull -= remaining;
       this.events.push({ type: 'hit', entityId: target.id, shield: false, amount: Math.round(remaining), x: target.pos.x, y: target.pos.y, z: target.pos.z, ...from });
-      if (target.hull <= 0) this.handleDeath(target, sourceId);
+      if (target.hull <= 0) this.handleDeath(target, sourceId, cause);
     }
   }
 
-  private handleDeath(e: Entity, killerId: number): void {
+  private handleDeath(e: Entity, killerId: number, cause = ''): void {
     e.hull = 0;
     this.events.push({ type: 'explosion', entityId: e.id, big: true, x: e.pos.x, y: e.pos.y, z: e.pos.z });
 
@@ -1480,7 +1480,14 @@ export class Sim {
       meta.cruiseRequested = false;
       e.dockedAt = st.id;
       e.pos = vclone(st.pos);
-      this.events.push({ type: 'death', pid: e.id, lostCargo, deductible });
+      // a human-readable cause for the death screen: explicit environmental
+      // reason if given, else the attacker's name, else a generic fallback
+      let causeText = cause;
+      if (!causeText) {
+        const killer = killerId >= 0 ? this.entities.get(killerId) : null;
+        causeText = killer ? `Destroyed by ${killer.name}` : 'Ship destroyed';
+      }
+      this.events.push({ type: 'death', pid: e.id, lostCargo, deductible, cause: causeText, station: st.name });
       return;
     }
   }
@@ -1874,7 +1881,7 @@ export class Sim {
       if (st.blackMarket) continue;
       for (const e of this.entities.values()) {
         if (e.kind === 'ship' && e.pirate && !e.dead && vdist(e.pos, st.pos) < st.safeRadius) {
-          this.applyDamage(e, STATION_TURRET_DPS, -1, true);
+          this.applyDamage(e, STATION_TURRET_DPS, -1, true, 'Shot down by station defences');
         }
       }
     }

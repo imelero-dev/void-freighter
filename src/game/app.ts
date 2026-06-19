@@ -22,7 +22,7 @@ import type { PlanetKind } from '../sim/types';
 import { settings } from '../ui/settings';
 import type { IWorld } from '../world_api';
 import { ChatUi } from '../ui/chat';
-import { el, fmtCredits, fmtDistance } from '../ui/dom';
+import { button, el, fmtCredits, fmtDistance } from '../ui/dom';
 import { Hud } from '../ui/hud';
 import { SystemMap } from '../ui/map';
 import { StationUi } from '../ui/station_windows';
@@ -894,6 +894,48 @@ export class GameApp {
     }
   };
 
+  private deathOverlay: HTMLElement | null = null;
+
+  // Death screen (#): a full-screen overlay naming the CAUSE of death, the
+  // insurance outcome, and a CONTINUE button that dismisses it. The sim has
+  // already respawned the ship docked at the respawn station, so CONTINUE simply
+  // returns control with the station UI underneath.
+  private showDeathScreen(cause: string, station: string, lostCargo: number, deductible: number): void {
+    this.audio.explosion(true);
+    this.audio.alarmFuel();
+    this.paused = true;            // freeze the offline sim under the overlay
+    this.input.uiMode = true;
+    this.input.releasePointer();
+    this.input.zeroThrottle();
+    this.deathOverlay?.remove();
+
+    const overlay = el('div', 'vf-death');
+    const box = el('div', 'vf-death-box');
+    box.appendChild(el('div', 'vf-death-title', 'SHIP DESTROYED'));
+    box.appendChild(el('div', 'vf-death-cause', cause));
+    const detail = el('div', 'vf-death-detail');
+    detail.innerHTML =
+      `Insurance recovered your hull at <b>${station}</b>.<br>` +
+      `Cargo lost: <b>${lostCargo}</b> units &nbsp;·&nbsp; Deductible: <b>${fmtCredits(deductible)}</b>`;
+    box.appendChild(detail);
+    const row = el('div', 'vf-menu-row');
+    row.appendChild(button('CONTINUE', 'vf-btn big accept', () => this.dismissDeathScreen()));
+    box.appendChild(row);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    this.deathOverlay = overlay;
+  }
+
+  private dismissDeathScreen(): void {
+    this.audio.click();
+    this.deathOverlay?.remove();
+    this.deathOverlay = null;
+    this.paused = false;
+    // hand control back; the ship is docked, so the window manager / station UI
+    // decides the input mode from here
+    this.input.uiMode = this.wm.anyOpen() || this.chat.open;
+  }
+
   private handleEvent(ev: import('../sim/types').SimEvent): void {
     const w = this.world;
     this.fx.handleEvents([ev]);
@@ -1022,9 +1064,9 @@ export class GameApp {
         break;
       }
       case 'death':
-        this.hud.flashAlert('SHIP DESTROYED', '#e8402a', 5000);
         this.hud.pushLog(`Insurance recovered your hull. Cargo lost: ${ev.lostCargo} units. Deductible: ${fmtCredits(ev.deductible)}.`, '#e8402a');
         this.input.zeroThrottle();
+        this.showDeathScreen(ev.cause, ev.station, ev.lostCargo, ev.deductible);
         break;
       case 'chat':
         this.chat.addMessage(ev.from, ev.text, ev.channel);

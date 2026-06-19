@@ -6,7 +6,8 @@ import { isMobile } from '../game/touch';
 import { BOLT_SPEED, GOODS } from '../sim/data';
 import type { Entity } from '../sim/types';
 import { leadPoint, qForward, qRight, qUp, vcross, vdist, vlen, vscale, vsub, vnorm, vdot } from '../sim/vec';
-import { atmoHeight, atmosphereAt, SOFT_LAND_SPEED } from '../sim/system';
+import { atmoHeight, atmosphereAt, isLandable, SOFT_LAND_SPEED } from '../sim/system';
+import { terrainHeight } from '../sim/terrain';
 import { dockCheck, stationPort, vtolUpRef } from '../sim/docking';
 import type { IWorld } from '../world_api';
 import { fmtDistance, fmtTime } from './dom';
@@ -675,6 +676,29 @@ export class Hud {
     ctx.font = '10px "Lucida Console", monospace';
     ctx.fillStyle = !descending ? AMBER_DIM : safe ? GREEN : RED;
     ctx.fillText(descending ? `VS ▼ ${Math.round(vs)} m/s${!world.gearDown ? '  ⚠ GEAR UP' : ''}` : 'VS  level', cx, y + 14);
+
+    // AGL — height above the GROUND directly below, not the mean radius. With
+    // multi-km mountains this is the number that keeps you from flying into a
+    // ridge; it goes red as the terrain rises to meet you so you pull up in time.
+    if (isLandable(atmo.planet.kind) && atmo.altitude < 25_000) {
+      const groundH = terrainHeight(
+        { pos: atmo.planet.pos, radius: atmo.planet.radius, kind: atmo.planet.kind, colorSeed: atmo.planet.colorSeed },
+        ship.pos,
+      );
+      const agl = atmo.altitude - groundH;
+      const danger = agl < 400 || (descending && agl < vs * 6); // <6 s to impact at this rate
+      ctx.font = 'bold 11px "Lucida Console", monospace';
+      ctx.fillStyle = danger ? RED : agl < 1500 ? '#e0902a' : GREEN;
+      ctx.fillText(`AGL ${fmtDistance(Math.max(0, agl))}${danger && descending ? '  ⚠ PULL UP' : ''}`, cx, y + 28);
+      if (atmo.density > 0) {
+        const bw = 90;
+        this.hbar(cx - bw / 2, y + 38, bw, 5, atmo.density, CIV_TEAL);
+        ctx.fillStyle = AMBER_DIM;
+        ctx.font = '9px "Lucida Console", monospace';
+        ctx.fillText('ATMOSPHERE', cx, y + 52);
+      }
+      return;
+    }
 
     if (atmo.density > 0) {
       const bw = 90;
