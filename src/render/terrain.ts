@@ -239,10 +239,14 @@ export class TerrainPatch {
     // gentler than physically-thick so mid-distance terrain stays READABLE from
     // altitude (the brief is: see the relief from high up, not a white wash). The
     // far rim still hazes to the sky, but hills hold form well into the distance.
-    const base = hazeD * 0.26e-4;
-    this.aerial.uExt.value.set(base * 1.3, base * 1.02, base * 0.6);
-    this.aerial.uIns.value = base * 0.7;
-    this.aerial.uInsCol.value.copy(skyColor).lerp(WHITE_C, 0.35).multiplyScalar(1.05);
+    // gentler extinction so the terrain reads as a continuous lit surface to the
+    // horizon from altitude (not a small clear disc swimming in haze — the "circle"
+    // look), with a brighter inscatter so distance lifts toward the daylit sky like
+    // real aerial perspective instead of greying/darkening out.
+    const base = hazeD * 0.19e-4;
+    this.aerial.uExt.value.set(base * 1.25, base * 1.0, base * 0.62);
+    this.aerial.uIns.value = base * 0.8;
+    this.aerial.uInsCol.value.copy(skyColor).lerp(WHITE_C, 0.45).multiplyScalar(1.25);
     if (!p || atmo.altitude > atmoHeight(p)) {
       this.coarse.mesh.visible = false; this.fine.mesh.visible = false;
       this.active = false; this.blend = 0; this.reach = 0;
@@ -299,8 +303,11 @@ export class TerrainPatch {
     const dropRim = R - Math.sqrt(Math.max(0, R * R - coarseHalf * coarseHalf));
     this.reach = Math.hypot(coarseHalf, alt + dropRim) + 4_000;
 
-    // cross-fade in over the top slice of the shell so entry is soft, not a pop
-    const fade = Math.min(1, (shell - atmo.altitude) / (shell * 0.45));
+    // cross-fade in over the TOP slice of the shell so entry is soft, but reach
+    // full opacity early (by ~70% of the shell height) so the ground reads as a
+    // solid planet surface well before you're deep in — not a translucent disc
+    // hanging in the haze through the whole upper atmosphere.
+    const fade = Math.min(1, (shell - atmo.altitude) / (shell * 0.3));
     this.blend = fade;
     // low floor-glow keeps the night side off pure black, but must stay well out
     // of the sun's way: a strong fill light flattens the terrain into a uniform
@@ -308,7 +315,7 @@ export class TerrainPatch {
     // Keep it dim so the sun models the relief (readable form), lift only on the
     // deep night side.
     const deep = 1 - Math.min(1, atmo.altitude / shell);
-    const emis = 0.04 + 0.10 * deep;
+    const emis = 0.06 + 0.12 * deep;
     // per-pixel detail bump: full strength low down where it reads, fading out by
     // ~8 km where a few-metre bump is sub-pixel (and would just shimmer)
     this.aerial.uDetail.value = 30 * Math.max(0, 1 - atmo.altitude / 8_000);
