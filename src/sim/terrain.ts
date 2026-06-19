@@ -53,19 +53,21 @@ export function heightField(dx: number, dy: number, dz: number, radius: number, 
   // plains between, not an even field of bumps.
   const cont = fbm3(ux * 0.30, uy * 0.30, uz * 0.30, seed + 41, 2);
   const massif = Math.max(0, cont - 0.30) / 0.70; // 0 on plains -> 1 deep in a range
-  // BODY: 4 big octaves give the broad mountain mass the massif mask lifts.
+  // BODY: 3 big octaves give the broad mountain mass the massif mask lifts. (This
+  // is sampled per render vertex thousands of times per rebuild, so octave count
+  // is a direct CPU cost — 3 keeps the massifs while staying cheap.)
   let body = 0, amp = 1, freq = 1, bnorm = 0;
-  for (let o = 0; o < 4; o++) {
+  for (let o = 0; o < 3; o++) {
     let n = fbm3(ux * freq, uy * freq, uz * freq, seed + o * 131, 1);
     if (p.ridged) n = 1 - Math.abs(n * 2 - 1);
     body += n * amp; bnorm += amp; amp *= 0.5; freq *= 2.1;
   }
   body /= bnorm;
   if (p.ridged) body = Math.pow(body, 1.25);
-  // DETAIL: 3 fine octaves add rugged ridge texture at a modest amplitude so it
-  // reads as rock up close without spiking the peaks into thin spires.
+  // DETAIL: 2 fine octaves add rugged ridge texture at a modest amplitude (the
+  // per-pixel shader detail carries the finest scale, so the mesh needn't).
   let detail = 0, damp = 1, dfreq = 9, dnorm = 0;
-  for (let o = 0; o < 3; o++) {
+  for (let o = 0; o < 2; o++) {
     let n = fbm3(ux * dfreq, uy * dfreq, uz * dfreq, seed + o * 257 + 5, 1);
     if (p.ridged) n = 1 - Math.abs(n * 2 - 1);
     detail += n * damp; dnorm += damp; damp *= 0.5; dfreq *= 2.1;

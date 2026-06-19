@@ -21,6 +21,7 @@ import type { PlanetKind, SystemDef } from '../sim/types';
 import { atmoHeight, atmosphereAt } from '../sim/system';
 import { heightField, TERRAIN } from '../sim/terrain';
 import { fbm3 } from '../sim/rng';
+import { isMobile } from '../game/touch';
 import type { SceneManager } from './scene';
 
 const SNOW_C = new THREE.Color(0xeef2f6);
@@ -28,10 +29,22 @@ const WATER_DEEP_C = new THREE.Color(0x1c3a5e);
 const WATER_SHALLOW_C = new THREE.Color(0x2f6f86);
 
 const WHITE_C = new THREE.Color(0xffffff);
-const SEG = 192;             // grid resolution per cap (constant; span varies) — finer cells, more detail at altitude
+// grid resolution per cap. A full rebuild re-noises SEG² vertices (×2 caps) with
+// 3-D fbm — quadratic in SEG — so this is the dominant CPU cost on a descent.
+// 128 keeps the relief crisp (the per-pixel shader detail fills the rest) while
+// cutting rebuild work ~2.2× vs 192, which was hitching mobile frames hard.
+// Mobile drops to 96 (another ~1.8× off the rebuild) — phones have far less CPU
+// headroom and the per-pixel detail keeps the lower mesh from reading as coarse.
+const SEG = isMobile() ? 96 : 128;
 const MAX_SPAN_HALF = 380_000; // cap the coarse reach so the near far-plane stays sane (m)
-const REBUILD_MOVE = 55;    // re-noise after the ship moves this far laterally (m)
-const REBUILD_SPAN = 0.05;  // ...or after a cap's LOD span changes this fraction
+// Re-noise thresholds are PER CAP: the fine patch (≤16 km, ~120 m quads) must
+// follow the ship closely, but the coarse cap spans hundreds of km with km-scale
+// quads — re-noising it every 55 m was pure waste. Rebuilding it only every few
+// hundred metres (or when its LOD span changes) roughly halves the typical
+// rebuild load with no visible change.
+const REBUILD_MOVE_FINE = 80;
+const REBUILD_MOVE_COARSE = 400;
+const REBUILD_SPAN = 0.06;  // ...or after a cap's LOD span changes this fraction
 
 // base palette per world kind (the shape comes from sim/terrain TERRAIN)
 const GROUND: Record<PlanetKind, { lo: THREE.Color; hi: THREE.Color; rock: THREE.Color }> = {
@@ -154,19 +167,19 @@ export class TerrainPatch {
          float vfNoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
            float a = vfHash(i), b = vfHash(i + vec2(1.0, 0.0)), c = vfHash(i + vec2(0.0, 1.0)), d = vfHash(i + vec2(1.0, 1.0));
            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y); }
-         float vfFbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { s += a * vfNoise(p); p = p * 2.03 + 7.1; a *= 0.5; } return s; }
+         float vfFbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 3; i++) { s += a * vfNoise(p); p = p * 2.03 + 7.1; a *= 0.5; } return s; }
         ` + shader.fragmentShader;
 
       // perturb the geometric normal by the gradient of a procedural detail height
-      // (Morten Mikkelsen's tangent-free bump, the method three uses for bumpMap)
+      // (Morten Mikkelsen's tangent-free bump, the method three uses for bumpMap).
+      // Kept to two fbm evaluations — this runs per pixel over the whole ground at
+      // low altitude, so it's the dominant GPU cost on mobile; cheaper is better.
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <normal_fragment_begin>',
         `#include <normal_fragment_begin>
          if (uDetail > 0.001) {
            float _wb = step(vColor.r * 1.4, vColor.b) * step(0.04, vColor.b);
-           vec2 ew = vec2(vfNoise(vWorldXZ * 0.005 + 13.0), vfNoise(vWorldXZ * 0.005 + 37.0));
-           float H = (vfFbm(vWorldXZ * 0.085) + 0.45 * vfFbm(vWorldXZ * 0.35)
-                     + 0.3 * vfNoise(vWorldXZ * 0.018 + ew * 8.0)) * uDetail * (1.0 - _wb);
+           float H = (vfFbm(vWorldXZ * 0.085) + 0.4 * vfFbm(vWorldXZ * 0.35)) * uDetail * (1.0 - _wb);
            vec2 dH = vec2(dFdx(H), dFdy(H));
            vec3 sx = dFdx(-vViewPosition); vec3 sy = dFdy(-vViewPosition);
            vec3 R1 = cross(sy, normal); vec3 R2 = cross(normal, sx);
@@ -176,20 +189,17 @@ export class TerrainPatch {
          }`,
       );
 
-      // albedo: multi-scale texture from biome patches (km scale, readable from
-      // altitude) through erosion-like streaks (100 m scale, mid-distance interest)
-      // to fine rock mottling (close-up detail). Together these break up the
-      // mid-distance wash so plains between mountain ranges read as varied terrain.
+      // albedo: biome patches (km scale, readable from altitude) + a mid-scale
+      // erosion streak + a fine speckle for close-up rock. Trimmed to two fbm + one
+      // noise (was five fbm) to keep the per-pixel cost low on mobile GPUs.
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <color_fragment>',
         `#include <color_fragment>
          {
            float biome = vfFbm(vWorldXZ * 0.003 + 41.0);
-           vec2 warp = vec2(vfNoise(vWorldXZ * 0.005 + 13.0), vfNoise(vWorldXZ * 0.005 + 37.0));
-           float erosion = vfNoise(vWorldXZ * 0.018 + warp * 8.0);
-           float spk = vfFbm(vWorldXZ * 0.6) * vfFbm(vWorldXZ * 0.13 + 19.0);
-           float grain = vfNoise(vWorldXZ * 2.3);
-           diffuseColor.rgb *= 0.58 + 0.16 * biome + 0.12 * erosion + 0.45 * spk + 0.09 * grain;
+           float erosion = vfNoise(vWorldXZ * 0.018 + 7.0);
+           float spk = vfFbm(vWorldXZ * 0.5 + 19.0);
+           diffuseColor.rgb *= 0.62 + 0.18 * biome + 0.12 * erosion + 0.28 * spk;
          }`,
       );
 
@@ -276,8 +286,8 @@ export class TerrainPatch {
     // macro massifs out to the skyline. A circular alpha fade on each dissolves
     // the square grid into a disc (the fine into the coarse, the coarse into haze
     // past the horizon), so no straight edge ever crosses the curved horizon.
-    this.buildCapIfNeeded(this.coarse, p, wx, wy, wz, coarseHalf, 1, 1, true);
-    this.buildCapIfNeeded(this.fine, p, wx, wy, wz, fineHalf, 1, 1, true);
+    this.buildCapIfNeeded(this.coarse, p, wx, wy, wz, coarseHalf, 1, 1, true, REBUILD_MOVE_COARSE);
+    this.buildCapIfNeeded(this.fine, p, wx, wy, wz, fineHalf, 1, 1, true, REBUILD_MOVE_FINE);
 
     // place & orient both caps
     for (const c of [this.coarse, this.fine]) {
@@ -313,10 +323,10 @@ export class TerrainPatch {
     this.planetId = p.id;
   }
 
-  private buildCapIfNeeded(c: Cap, p: { id: string; kind: PlanetKind; colorSeed: number; radius: number }, wx: number, wy: number, wz: number, spanHalf: number, reliefCenter: number, reliefRim: number, fadeRim: boolean): void {
+  private buildCapIfNeeded(c: Cap, p: { id: string; kind: PlanetKind; colorSeed: number; radius: number }, wx: number, wy: number, wz: number, spanHalf: number, reliefCenter: number, reliefRim: number, fadeRim: boolean, moveThreshold: number): void {
     const moved = Math.hypot(wx - c.lastBuild.x, wy - c.lastBuild.y, wz - c.lastBuild.z);
     const spanChanged = Math.abs(spanHalf - c.lastSpan) > c.lastSpan * REBUILD_SPAN;
-    if (moved <= REBUILD_MOVE && !spanChanged && this.lastPlanet === p.id) return;
+    if (moved <= moveThreshold && !spanChanged && this.lastPlanet === p.id) return;
     c.lastBuild.set(wx, wy, wz);
     c.lastSpan = spanHalf;
     this.rebuild(c.mesh, p, wx, wz, spanHalf, reliefCenter, reliefRim, fadeRim);
@@ -368,7 +378,7 @@ export class TerrainPatch {
       const relief = reliefCenter + (reliefRim - reliefCenter) * (k * k * (3 - 2 * k));
       const r = heightField(rx, ry, rz, R, seed, prm);
       rawH[i] = r;
-      vary[i] = fbm3(rx * 0.00085, ry * 0.00085, rz * 0.00085, seed ^ 0x55a3, 3);
+      vary[i] = fbm3(rx * 0.00085, ry * 0.00085, rz * 0.00085, seed ^ 0x55a3, 2);
       biome[i] = fbm3(rx * 0.00014, ry * 0.00014, rz * 0.00014, seed ^ 0xb0b1, 2);
       const h = r * relief;
       const drop = R - Math.sqrt(Math.max(0, R * R - s2)); // exact sphere curvature
