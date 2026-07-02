@@ -50,6 +50,23 @@ const RESCUE_DELAY_S = 8;
 
 const DERELICT_NAMES = ['Pale Wager', 'Long Comedown', 'Saint Brassica', 'Iron Promise', 'Quiet Ledger', 'Last Shift', 'Glass Harvest', 'Hollow Crown'];
 
+// Ambient traffic (#11): big freight moves through the system on visible
+// lanes so capitals are a regular, memorable encounter, not a myth.
+const TRAFFIC_CHECK_S = 18;
+const TRAFFIC_CAP_NEAR_PLAYER = 2;      // capitals within earshot of one player
+const TRAFFIC_DESPAWN_RANGE = 45_000;
+const TRAFFIC_SPAWN_CHANCE = 0.5;
+const ARMED_CAPITAL_CHANCE = 0.3;       // in red space the convoy is a raider capital
+const SUPERFREIGHTER_SPEED = 130;       // m/s — interceptable at maneuver speed
+
+const SUPERFREIGHTER_NAMES = [
+  'Vesper Chain', 'Long Ledger', 'Kilotonne Promise', 'Slow Fortune', 'Bulk of Morrow',
+  'Gravity Debt', 'Patient Margin', 'Cinder Queue', 'Ten Thousand Crates', 'Deep Keel',
+];
+const ARMED_CAPITAL_NAMES = [
+  'Rust Armadillo', 'Tollgate', 'Broken Ledger', 'Widow Freight', 'Iron Tithe',
+];
+
 const DERELICT_STORIES = [
   'The cabin is dark. The logbook\'s last entry, forty days old: "The knocking from the hold has stopped. I find I miss it." The cargo door was welded shut — from the outside.',
   'Life support died years ago, but the galley table is set for three. Two trays are untouched. The third has been licked clean. The crew manifest lists two names.',
@@ -92,7 +109,7 @@ export function blankEntity(id: number, kind: EntityKind): Entity {
     aiState: 'patrol', aggroId: null, spawnPos: v3(), aiTimer: 0,
     aiPhase: 0, missileCooldown: 0,
     missileAmmo: 0, cannonAmmo: 0, lockTimer: 0, lockedOn: false,
-    parentId: 0, derelict: false, derelictOpened: false,
+    parentId: 0, derelict: false, derelictOpened: false, capital: false, navDest: null,
     rockType: null, rockHp: 0, rockMaxHp: 0, rockYield: null, fieldId: null, rockIndex: -1,
     radius: 10, goodId: null, qty: 0, lootCredits: 0, lootModule: null, ttl: 0,
     ownerId: 0, damage: 0,
@@ -139,6 +156,7 @@ export interface PlayerMeta {
   commsTimer: number;
   wreckTimer: number;
   pirateCheckTimer: number;
+  trafficTimer: number;
   extractAcc: number;
   stats: ShipStats;
   rescueTimer: number;     // >0: tow inbound
@@ -212,6 +230,7 @@ export class Sim {
       destination: null, docking: null, undockInvuln: 0, interdictCooldown: 0,
       commsTimer: 90 + this.rng.range(0, 120), wreckTimer: 150 + this.rng.range(0, 180),
       pirateCheckTimer: this.rng.range(0, PIRATE_CHECK_S),
+      trafficTimer: this.rng.range(4, TRAFFIC_CHECK_S),
       extractAcc: 0, stats: shipStats(prof.hullId, prof.modules), rescueTimer: 0,
       cruiseRequested: false, flightAssist: true,
       forcefieldCooldown: 0, promptedDerelicts: new Set(),
@@ -388,7 +407,8 @@ export class Sim {
             vaddTo(e.pos, vscale(e.vel, dt));
             if (e.ttl <= 0) this.entities.delete(e.id);
           } else if (!e.isPlayer) {
-            this.tickPirate(e, dt);
+            if (e.pirate) this.tickPirate(e, dt);
+            else this.tickTraffic(e, dt);
           }
           break;
         case 'missile': this.tickMissile(e, dt); break;
@@ -544,6 +564,12 @@ export class Sim {
       if (meta.pirateCheckTimer <= 0) {
         meta.pirateCheckTimer = PIRATE_CHECK_S;
         this.maybeSpawnPirates(meta, e);
+      }
+      // ambient freight traffic (#11)
+      meta.trafficTimer -= 1;
+      if (meta.trafficTimer <= 0) {
+        meta.trafficTimer = TRAFFIC_CHECK_S;
+        this.maybeSpawnTraffic(meta, e);
       }
       // drifting close to a derelict triggers its story prompt (once)
       for (const d of this.entities.values()) {
@@ -1194,6 +1220,37 @@ export class Sim {
       return;
     }
 
+    if (!e.isPlayer) {
+      // civilian traffic: the hull breaks up and spills its cargo. Gunning
+      // down freight is profitable piracy — and the faction remembers.
+      const killer = this.entities.get(killerId);
+      if (killer?.isPlayer) {
+        const kmeta = this.players.get(killerId)!;
+        kmeta.profile.stats.kills++;
+        if (e.factionId && e.factionId !== 'scrappers') {
+          this.addRep(kmeta.profile, e.factionId, e.capital ? -20 : -8);
+          this.addRep(kmeta.profile, 'scrappers', e.capital ? 6 : 2);
+          this.events.push({ type: 'log', text: `You just murdered a ${e.capital ? 'superfreighter' : 'freight'} crew. ${e.factionId} will not forget.`, color: '#e8402a', pid: killerId });
+        }
+      }
+      const crates = e.capital ? 6 : 2;
+      for (let i = 0; i < crates; i++) {
+        const loot = blankEntity(this.nextId++, 'loot');
+        loot.pos = vadd(e.pos, v3(this.rng.range(-e.radius, e.radius), this.rng.range(-e.radius * 0.4, e.radius * 0.4), this.rng.range(-e.radius, e.radius)));
+        loot.vel = vscale(e.vel, 0.15);
+        loot.ttl = LOOT_TTL;
+        loot.radius = 4;
+        loot.name = 'spilled freight';
+        loot.lootCredits = this.rng.int(e.capital ? 200 : 40, e.capital ? 700 : 200);
+        const drop = this.rng.pickWeighted(PIRATE_GOOD_DROPS, PIRATE_GOOD_DROPS.map((d) => d.weight));
+        loot.goodId = drop.good;
+        loot.qty = this.rng.int(drop.min, drop.max + (e.capital ? 4 : 0));
+        this.entities.set(loot.id, loot);
+      }
+      this.entities.delete(e.id);
+      return;
+    }
+
     if (e.isPlayer) {
       const meta = this.players.get(e.id)!;
       const prof = meta.profile;
@@ -1236,21 +1293,25 @@ export class Sim {
 
   private dropPirateLoot(e: Entity): void {
     const def = PIRATES[e.pirate!];
-    const loot = blankEntity(this.nextId++, 'loot');
-    loot.pos = vclone(e.pos);
-    loot.vel = vscale(e.vel, 0.2);
-    loot.ttl = LOOT_TTL;
-    loot.radius = 4;
-    loot.name = 'salvage';
-    loot.lootCredits = this.rng.int(def.creditsMin, def.creditsMax);
-    const drop = this.rng.pickWeighted(PIRATE_GOOD_DROPS, PIRATE_GOOD_DROPS.map((d) => d.weight));
-    loot.goodId = drop.good;
-    loot.qty = this.rng.int(drop.min, drop.max);
-    if (this.rng.chance(def.moduleChance)) {
-      const slots: ModuleSlot[] = ['engine', 'gyro', 'shield', 'armor', 'weapon', 'scanner', 'collector'];
-      loot.lootModule = { slot: this.rng.pick(slots), tier: this.rng.int(1, def.moduleTierMax) };
+    // armed capitals were hauling something: they break into several crates
+    const crates = e.capital ? 3 : 1;
+    for (let i = 0; i < crates; i++) {
+      const loot = blankEntity(this.nextId++, 'loot');
+      loot.pos = vadd(e.pos, i === 0 ? v3() : v3(this.rng.range(-e.radius, e.radius), this.rng.range(-e.radius * 0.4, e.radius * 0.4), this.rng.range(-e.radius, e.radius)));
+      loot.vel = vscale(e.vel, 0.2);
+      loot.ttl = LOOT_TTL;
+      loot.radius = 4;
+      loot.name = 'salvage';
+      loot.lootCredits = this.rng.int(def.creditsMin, def.creditsMax);
+      const drop = this.rng.pickWeighted(PIRATE_GOOD_DROPS, PIRATE_GOOD_DROPS.map((d) => d.weight));
+      loot.goodId = drop.good;
+      loot.qty = this.rng.int(drop.min, drop.max);
+      if (this.rng.chance(def.moduleChance)) {
+        const slots: ModuleSlot[] = ['engine', 'gyro', 'shield', 'armor', 'weapon', 'scanner', 'collector'];
+        loot.lootModule = { slot: this.rng.pick(slots), tier: this.rng.int(1, def.moduleTierMax) };
+      }
+      this.entities.set(loot.id, loot);
     }
-    this.entities.set(loot.id, loot);
   }
 
   // -------------------------------------------------------------------------
@@ -1291,6 +1352,120 @@ export class Sim {
       turret.spawnPos = vclone(off); // local mount offset on the carrier
     }
     return corvette;
+  }
+
+  // -------------------------------------------------------------------------
+  // Ambient traffic (#11): superfreighters on lanes, armed cargo capitals
+  // -------------------------------------------------------------------------
+
+  // Hostile capital: an armed cargo hauler with four destructible turrets —
+  // the "big enemy cargo ship" the playtests never met.
+  spawnArmedCapital(pos: Vec3, aggroPid: number | null = null): Entity {
+    const cap = this.spawnPirate('corvette', pos, aggroPid);
+    cap.capital = true;
+    cap.name = `Armed freighter "${this.rng.pick(ARMED_CAPITAL_NAMES)}"`;
+    cap.radius = 95;
+    cap.maxHull = 1400;
+    cap.hull = 1400;
+    cap.maxShield = 750;
+    cap.shield = 750;
+    // turret mounts scaled to the capital hull
+    const offsets = [v3(58, 22, -66), v3(-58, 22, -66), v3(58, -22, 62), v3(-58, -22, 62)];
+    for (const off of offsets) {
+      const turret = this.spawnPirate('turret', vadd(pos, off));
+      turret.parentId = cap.id;
+      turret.spawnPos = vclone(off);
+    }
+    return cap;
+  }
+
+  private maybeSpawnTraffic(meta: PlayerMeta, e: Entity): void {
+    // count capitals already working this player's patch of sky
+    let capitalsNear = 0;
+    for (const t of this.entities.values()) {
+      if (t.kind === 'ship' && t.capital && !t.dead && vdist(t.pos, e.pos) < TRAFFIC_DESPAWN_RANGE) capitalsNear++;
+    }
+    if (capitalsNear >= TRAFFIC_CAP_NEAR_PLAYER) return;
+    if (!this.rng.chance(TRAFFIC_SPAWN_CHANCE)) return;
+
+    const danger = dangerAt(this.system, e.pos);
+    const dir = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-0.2, 0.2), this.rng.range(-1, 1)));
+    const spawnPos = vadd(e.pos, vscale(dir, this.rng.range(8000, 14_000)));
+
+    // in red space the "convoy" may be a raider capital shaking down the lane
+    if (danger > 0.45 && this.rng.chance(ARMED_CAPITAL_CHANCE)) {
+      const cap = this.spawnArmedCapital(spawnPos);
+      this.events.push({ type: 'log', text: `Capital signature on scanner — ${cap.name}. Armed.`, color: '#e8402a', pid: meta.pid });
+      this.events.push({ type: 'comms', pid: meta.pid, text: 'Unregistered capital transponder on the lane. If you can see its turrets, it can see you.' });
+      return;
+    }
+
+    // civilian superfreighter running station to station, with escort
+    const dest = this.rng.pick(this.system.stations);
+    const heading = vnorm(vsub(dest.pos, spawnPos));
+    const sf = blankEntity(this.nextId++, 'ship');
+    sf.capital = true;
+    sf.name = `Superfreighter "${this.rng.pick(SUPERFREIGHTER_NAMES)}"`;
+    sf.hullId = 'freighter';
+    sf.factionId = dest.factionId;
+    sf.radius = 170;
+    sf.maxHull = 5000;
+    sf.hull = 5000;
+    sf.maxShield = 1500;
+    sf.shield = 1500;
+    sf.throttle = 0.75; // drives engine glow in the renderer
+    sf.pos = vclone(spawnPos);
+    sf.navDest = vclone(dest.pos);
+    sf.orient = qLookAt(heading);
+    sf.vel = vscale(heading, SUPERFREIGHTER_SPEED);
+    this.entities.set(sf.id, sf);
+    const escorts = this.rng.int(1, 2);
+    for (let i = 0; i < escorts; i++) {
+      const esc = blankEntity(this.nextId++, 'ship');
+      esc.name = 'Convoy Escort';
+      esc.hullId = 'hauler';
+      esc.factionId = dest.factionId;
+      esc.radius = SHIP_RADIUS.hauler;
+      esc.maxHull = 220;
+      esc.hull = 220;
+      esc.maxShield = 120;
+      esc.shield = 120;
+      esc.throttle = 0.75;
+      esc.pos = vadd(spawnPos, v3(this.rng.range(-500, 500), this.rng.range(-180, 180), this.rng.range(-500, 500)));
+      esc.navDest = vclone(dest.pos);
+      esc.orient = qLookAt(heading);
+      esc.vel = vscale(heading, SUPERFREIGHTER_SPEED);
+      this.entities.set(esc.id, esc);
+    }
+    this.events.push({ type: 'log', text: `Capital signature on scanner — ${sf.name}, bound for ${dest.name}.`, color: '#7fb1c9', pid: meta.pid });
+    this.events.push({ type: 'comms', pid: meta.pid, text: `…${dest.name} control, heavy freight inbound on the lane, half a kilometre of crates. Keep your distance and your manners…` });
+  }
+
+  // Civilian traffic: hold the lane, arrive, disappear into the dock queue.
+  private tickTraffic(e: Entity, dt: number): void {
+    let nearestD = Infinity;
+    for (const meta of this.players.values()) {
+      const p = this.entities.get(meta.pid);
+      if (!p || p.dead) continue;
+      nearestD = Math.min(nearestD, vdist(p.pos, e.pos));
+    }
+    if (nearestD > TRAFFIC_DESPAWN_RANGE) {
+      this.entities.delete(e.id);
+      return;
+    }
+    if (e.navDest) {
+      const toDest = vsub(e.navDest, e.pos);
+      const d = vlen(toDest);
+      if (d < 2800) {
+        this.entities.delete(e.id); // joins the dock queue, off-sim
+        return;
+      }
+      const heading = vnorm(toDest);
+      e.orient = rotateTowards(e.orient, qLookAt(heading), 0.15 * dt);
+      const speed = e.capital ? SUPERFREIGHTER_SPEED : SUPERFREIGHTER_SPEED * 1.05;
+      e.vel = vscale(qForward(e.orient), speed);
+    }
+    vaddTo(e.pos, vscale(e.vel, dt));
   }
 
   // Spawn a derelict wreck site a few km off the player's path: either loose
@@ -1382,8 +1557,9 @@ export class Sim {
     if (nearby >= cap) return;
     if (!this.rng.chance(Math.min(0.5, danger * 0.55))) return;
 
-    // deep red space occasionally fields an Ironclad gun platform
-    if (danger > 0.55 && !corvetteNear && this.rng.chance(0.16)) {
+    // red space fields an Ironclad gun platform often enough to be a real
+    // fixture of the zone, not a rumor (#11)
+    if (danger > 0.45 && !corvetteNear && this.rng.chance(0.22)) {
       const dir = vnorm(v3(this.rng.range(-1, 1), this.rng.range(-0.2, 0.2), this.rng.range(-1, 1)));
       this.spawnCorvette(vadd(e.pos, vscale(dir, this.rng.range(5500, 7500))));
       return;

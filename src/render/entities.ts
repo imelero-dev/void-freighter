@@ -105,7 +105,7 @@ export class EntitiesLayer {
       // own ship handled by the camera layer (cockpit hides it; 3rd person shows it)
       seen.add(e.id);
       let view = this.views.get(e.id);
-      const kindKey = e.kind === 'ship' ? `ship_${e.hullId}_${e.pirate ?? ''}${e.derelict ? '_dead' : ''}` : e.kind;
+      const kindKey = e.kind === 'ship' ? `ship_${e.hullId}_${e.pirate ?? ''}${e.derelict ? '_dead' : ''}${e.capital ? '_cap' : ''}` : e.kind;
       if (view && view.kindKey !== kindKey) {
         this.dispose(e.id);
         view = undefined;
@@ -161,7 +161,7 @@ export class EntitiesLayer {
     let view: View;
     switch (e.kind) {
       case 'ship': {
-        const ship = buildShipMesh(e.hullId, e.pirate);
+        const ship = buildShipMesh(e.hullId, e.pirate, e.capital);
         if (e.derelict) {
           // cold hull: darken everything, kill thruster glow
           ship.group.traverse((node) => {

@@ -292,7 +292,32 @@ function buildPirate(tier: PirateTier): ShipHull {
   return { group: g, thrusters: [t1], kind: `pirate_${tier}` };
 }
 
-export function buildShipMesh(hullId: HullId | 'pirate', pirateTier?: PirateTier | null): ShipView {
+// Capital-class hulls (#11): the civilian superfreighter is the stock
+// freighter frame scaled to ~500 m with a cargo-window strip; the armed
+// cargo capital is the corvette frame scaled up under its turrets.
+function buildSuperfreighter(): ShipHull {
+  const base = buildFreighter();
+  base.group.scale.setScalar(12);
+  // rows of lit cargo-bay windows along the racks so the mass reads at range
+  const winMat = new THREE.MeshBasicMaterial({ color: 0xffcf8a });
+  for (let i = 0; i < 8; i++) {
+    const win = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.45, 3.6), winMat);
+    win.position.set(i % 2 ? 8.3 : -8.3, (i % 3 - 1) * 2.2, -10 + (i % 4) * 6.9);
+    base.group.add(win);
+  }
+  return { ...base, kind: 'superfreighter' };
+}
+
+function buildArmedCapital(): ShipHull {
+  const base = buildCorvette();
+  base.group.scale.setScalar(2.6);
+  return { ...base, kind: 'armed_capital' };
+}
+
+export function buildShipMesh(hullId: HullId | 'pirate', pirateTier?: PirateTier | null, capital = false): ShipView {
+  if (capital) {
+    return dressShip(pirateTier ? buildArmedCapital() : buildSuperfreighter());
+  }
   switch (hullId) {
     case 'shuttle': return dressShip(buildShuttle());
     case 'hauler': return dressShip(buildHauler());

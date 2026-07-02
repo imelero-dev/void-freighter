@@ -192,6 +192,8 @@ export interface Entity {
   parentId: number;          // turrets: id of the carrier ship (0 = none)
   derelict: boolean;         // inert story wreck
   derelictOpened: boolean;
+  capital: boolean;          // capital-class hull (superfreighter / armed cargo capital)
+  navDest: Vec3 | null;      // ambient traffic: lane destination (world pos)
 
   // asteroid
   rockType: RockType | null;

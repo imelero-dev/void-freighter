@@ -726,7 +726,8 @@ export class Hud {
       else if (e.kind === 'fragment') color = '#9ab3a0';
       else if (e.kind === 'missile') color = RED;
       else if (e.kind === 'bolt') continue;
-      blip(e.pos, color, false, e.id === ship.targetId);
+      // capitals paint as heavy square returns, like structures
+      blip(e.pos, color, e.kind === 'ship' && e.capital, e.id === ship.targetId);
     }
     for (const st of world.system.stations) {
       blip(st.pos, CYAN, true, false);

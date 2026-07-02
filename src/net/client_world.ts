@@ -386,7 +386,7 @@ export class ClientWorld implements IWorld {
           e.hullId = w.hid as HullId | 'pirate';
           e.pirate = w.pir ?? null;
           e.isPlayer = !!w.pl;
-          e.radius = SHIP_RADIUS[w.hid] ?? 12;
+          e.radius = w.cp ? (w.pir ? 95 : 170) : SHIP_RADIUS[w.hid] ?? 12;
           e.hull = w.hl;
           e.maxHull = w.mhl;
           e.shield = w.sh;
@@ -396,6 +396,7 @@ export class ClientWorld implements IWorld {
           e.cruiseSpeed = w.cs;
           e.dockedAt = w.dk ?? null;
           e.derelict = !!w.dl;
+          e.capital = !!w.cp;
           break;
         }
         case 'f':
