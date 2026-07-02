@@ -280,14 +280,17 @@ export class Hud {
     // ---- contact blips in 3D view ----
     this.drawContacts(world, ship, origin);
 
-    // ---- docking prompt ----
-    const nearStation = world.system.stations.find((s) => vdist(s.pos, ship.pos) < s.dockRadius);
+    // ---- approach prompt (#20): Space asks the tower, flying does the rest ----
     ctx.textAlign = 'center';
-    if (nearStation) {
-      const slow = vlen(ship.vel) <= 60;
-      ctx.fillStyle = slow ? GREEN : AMBER;
-      ctx.font = '13px "Lucida Console", monospace';
-      ctx.fillText(slow ? `[SPACE] DOCK — ${nearStation.name}` : `${nearStation.name}: reduce speed to dock (<60 m/s)`, cx, H * 0.2);
+    if (!world.approach) {
+      const nearStation = world.system.stations.find((s) => vdist(s.pos, ship.pos) < s.dockRadius * 2.5);
+      const nearPort = nearStation ? undefined : world.surfaceBodies.find((b) =>
+        b.pads.length > 0 && vdist(b.pos, ship.pos) < b.radius * 1.6);
+      if (nearStation || nearPort) {
+        ctx.fillStyle = AMBER;
+        ctx.font = '13px "Lucida Console", monospace';
+        ctx.fillText(`[SPACE] REQUEST APPROACH — ${(nearStation?.name ?? nearPort?.name ?? '').toUpperCase()}`, cx, H * 0.2);
+      }
     }
 
     // ---- alert banner ----

@@ -734,10 +734,10 @@ export class GameApp {
           this.hud.pushLog('Cruise drive engaged.', '#8fb');
         }
         break;
-      case 'forcefield':
+      case 'forcefield': // repurposed (#16): gas giants crush, they don't bounce
         this.audio.deny();
         this.audio.alarmFuel();
-        this.hud.flashAlert(`PLANETARY EXCLUSION FIELD — ${ev.body.toUpperCase()} — TURN BACK`, '#e8402a', 3000);
+        this.hud.flashAlert(`ATMOSPHERIC PRESSURE CRITICAL — ${ev.body.toUpperCase()} — CLIMB`, '#e8402a', 3000);
         break;
       case 'derelict':
         this.audio.commsStatic();
