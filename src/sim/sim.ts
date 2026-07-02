@@ -512,7 +512,7 @@ export class Sim {
       }
       meta.turboActive = turbo;
       const perf = turbo
-        ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate }
+        ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate, mass: meta.stats.mass }
         : meta.stats;
       this.integrateShip(e, meta.input, perf, dt, meta.flightAssist);
       if (meta.cruiseRequested) this.tryStartCruise(meta, e);

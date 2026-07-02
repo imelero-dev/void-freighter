@@ -40,7 +40,7 @@ export interface HullDef {
   maxSpeed: number;       // m/s maneuver cap at engine tier 1
   turnRate: number;       // rad/s at gyro tier 1
   cruiseMax: number;      // m/s cruise cap at engine tier 1
-  massFactor: number;     // scales how sluggish it feels (visual/feel only)
+  massFactor: number;     // relative inertia: rotation onset + flight-assist authority
   // Max installable tier per slot; 0 = slot not available on this hull.
   slots: Record<ModuleSlot, number>;
 }
