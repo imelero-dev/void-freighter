@@ -581,7 +581,21 @@ export class GameApp {
       case 'explosion':
         this.audio.explosion(ev.big);
         break;
+      case 'fragment': {
+        // ore chunk cracked off a rock nearby
+        const ship = w.player;
+        if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 1500) {
+          this.audio.oreChip();
+        }
+        break;
+      }
       case 'pickup': {
+        if (ev.credits === 0 && ev.good) {
+          // mined ore scooped into the hold: distinct stash feedback (#10)
+          this.audio.oreStash();
+          this.hud.pushLog(`+${ev.qty}× ${GOODS[ev.good]?.name ?? ev.good} → hold`, '#7fc97f');
+          break;
+        }
         this.audio.pickup();
         const bits: string[] = [];
         if (ev.credits > 0) bits.push(fmtCredits(ev.credits));

@@ -1,6 +1,7 @@
 // Transient combat/mining FX driven by SimEvents: beams, flashes, explosions.
 
 import * as THREE from 'three';
+import { qrot } from '../sim/vec';
 import type { SimEvent } from '../sim/types';
 import type { IWorld } from '../world_api';
 import { SceneManager } from './scene';
@@ -32,6 +33,16 @@ export class FxLayer {
   private effects: Effect[] = [];
   private beamGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 5, 1, true);
 
+  // sustained mining beam (#10): one persistent beam + impact glow driven by
+  // the 50 ms laser-event stream, world-anchored so the floating origin and
+  // the ship's own motion don't smear it
+  private mineBeam: THREE.Mesh | null = null;
+  private mineGlow: THREE.Sprite | null = null;
+  private mineUntil = 0;          // seconds of beam life left (refreshed by events)
+  private mineFromId = 0;
+  private mineToW = new THREE.Vector3(); // impact point, world coords
+  private sparkAcc = 0;
+
   constructor(private sm: SceneManager, private world: IWorld, private entities: EntitiesLayer) {
     if (!glowTex) glowTex = glowTexture();
   }
@@ -40,13 +51,20 @@ export class FxLayer {
     for (const ev of events) {
       switch (ev.type) {
         case 'laser': {
+          if (ev.mining) {
+            // feed the sustained beam instead of stuttering one-shot flashes
+            this.mineFromId = ev.fromId;
+            this.mineToW.set(ev.toX, ev.toY, ev.toZ);
+            this.mineUntil = 0.22;
+            break;
+          }
           const from = this.entities.objectFor(ev.fromId);
           const fromPos = from && from.visible ? from.position.clone()
             : ev.fromId === this.world.playerId ? new THREE.Vector3(0, 0, 0) : null;
           if (!fromPos) break;
           const to = new THREE.Vector3(ev.toX - this.sm.origin.x, ev.toY - this.sm.origin.y, ev.toZ - this.sm.origin.z);
-          this.spawnBeam(fromPos, to, ev.mining ? 0xffa030 : 0xff4040, ev.mining ? 0.1 : 0.085, ev.mining ? 0.7 : 0.55);
-          if (ev.hit) this.spawnFlash(to, ev.mining ? 0xffaa44 : 0xff6666, ev.mining ? 4 : 6, 0.18);
+          this.spawnBeam(fromPos, to, 0xff4040, 0.085, 0.55);
+          if (ev.hit) this.spawnFlash(to, 0xff6666, 6, 0.18);
           break;
         }
         case 'hit': {
@@ -123,7 +141,95 @@ export class FxLayer {
     this.effects.push({ obj: points, ttl, life: ttl, kind: 'sparks' });
   }
 
+  // small burst of glowing chips/dust flying off a point (mining impact)
+  private spawnSparks(p: THREE.Vector3, color: number, count: number, speed: number, ttl: number): void {
+    const positions = new Float32Array(count * 3);
+    const velocities: THREE.Vector3[] = [];
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = p.x;
+      positions[i * 3 + 1] = p.y;
+      positions[i * 3 + 2] = p.z;
+      velocities.push(new THREE.Vector3(
+        (Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5),
+      ).normalize().multiplyScalar((0.3 + Math.random() * 0.7) * speed));
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      color, size: 1.4, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+    });
+    const points = new THREE.Points(geo, mat);
+    points.userData.velocities = velocities;
+    this.sm.near.add(points);
+    this.effects.push({ obj: points, ttl, life: ttl, kind: 'sparks' });
+  }
+
+  // Sustained mining beam: recomputed every frame from live world positions.
+  private updateMiningBeam(dt: number): void {
+    if (this.mineUntil <= 0) {
+      if (this.mineBeam) this.mineBeam.visible = false;
+      if (this.mineGlow) this.mineGlow.visible = false;
+      return;
+    }
+    this.mineUntil -= dt;
+    if (!this.mineBeam) {
+      this.mineBeam = new THREE.Mesh(this.beamGeo, new THREE.MeshBasicMaterial({
+        color: 0xffa030, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      this.sm.near.add(this.mineBeam);
+      this.mineGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: glowTex!, color: 0xffbb55, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      this.sm.near.add(this.mineGlow);
+    }
+    // beam start: fresh emitter position each frame (wing hardpoint, not the
+    // camera origin — a camera-origin beam is invisible in first person)
+    const ship = this.mineFromId === this.world.playerId
+      ? this.world.player
+      : this.world.entities.get(this.mineFromId) ?? null;
+    if (!ship) {
+      this.mineUntil = 0;
+      return;
+    }
+    const emitter = qrot(ship.orient, { x: 2.2, y: -1.6, z: -ship.radius * 0.4 });
+    const a = new THREE.Vector3(
+      ship.pos.x + emitter.x - this.sm.origin.x,
+      ship.pos.y + emitter.y - this.sm.origin.y,
+      ship.pos.z + emitter.z - this.sm.origin.z,
+    );
+    const b = new THREE.Vector3(
+      this.mineToW.x - this.sm.origin.x,
+      this.mineToW.y - this.sm.origin.y,
+      this.mineToW.z - this.sm.origin.z,
+    );
+    const len = a.distanceTo(b);
+    if (len < 1 || len > 5000) {
+      this.mineBeam.visible = false;
+      if (this.mineGlow) this.mineGlow.visible = false;
+      return;
+    }
+    const pulse = 0.85 + Math.sin(performance.now() / 45) * 0.25;
+    this.mineBeam.visible = true;
+    this.mineBeam.scale.set(1.6 * pulse, len, 1.6 * pulse);
+    this.mineBeam.position.copy(a).lerp(b, 0.5);
+    this.mineBeam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    (this.mineBeam.material as THREE.MeshBasicMaterial).opacity = 0.55 + pulse * 0.3;
+    this.mineGlow!.visible = true;
+    this.mineGlow!.position.copy(b);
+    this.mineGlow!.scale.setScalar(5 + pulse * 4);
+
+    // continuous cutting sparks at the contact point
+    this.sparkAcc += dt;
+    while (this.sparkAcc > 0.06) {
+      this.sparkAcc -= 0.06;
+      this.spawnSparks(b, 0xffb060, 5, 26, 0.55);
+      if (Math.random() < 0.3) this.spawnSparks(b, 0xd8d0c0, 3, 12, 0.9); // slower rock dust
+    }
+  }
+
   update(dt: number): void {
+    this.updateMiningBeam(dt);
     for (let i = this.effects.length - 1; i >= 0; i--) {
       const fx = this.effects[i];
       fx.ttl -= dt;
