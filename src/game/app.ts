@@ -54,6 +54,8 @@ export class GameApp {
   private wasAligned = false;
   private fovCurrent = 68;
   private alarmUntil = 0;   // hull klaxon bursts on damage, then shuts up
+  private headlight!: THREE.SpotLight;
+  private headlightOn = false;
 
   onExit: (() => void) | null = null;
 
@@ -66,6 +68,15 @@ export class GameApp {
     this.dust = new DustLayer(this.sm, world);
     // first-person cockpit interior rides on the camera
     this.sm.near.add(this.sm.camera);
+    // headlights: a hard forward beam from the nose. Physical falloff
+    // (decay 2) needs candela-scale intensity to read against the sun —
+    // this is ~8x sunlight at 500 m and still ~half sunlight at 2 km.
+    this.headlight = new THREE.SpotLight(0xfff2d8, 5e6, 6500, 0.42, 0.45, 2);
+    this.headlight.position.set(0, -1, -10); // ahead of the cockpit glass so the dash doesn't blow out
+    this.headlight.target.position.set(0, -6, -900);
+    this.headlight.visible = false;
+    this.sm.camera.add(this.headlight);
+    this.sm.camera.add(this.headlight.target);
     this.cockpit = buildCockpit();
     this.cockpit.scale.setScalar(2.2); // keeps geometry past the near plane
     this.cockpit.position.y = 0.28;    // dashboard peeks into the lower view
@@ -111,6 +122,11 @@ export class GameApp {
     input.on('zeroThrottle', () => input.zeroThrottle());
     input.on('toggleAssist', () => w.toggleFlightAssist());
     input.on('toggleDrill', () => w.setDrill(!w.drillOn));
+    input.on('toggleLights', () => {
+      this.headlightOn = !this.headlightOn;
+      this.audio.click();
+      this.hud.pushLog(`Headlights ${this.headlightOn ? 'ON' : 'OFF'}.`, '#8ad');
+    });
     input.on('dock', () => {
       if (w.player?.dockedAt) {
         this.wm.closeAll();
@@ -448,6 +464,7 @@ export class GameApp {
       this.fovCurrent += (68 + Math.max(maneuverKick, cruiseKick, turboKick) - this.fovCurrent) * Math.min(1, dt * 4);
       this.sm.setFov(this.fovCurrent);
     }
+    this.headlight.visible = this.headlightOn && !!ship && !ship.dockedAt;
     this.bodies.update(w.time);
     this.entities.update(w.time);
     this.fx.update(dt);
