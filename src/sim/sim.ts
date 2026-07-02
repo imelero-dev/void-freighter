@@ -1017,7 +1017,9 @@ export class Sim {
       const mouthT = st.radius * BAY_MOUTH_MULT;
       const floorT = st.radius * BAY_FLOOR_MULT;
       const inAperture = t > 0 && Math.abs(l) < BAY_HALF_W && Math.abs(v) < BAY_HALF_H;
-      const inTunnel = inAperture && t < mouthT + 60 && t > floorT - 20;
+      // the tunnel volume runs all the way to the core so a turbo-speed ship
+      // cannot skip past the deck plane in a single tick and ghost the hull
+      const inTunnel = inAperture && t < mouthT + 60;
       if (inTunnel) {
         // inside the hangar tunnel: walls are solid, the floor is the dock
         if (Math.abs(l) > BAY_HALF_W - e.radius) {
