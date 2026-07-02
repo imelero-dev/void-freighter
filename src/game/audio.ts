@@ -235,7 +235,29 @@ export class AudioEngine {
   }
 
   laser(own = true): void {
-    this.blip(900, 240, 0.09, 'square', own ? 0.08 : 0.03);
+    // own cannon has weight: crack + low thump under the zap
+    this.blip(900, 240, 0.09, 'square', own ? 0.11 : 0.03);
+    if (own) {
+      this.noiseBurst('lowpass', 300, 80, 0.07, 0.09);
+      this.blip(140, 70, 0.06, 'sine', 0.08);
+    }
+  }
+
+  // your shots landing on THEIR shield: crystalline tink
+  confirmShield(): void {
+    this.blip(1750, 1150, 0.07, 'sine', 0.05);
+  }
+
+  // your shots chewing THEIR hull: metallic crunch
+  confirmHull(): void {
+    this.noiseBurst('bandpass', 900, 250, 0.08, 0.07);
+    this.blip(220, 90, 0.07, 'triangle', 0.06);
+  }
+
+  // a shield collapsing (yours or theirs): deep pop + falling whine
+  shieldBreak(own: boolean): void {
+    this.noiseBurst('lowpass', 800, 60, own ? 0.5 : 0.3, own ? 0.3 : 0.12);
+    this.blip(1400, 180, own ? 0.5 : 0.3, 'sawtooth', own ? 0.12 : 0.05);
   }
 
   miningTick(): void {

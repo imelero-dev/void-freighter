@@ -339,6 +339,8 @@ export type SimEvent =
   | { type: 'log'; text: string; color?: string; pid?: number }
   // fx/fy/fz: attacker position when known — drives the HUD damage-direction arrows
   | { type: 'hit'; entityId: number; shield: boolean; amount: number; x: number; y: number; z: number; fx?: number; fy?: number; fz?: number }
+  // a ship's shield just collapsed under fire — the moment combat turns
+  | { type: 'shieldDown'; entityId: number; x: number; y: number; z: number }
   | { type: 'shot'; entityId: number; x: number; y: number; z: number }
   | { type: 'explosion'; entityId: number; big: boolean; x: number; y: number; z: number }
   | { type: 'laser'; fromId: number; toX: number; toY: number; toZ: number; hit: boolean; mining?: boolean }

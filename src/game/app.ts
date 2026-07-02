@@ -551,6 +551,7 @@ export class GameApp {
       case 'shot': {
         if (ev.entityId === w.playerId) {
           this.audio.laser(true);
+          this.camera.kick(0.5); // recoil shove (#12)
         } else {
           const ship = w.player;
           if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 2800) {
@@ -575,6 +576,25 @@ export class GameApp {
         } else if (ev.amount > 0) {
           // floating combat text over whatever we (or someone) hit
           this.hud.pushFloater({ x: ev.x, y: ev.y, z: ev.z }, `-${ev.amount}`, ev.shield ? '#7fb1c9' : '#d9a441');
+          // audible hit confirms: shielded targets tink, bare hulls crunch (#12)
+          const ship = w.player;
+          if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 2200) {
+            if (ev.shield) this.audio.confirmShield();
+            else this.audio.confirmHull();
+          }
+        }
+        break;
+      }
+      case 'shieldDown': {
+        if (ev.entityId === w.playerId) {
+          this.audio.shieldBreak(true);
+          this.hud.flashAlert('⚠ SHIELDS DOWN ⚠', '#e8402a', 3200);
+        } else {
+          const ship = w.player;
+          if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 3000) {
+            this.audio.shieldBreak(false);
+            this.hud.pushFloater({ x: ev.x, y: ev.y, z: ev.z }, 'SHIELD DOWN', '#99ccff');
+          }
         }
         break;
       }

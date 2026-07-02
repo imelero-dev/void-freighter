@@ -1141,6 +1141,9 @@ export class Sim {
       target.shield -= absorbed;
       remaining -= absorbed;
       this.events.push({ type: 'hit', entityId: target.id, shield: true, amount: Math.round(absorbed), x: target.pos.x, y: target.pos.y, z: target.pos.z, ...from });
+      if (target.shield <= 0 && !environmental) {
+        this.events.push({ type: 'shieldDown', entityId: target.id, x: target.pos.x, y: target.pos.y, z: target.pos.z });
+      }
     }
     if (remaining > 0) {
       target.hull -= remaining;

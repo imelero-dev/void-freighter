@@ -11,7 +11,8 @@ interface Effect {
   obj: THREE.Object3D;
   ttl: number;
   life: number;
-  kind: 'beam' | 'flash' | 'explosion' | 'sparks';
+  kind: 'beam' | 'flash' | 'explosion' | 'sparks' | 'ripple';
+  baseSize?: number; // ripple: starting scale
 }
 
 function glowTexture(): THREE.Texture {
@@ -69,14 +70,35 @@ export class FxLayer {
         }
         case 'hit': {
           const p = new THREE.Vector3(ev.x - this.sm.origin.x, ev.y - this.sm.origin.y, ev.z - this.sm.origin.z);
-          if (ev.amount > 0) this.spawnFlash(p, ev.shield ? 0x66aaff : 0xffaa55, ev.shield ? 14 : 9, 0.25);
-          else this.spawnFlash(p, 0x997755, 4, 0.12); // bolt soaked by a rock
+          if (ev.amount > 0) {
+            if (ev.shield) {
+              // energy splash: blue flash + expanding ripple ring (#12)
+              this.spawnFlash(p, 0x66aaff, 12, 0.2);
+              this.spawnRipple(p, 0x88bbff, 6, 0.45);
+            } else {
+              // bare metal: orange flash + hot spark spray (#12)
+              this.spawnFlash(p, 0xffaa55, 9, 0.22);
+              this.spawnSparks(p, 0xffa050, 8, 42, 0.5);
+            }
+          } else {
+            this.spawnFlash(p, 0x997755, 4, 0.12); // bolt soaked by a rock
+          }
+          break;
+        }
+        case 'shieldDown': {
+          // the bubble pops: big flash + double ripple collapsing outward
+          const p = new THREE.Vector3(ev.x - this.sm.origin.x, ev.y - this.sm.origin.y, ev.z - this.sm.origin.z);
+          this.spawnFlash(p, 0xaaddff, 26, 0.4);
+          this.spawnRipple(p, 0x99ccff, 8, 0.7);
+          this.spawnRipple(p, 0x6699ff, 14, 0.9);
+          this.spawnSparks(p, 0x99bbff, 14, 55, 0.7);
           break;
         }
         case 'shot': {
-          // muzzle flash
+          // muzzle flash with real presence
           const p = new THREE.Vector3(ev.x - this.sm.origin.x, ev.y - this.sm.origin.y, ev.z - this.sm.origin.z);
-          this.spawnFlash(p, 0xffaa55, 3, 0.07);
+          this.spawnFlash(p, 0xffbb66, 6, 0.06);
+          this.spawnFlash(p, 0xffffff, 2.5, 0.04);
           break;
         }
         case 'explosion': {
@@ -139,6 +161,18 @@ export class FxLayer {
     this.sm.near.add(points);
     const ttl = big ? 1.6 : 0.9;
     this.effects.push({ obj: points, ttl, life: ttl, kind: 'sparks' });
+  }
+
+  // expanding energy ring (shield splash / shield collapse)
+  private spawnRipple(p: THREE.Vector3, color: number, size: number, ttl: number): void {
+    const mat = new THREE.SpriteMaterial({
+      map: glowTex!, color, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.position.copy(p);
+    sprite.scale.set(size, size, 1);
+    this.sm.near.add(sprite);
+    this.effects.push({ obj: sprite, ttl, life: ttl, kind: 'ripple', baseSize: size });
   }
 
   // small burst of glowing chips/dust flying off a point (mining impact)
@@ -237,6 +271,12 @@ export class FxLayer {
       if (fx.kind === 'beam' || fx.kind === 'flash') {
         const mat = (fx.obj as THREE.Mesh | THREE.Sprite).material as THREE.Material & { opacity: number };
         mat.opacity = t * 0.9;
+      } else if (fx.kind === 'ripple') {
+        const sprite = fx.obj as THREE.Sprite;
+        const grow = 1 - t; // 0 -> 1 over life
+        const s = (fx.baseSize ?? 6) * (1 + grow * 4);
+        sprite.scale.set(s, s, 1);
+        (sprite.material as THREE.SpriteMaterial).opacity = t * 0.7;
       } else if (fx.kind === 'sparks') {
         const points = fx.obj as THREE.Points;
         const pos = points.geometry.attributes.position;

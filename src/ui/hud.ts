@@ -152,19 +152,47 @@ export class Hud {
         const r = 14;
         ctx.strokeRect(s.x - r, s.y - r, r * 2, r * 2);
       }
-      // lead pip: where to aim so your bolts intercept the target
-      if (target.kind === 'ship' && stats.weaponDamage > 0 && d < stats.weaponRange * 1.4) {
+      // lead pip: where to aim so your bolts intercept the target (#12).
+      // Big, animated, and it SNAPS when your nose is on the solution.
+      if (target.kind === 'ship' && stats.weaponDamage > 0 && d < stats.weaponRange * 1.6) {
         const aim = leadPoint(ship.pos, ship.vel, target.pos, target.vel, BOLT_SPEED);
         const al = new THREE.Vector3(aim.x - origin.x, aim.y - origin.y, aim.z - origin.z);
         const ap = this.toScreen(al);
         if (!ap.behind) {
-          ctx.strokeStyle = target.pirate ? RED : CYAN;
-          ctx.lineWidth = 1.2;
+          const aimDir = vnorm(vsub(aim, ship.pos));
+          const offAngle = Math.acos(Math.max(-1, Math.min(1, vdot(qForward(ship.orient), aimDir))));
+          const onTarget = offAngle < 0.022; // ~1.3° — bolts will connect
+          const inRange = d < stats.weaponRange;
+          const col = onTarget ? '#ffe08a' : target.pirate ? RED : CYAN;
+          ctx.globalAlpha = inRange ? 1 : 0.45;
+          ctx.strokeStyle = col;
+          ctx.fillStyle = col;
+          ctx.lineWidth = onTarget ? 2.2 : 1.6;
+          const r = onTarget ? 11 : 9;
           ctx.beginPath();
-          ctx.arc(ap.x, ap.y, 5, 0, Math.PI * 2);
+          ctx.arc(ap.x, ap.y, r, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.fillStyle = ctx.strokeStyle;
-          ctx.fillRect(ap.x - 0.5, ap.y - 0.5, 1.5, 1.5);
+          // crosshair ticks
+          ctx.beginPath();
+          ctx.moveTo(ap.x - r - 5, ap.y); ctx.lineTo(ap.x - r + 2, ap.y);
+          ctx.moveTo(ap.x + r - 2, ap.y); ctx.lineTo(ap.x + r + 5, ap.y);
+          ctx.moveTo(ap.x, ap.y - r - 5); ctx.lineTo(ap.x, ap.y - r + 2);
+          ctx.moveTo(ap.x, ap.y + r - 2); ctx.lineTo(ap.x, ap.y + r + 5);
+          ctx.stroke();
+          if (onTarget) {
+            // solid center + pulse ring: FIRE NOW
+            ctx.beginPath();
+            ctx.arc(ap.x, ap.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+            const pulse = (performance.now() % 500) / 500;
+            ctx.globalAlpha = (1 - pulse) * (inRange ? 0.8 : 0.3);
+            ctx.beginPath();
+            ctx.arc(ap.x, ap.y, r + pulse * 10, 0, Math.PI * 2);
+            ctx.stroke();
+          } else {
+            ctx.fillRect(ap.x - 1, ap.y - 1, 2, 2);
+          }
+          ctx.globalAlpha = 1;
         }
       }
     }
