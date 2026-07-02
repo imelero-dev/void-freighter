@@ -88,6 +88,8 @@ export interface StationDef {
   radius: number;       // physical size for render/collision
   dockRadius: number;   // request docking within this range
   safeRadius: number;   // station police zone: no PvP, turrets kill pirates
+  bayDir: Vec3;         // unit dir from center to the hangar-bay mouth (#17)
+  clampDir: Vec3;       // unit dir from center to the external docking collar (#17)
   services: StationService[];
   // economy profile: goods this station produces (cheap) / consumes (expensive)
   produces: Record<string, number>;  // goodId -> units per economy tick
@@ -264,6 +266,8 @@ export interface PlayerProfile {
   moduleStash: Array<{ slot: ModuleSlot; tier: number }>; // looted modules, install/sell at shipyard
   missileAmmo: number;
   cannonAmmo: number;
+  gearDown?: boolean;        // landing gear state (#18) — survives reload
+  landedOn?: string | null;  // parked on a surface body (#16) — survives reload
   // workshop rentals: stationId -> world-time expiry of the fabrication bay
   workshopRentals: Record<string, number>;
   // warehouse plots: stationId -> rented storage (volume-limited)
@@ -365,7 +369,19 @@ export type SimEvent =
   | { type: 'forcefield'; pid: number; body: string }
   | { type: 'derelict'; pid: number; entityId: number; name: string; story: string }
   | { type: 'cruiseChange'; entityId: number; state: CruiseState }
-  | { type: 'refined'; pid: number; goodIn: string; qtyIn: number; goodOut: string; qtyOut: number };
+  | { type: 'refined'; pid: number; goodIn: string; qtyIn: number; goodOut: string; qtyOut: number }
+  // ATC approach flow (#20): clearance granted, slot options for the overlay
+  | { type: 'approach'; pid: number; targetId: string; targetKind: 'station' | 'body'; options: Array<{ id: string; label: string }>; assigned: string }
+  | { type: 'approachCleared'; pid: number }  // clearance expired / cancelled
+  | { type: 'touchdown'; pid: number; bodyId: string; hard: boolean };
+
+// Player approach/docking state, mirrored to the client for the approach
+// radar (#18) and the ATC overlay (#20).
+export interface ApproachState {
+  targetId: string;              // stationId or surface body id
+  targetKind: 'station' | 'body';
+  slot: string;                  // 'bay' | 'clamp' | pad id
+}
 
 export function dist(a: Vec3, b: Vec3): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);

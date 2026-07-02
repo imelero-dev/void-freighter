@@ -3,8 +3,10 @@
 
 import * as THREE from 'three';
 import { BOLT_SPEED, GOODS } from '../sim/data';
+import { approachTarget } from '../sim/docking';
+import { surfaceEnvAt } from '../sim/surface';
 import type { Entity } from '../sim/types';
-import { leadPoint, qForward, qRight, qUp, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
+import { leadPoint, qForward, qRight, qUp, vdist, vlen, vscale, vsub, vnorm, vdot } from '../sim/vec';
 import type { IWorld } from '../world_api';
 import { fmtDistance, fmtTime } from './dom';
 
@@ -29,6 +31,10 @@ export class Hud {
   alert: { text: string; color: string; until: number } | null = null;
   cameraMode: 'cockpit' | 'chase' = 'cockpit';
   destAligned = false; // exposed so the app can play the snap tone on change
+  entryHeat = 0;       // 0..1 atmospheric-entry glow, set by the app (#16)
+  // approach radar state (#18), read back by the app for the proximity beep
+  approachQuality: 'red' | 'amber' | 'green' | null = null;
+  approachDist = Infinity;
 
   private proj = new THREE.Vector3();
   private floaters: Array<{ pos: { x: number; y: number; z: number }; text: string; color: string; at: number }> = [];
@@ -233,6 +239,25 @@ export class Hud {
     // ---- destination GPS marker ----
     this.drawDestination(world, ship, origin, cx, cy, W, H);
 
+    // ---- approach radar instrument (#18) ----
+    this.drawApproachRadar(world, ship, W);
+
+    // ---- surface flight cues (#16/#19) ----
+    const env = surfaceEnvAt(world.surfaceBodies, ship.pos);
+    if (env && env.altitude < 25_000) {
+      ctx.textAlign = 'center';
+      ctx.font = '13px "Lucida Console", monospace';
+      const vs = vdot(ship.vel, env.up);
+      ctx.fillStyle = env.altitude < 400 && vs < -12 ? RED : AMBER;
+      ctx.fillText(`ALT ${env.altitude > 9999 ? `${(env.altitude / 1000).toFixed(1)} km` : `${Math.max(0, Math.round(env.altitude))} m`}  VS ${vs > 0 ? '+' : ''}${Math.round(vs)}`, cx, H * 0.24);
+    }
+    if (world.landedOn) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = GREEN;
+      ctx.font = '14px "Lucida Console", monospace';
+      ctx.fillText('◆ LANDED — throttle up to lift off ◆', cx, H * 0.30);
+    }
+
     // ---- floating combat text ----
     for (let i = this.floaters.length - 1; i >= 0; i--) {
       const f = this.floaters[i];
@@ -273,6 +298,16 @@ export class Hud {
         ctx.font = '16px "Lucida Console", monospace';
         ctx.fillText(this.alert.text, cx, H * 0.27);
       }
+    }
+
+    // ---- atmospheric entry heat (#16): the edges of the canopy cook ----
+    if (this.entryHeat > 0.04) {
+      const a = Math.min(0.55, this.entryHeat * 0.5) * (0.75 + Math.random() * 0.25);
+      const grad = ctx.createRadialGradient(cx, cy, Math.min(W, H) * 0.30, cx, cy, Math.max(W, H) * 0.62);
+      grad.addColorStop(0, 'rgba(255,120,40,0)');
+      grad.addColorStop(1, `rgba(255,105,25,${a})`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
     }
 
     // ---- comms ticker ----
@@ -443,6 +478,84 @@ export class Hud {
     }
   }
 
+  // Approach radar (#18): a compact red/amber/green instrument that wakes on
+  // final approach and dims away otherwise. Shows a deviation scope (where
+  // the corridor is relative to your nose), distance and closure rate.
+  private drawApproachRadar(world: IWorld, ship: Entity, W: number): void {
+    this.approachQuality = null;
+    this.approachDist = Infinity;
+    const appr = world.approach;
+    if (!appr) return;
+    const target = approachTarget(world.system, world.surfaceBodies, appr);
+    if (!target) return;
+    const d = vdist(ship.pos, target.pos);
+    if (d > 6500) return; // not in the approach phase yet
+    const ctx = this.ctx;
+
+    const toT = vnorm(vsub(target.pos, ship.pos));
+    const closure = vdot(ship.vel, toT);
+    // lateral deviation from the approach axis through the target
+    const rel = vsub(ship.pos, target.pos);
+    const outDir = vscale(target.inDir, -1);
+    const axial = vdot(rel, outDir);
+    const latVec = vsub(rel, vscale(outDir, axial));
+    const lat = vlen(latVec);
+    const corridor = appr.slot === 'clamp' ? 28 : appr.slot === 'bay' ? 55 : 40;
+    const latNorm = lat / Math.max(1, corridor + d * 0.22); // funnel widens out
+    const vLimit = (appr.slot === 'clamp' ? 8 : appr.slot === 'bay' ? 20 : 10) + d / 12;
+    const wrongSide = axial < 0 && d < 900; // slipped behind the target plane
+    let quality: 'red' | 'amber' | 'green' = 'green';
+    if (latNorm > 1.6 || closure > vLimit * 1.8 || closure < -6 || wrongSide) quality = 'red';
+    else if (latNorm > 0.9 || closure > vLimit) quality = 'amber';
+    this.approachQuality = quality;
+    this.approachDist = d;
+
+    const pw = 190, ph = 96;
+    const px = W - pw - 14, py = 40;
+    this.holoPanel(px, py, pw, ph, 'APPROACH');
+    const col = quality === 'green' ? GREEN : quality === 'amber' ? '#e0b34d' : RED;
+
+    // deviation scope: dot = where the corridor axis is relative to you
+    const sx = px + 34, sy = py + 58, sr = 26;
+    ctx.strokeStyle = 'rgba(217,164,65,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sx - sr, sy); ctx.lineTo(sx + sr, sy);
+    ctx.moveTo(sx, sy - sr); ctx.lineTo(sx, sy + sr);
+    ctx.stroke();
+    // project the lateral offset onto camera right/up: fly TOWARD the dot
+    this.invQuat.copy(this.camera.quaternion).invert();
+    this.dirV.set(-latVec.x, -latVec.y, -latVec.z).applyQuaternion(this.invQuat);
+    const k = Math.min(1, latNorm) * sr * 0.85;
+    const norm = Math.hypot(this.dirV.x, this.dirV.y) || 1;
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(sx + (this.dirV.x / norm) * k * Math.min(1, latNorm), sy - (this.dirV.y / norm) * k * Math.min(1, latNorm), 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // status column
+    ctx.textAlign = 'left';
+    ctx.font = '11px "Lucida Console", monospace';
+    ctx.fillStyle = col;
+    const slotLabel = appr.slot === 'bay' ? 'BAY' : appr.slot === 'clamp' ? 'CLAMP A' : appr.slot.split('_pad_').length > 1 ? `PAD ${appr.slot.split('_pad_')[1]}` : appr.slot;
+    ctx.fillText(`● ${slotLabel}`, px + 72, py + 34);
+    ctx.fillStyle = AMBER_DIM;
+    ctx.fillText(`DST ${fmtDistance(d)}`, px + 72, py + 52);
+    ctx.fillStyle = closure > vLimit ? RED : AMBER_DIM;
+    ctx.fillText(`CLO ${Math.round(closure)} m/s`, px + 72, py + 68);
+    if (appr.slot !== 'bay' && appr.slot !== 'clamp') {
+      ctx.fillStyle = world.gearFrac >= 0.99 ? GREEN : RED;
+      ctx.fillText(world.gearFrac >= 0.99 ? 'GEAR ▼' : 'GEAR ▲ !', px + 72, py + 84);
+    } else if (appr.slot === 'clamp') {
+      const aln = vdot(qForward(ship.orient), target.inDir);
+      ctx.fillStyle = aln > 0.94 ? GREEN : AMBER_DIM;
+      ctx.fillText(`ALN ${Math.max(0, Math.round(aln * 100))}%`, px + 72, py + 84);
+    }
+  }
+
   private drawContacts(world: IWorld, ship: Entity, origin: { x: number; y: number; z: number }): void {
     const ctx = this.ctx;
     const stats = world.shipStats;
@@ -513,6 +626,7 @@ export class Hud {
 
   private drawBottomCluster(world: IWorld, ship: Entity, W: number, H: number): void {
     const ctx = this.ctx;
+    const now = performance.now();
     const cx = W / 2;
     const stats = world.shipStats;
     const rx = Math.max(95, Math.min(130, W * 0.085));
@@ -555,11 +669,27 @@ export class Hud {
       ctx.fillStyle = CYAN;
       ctx.fillText('FA OFF', gx + 30, gy - 74);
     }
+    // flight mode + gear state (#18/#19): always visible
+    ctx.font = '10px "Lucida Console", monospace';
+    ctx.fillStyle = world.vtol ? '#7fd4ff' : AMBER_DIM;
+    ctx.fillText(world.vtol ? 'MODE: VTOL ▼' : 'MODE: CRUISE', gx + 30, gy - 88);
+    const gearT = world.gearFrac;
+    if (gearT >= 0.99) {
+      ctx.fillStyle = GREEN;
+      ctx.fillText('GEAR ▼ DOWN', gx + 30, gy - 100);
+    } else if (gearT > 0.01) {
+      if (Math.sin(now / 90) > 0) {
+        ctx.fillStyle = AMBER;
+        ctx.fillText('GEAR ◇ CYCLING', gx + 30, gy - 100);
+      }
+    } else {
+      ctx.fillStyle = 'rgba(138,141,144,0.6)';
+      ctx.fillText('GEAR ▲ UP', gx + 30, gy - 100);
+    }
 
     // ---- ship vitals (right of scanner): big glanceable gauges (#13) ----
     // Combat-critical readouts as thick segmented bars with large numerics,
     // pulsing on low/critical states. Nothing here sits over the center view.
-    const now = performance.now();
     const vx = cx + rx + 36;
     const vw = Math.max(140, Math.min(210, W - vx - 24));
     let vy = scY - 52;

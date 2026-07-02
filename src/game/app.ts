@@ -10,10 +10,13 @@ import { FxLayer } from '../render/fx';
 import { PostPipeline } from '../render/post';
 import { SceneManager } from '../render/scene';
 import { buildStarfield } from '../render/starfield';
+import { TerrainLayer } from '../render/terrain';
 import { BOLT_SPEED, GOODS } from '../sim/data';
-import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
+import { surfaceEnvAt } from '../sim/surface';
+import { leadPoint, qrot, vdist, vlen, vnorm, vsub } from '../sim/vec';
 import { settings } from '../ui/settings';
 import type { IWorld } from '../world_api';
+import { ApproachOverlay } from '../ui/approach_overlay';
 import { ChatUi } from '../ui/chat';
 import { el, fmtCredits, fmtDistance } from '../ui/dom';
 import { Hud } from '../ui/hud';
@@ -32,6 +35,7 @@ export class GameApp {
   private entities: EntitiesLayer;
   private fx: FxLayer;
   private dust: DustLayer;
+  private terrain: TerrainLayer;
   private cockpit: THREE.Group;
   private gamepad = new GamepadManager();
   private gpFireWas: boolean | null = null;
@@ -56,6 +60,8 @@ export class GameApp {
   private alarmUntil = 0;   // hull klaxon bursts on damage, then shuts up
   private headlight!: THREE.SpotLight;
   private headlightOn = false;
+  private approachOverlay!: ApproachOverlay;
+  private beepAcc = 0;
 
   onExit: (() => void) | null = null;
 
@@ -66,6 +72,7 @@ export class GameApp {
     this.entities = new EntitiesLayer(this.sm, world);
     this.fx = new FxLayer(this.sm, world, this.entities);
     this.dust = new DustLayer(this.sm, world);
+    this.terrain = new TerrainLayer(this.sm, world);
     // first-person cockpit interior rides on the camera
     this.sm.near.add(this.sm.camera);
     // headlights: a hard forward beam from the nose. Physical falloff
@@ -92,6 +99,11 @@ export class GameApp {
 
     this.creditsHud = el('div', 'vf-credits-hud');
     document.body.appendChild(this.creditsHud);
+    this.approachOverlay = new ApproachOverlay((slotId) => {
+      this.audio.click();
+      if (slotId === '__autodock') this.world.autodock();
+      else this.world.selectDockSlot(slotId);
+    });
 
     this.bindInput();
     this.hud.resize();
@@ -126,6 +138,14 @@ export class GameApp {
       this.headlightOn = !this.headlightOn;
       this.audio.click();
       this.hud.pushLog(`Headlights ${this.headlightOn ? 'ON' : 'OFF'}.`, '#8ad');
+    });
+    input.on('toggleVtol', () => {
+      w.toggleVtol();
+      this.audio.vtolShift();
+    });
+    input.on('toggleGear', () => {
+      w.toggleGear();
+      this.audio.gearMove();
     });
     input.on('dock', () => {
       if (w.player?.dockedAt) {
@@ -467,6 +487,7 @@ export class GameApp {
     this.headlight.visible = this.headlightOn && !!ship && !ship.dockedAt;
     this.bodies.update(w.time);
     this.entities.update(w.time);
+    this.terrain.update();
     this.fx.update(dt);
     this.dust.update();
 
@@ -518,6 +539,30 @@ export class GameApp {
       }
     }
 
+    // atmosphere, entry heat & approach beeps (#16/#18)
+    let atmo = 0;
+    if (ship && !docked) {
+      const env = surfaceEnvAt(w.surfaceBodies, ship.pos);
+      if (env && env.density > 0) {
+        const speed = vlen(ship.vel);
+        atmo = Math.min(1, env.density * (0.3 + speed / 700));
+        this.hud.entryHeat = Math.min(1, env.density * speed / 550);
+      } else {
+        this.hud.entryHeat = 0;
+      }
+    } else {
+      this.hud.entryHeat = 0;
+    }
+    if (this.hud.approachQuality && ship && !docked) {
+      this.beepAcc += dt;
+      const interval = Math.min(1.1, Math.max(0.12, this.hud.approachDist / 1400));
+      if (this.beepAcc >= interval) {
+        this.beepAcc = 0;
+        this.audio.approachBeep(this.hud.approachQuality);
+      }
+    }
+    if ((docked || !w.approach) && this.approachOverlay.visible) this.approachOverlay.hide();
+
     // audio state
     if (ship) {
       this.audio.setState({
@@ -530,6 +575,7 @@ export class GameApp {
         dead: false,
         turbo: w.turboActive,
         alarm: performance.now() < this.alarmUntil,
+        atmo,
       });
     }
     this.miningActive = false; // re-set by mining laser events each tick
@@ -696,6 +742,25 @@ export class GameApp {
       case 'derelict':
         this.audio.commsStatic();
         this.openDerelictWindow(ev.entityId, ev.name, ev.story);
+        break;
+      case 'approach': {
+        // ATC clearance granted: pop the compact slot-selection overlay (#20)
+        const st = w.system.stations.find((s) => s.id === ev.targetId);
+        const body = w.surfaceBodies.find((b) => b.id === ev.targetId);
+        this.approachOverlay.show(st?.name ?? body?.name ?? ev.targetId, ev.options, ev.assigned);
+        break;
+      }
+      case 'approachCleared':
+        this.approachOverlay.hide();
+        break;
+      case 'touchdown':
+        if (ev.hard) {
+          this.audio.hitHull();
+          this.hud.flashAlert('HARD CONTACT', '#e8402a', 1400);
+        } else {
+          this.audio.dockThunk();
+          this.hud.pushLog('Touchdown. Skids holding.', '#7fc97f');
+        }
         break;
     }
   }

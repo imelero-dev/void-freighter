@@ -208,9 +208,20 @@ export function generateSystem(seed: number = WORLD_SEED): SystemDef {
 }
 
 function makeStation(spec: StationSpec, pos: Vec3, seed: number): StationDef {
+  // docking geometry (#17): hangar-bay mouth on the equator, external clamp
+  // collar roughly opposite — deterministic from the station seed so sim
+  // collision and rendered geometry always agree
+  const drng = new Rng(seed ^ 0x5157);
+  const bayA = drng.range(0, Math.PI * 2);
+  const bayDir = v3(Math.cos(bayA), 0, Math.sin(bayA));
+  const clampA = bayA + Math.PI + drng.range(-0.7, 0.7);
+  const clampY = drng.range(-0.3, 0.3);
+  const cl = Math.sqrt(1 - clampY * clampY);
+  const clampDir = v3(Math.cos(clampA) * cl, clampY, Math.sin(clampA) * cl);
   return {
     id: spec.id, name: spec.name, factionId: spec.faction, pos,
     radius: 900, dockRadius: 2200, safeRadius: 14_000,
+    bayDir, clampDir,
     services: spec.services,
     produces: { ...spec.produces },
     consumes: { ...spec.consumes },

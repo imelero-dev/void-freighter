@@ -15,17 +15,23 @@ import {
 import { MODULE_NAMES } from './data';
 import { integrateFlight } from './flight';
 import { ContractBoards } from './contracts';
+import {
+  APPROACH_RANGE_STATION, AUTODOCK_PRICE, BAY_DOCK_SPEED, BAY_FLOOR_MULT, BAY_HALF_H, BAY_HALF_W,
+  BAY_MOUTH_MULT, CLAMP_ALIGN_COS, CLAMP_CAPTURE_RADIUS, CLAMP_COLLAR_MULT, CLAMP_HOLD_S,
+  CLAMP_MAX_SPEED, GEAR_DEPLOY_S, PAD_MAX_LATERAL, PAD_MAX_VSPEED, approachTarget, bayFrame, clampCollarPos,
+} from './docking';
 import { Economy } from './economy';
 import { Rng } from './rng';
+import { buildSurfaceBodies, surfaceEnvAt, type SurfaceBody, type SurfaceEnv } from './surface';
 import { dangerAt, generateSystem, rockSpawn, stationInfoCost, WORLD_SEED } from './system';
 import {
-  DT, emptyShipInput, type CargoItem, type Contract, type Destination, type Entity,
+  DT, emptyShipInput, type ApproachState, type CargoItem, type Contract, type Destination, type Entity,
   type EntityKind, type HullId, type MarketEntry, type ModuleSlot, type PirateTier,
   type PlayerProfile, type ShipInput, type SimEvent, type StationDef,
 } from './types';
 import {
   angleBetween, clamp, leadPoint, qclone, qForward, qident, qIntegrate, qLookAt, qnorm, qrot,
-  v3, vadd, vclone, vdist, vdot, vlen, vlen2, vnorm, vscale, vsub, type Vec3,
+  v3, vadd, vclone, vcross, vdist, vdot, vlen, vlen2, vnorm, vscale, vsub, type Vec3,
 } from './vec';
 
 export const SHIP_RADIUS: Record<string, number> = {
@@ -162,11 +168,21 @@ export interface PlayerMeta {
   rescueTimer: number;     // >0: tow inbound
   cruiseRequested: boolean;
   flightAssist: boolean;
-  forcefieldCooldown: number;
+  forcefieldCooldown: number;   // rate-limits atmosphere/crush warnings
   promptedDerelicts: Set<number>;
   turboCharge: number;   // 0..1 burst gauge
   turboActive: boolean;
   lastCombatAt: number;  // sim time of the last hit taken (field-repair lockout)
+  // flight modes & landing systems (#16-#19)
+  vtol: boolean;
+  gear: number;          // 0 stowed .. 1 deployed (animates)
+  gearTarget: number;
+  landedOn: string | null;      // surface body id while parked on open terrain
+  approach: ApproachState | null;  // ATC clearance (#20)
+  clampHold: number;            // seconds holding clamp alignment (#17)
+  waveOffCooldown: number;
+  dockContext: 'bay' | 'clamp' | 'pad' | 'legacy';
+  dockPadId: string | null;
 }
 
 interface RockState {
@@ -185,6 +201,7 @@ export interface SimConfig {
 export class Sim {
   cfg: SimConfig;
   system = generateSystem();
+  surfaceBodies: SurfaceBody[] = [];
   economy: Economy;
   boards: ContractBoards;
   time = 0;
@@ -202,6 +219,7 @@ export class Sim {
   constructor(cfg?: Partial<SimConfig>) {
     this.cfg = { seed: cfg?.seed ?? WORLD_SEED };
     this.system = generateSystem(this.cfg.seed);
+    this.surfaceBodies = buildSurfaceBodies(this.system);
     this.economy = new Economy(this.system);
     this.boards = new ContractBoards(this.system);
     this.rng = new Rng(this.cfg.seed ^ 0xdead);
@@ -235,6 +253,12 @@ export class Sim {
       cruiseRequested: false, flightAssist: true,
       forcefieldCooldown: 0, promptedDerelicts: new Set(),
       turboCharge: 1, turboActive: false, lastCombatAt: -999,
+      vtol: false,
+      gear: prof.gearDown ? 1 : 0,
+      gearTarget: prof.gearDown ? 1 : 0,
+      landedOn: prof.landedOn ?? null,
+      approach: null, clampHold: 0, waveOffCooldown: 0,
+      dockContext: 'legacy', dockPadId: null,
     };
     e.maxHull = meta.stats.maxHull;
     e.maxShield = meta.stats.maxShield;
@@ -274,6 +298,8 @@ export class Sim {
     meta.profile.dockedAt = e.dockedAt;
     meta.profile.missileAmmo = e.missileAmmo;
     meta.profile.cannonAmmo = e.cannonAmmo;
+    meta.profile.gearDown = meta.gearTarget === 1;
+    meta.profile.landedOn = meta.landedOn;
     return meta.profile;
   }
 
@@ -501,6 +527,41 @@ export class Sim {
       else meta.wreckTimer = 25;
     }
 
+    // landing gear animation (#18)
+    if (meta.gear !== meta.gearTarget) {
+      const step = dt / GEAR_DEPLOY_S;
+      meta.gear = meta.gearTarget > meta.gear
+        ? Math.min(meta.gearTarget, meta.gear + step)
+        : Math.max(meta.gearTarget, meta.gear - step);
+    }
+
+    // parked on a surface (#16): the ship rests until the pilot lifts off
+    if (meta.landedOn) {
+      const body = this.surfaceBodies.find((b) => b.id === meta.landedOn);
+      if (!body) {
+        meta.landedOn = null;
+      } else {
+        e.vel = v3();
+        e.angVel = v3();
+        e.throttle = 0;
+        meta.turboActive = false;
+        const wantsUp = meta.input.thrustUp > 0.25 || meta.input.thrustForward > 0.25;
+        if (wantsUp) {
+          meta.landedOn = null;
+          const up = vnorm(vsub(e.pos, body.pos));
+          e.vel = vscale(up, 14); // gentle unstick; thrust does the rest
+        } else {
+          // shields trickle back while parked; systems stay live
+          e.shieldRegenTimer += dt;
+          if (e.shieldRegenTimer > SHIELD_REGEN_DELAY) {
+            e.shield = Math.min(e.maxShield, e.shield + meta.stats.shieldRegen * dt);
+          }
+          this.tickPickups(meta, e);
+          return;
+        }
+      }
+    }
+
     // flight
     if (e.cruise !== 'off') {
       meta.turboActive = false;
@@ -531,10 +592,45 @@ export class Sim {
         meta.turboCharge = Math.min(1, meta.turboCharge + dt / TURBO_RECHARGE_S);
       }
       meta.turboActive = turbo;
-      const perf = turbo
-        ? { maxSpeed: TURBO_SPEED, accel: meta.stats.accel * TURBO_ACCEL_MULT, turnRate: meta.stats.turnRate, mass: meta.stats.mass }
-        : meta.stats;
+      // VTOL mode (#19): thrust vectors rotate for vertical work — tight
+      // speed envelope, softened turn authority, precise translation
+      const s = meta.stats;
+      let perf = turbo
+        ? { maxSpeed: TURBO_SPEED, accel: s.accel * TURBO_ACCEL_MULT, turnRate: s.turnRate, mass: s.mass }
+        : { maxSpeed: s.maxSpeed, accel: s.accel, turnRate: s.turnRate, mass: s.mass };
+      if (meta.vtol) {
+        meta.turboActive = false;
+        perf = {
+          maxSpeed: Math.min(90, s.maxSpeed * 0.45),
+          accel: s.accel * 0.9,
+          turnRate: s.turnRate * 0.75,
+          mass: s.mass,
+        };
+      }
       this.integrateShip(e, meta.input, perf, dt, meta.flightAssist);
+      // atmosphere & gravity (#16): drag scrubs speed, control gets mushy,
+      // gravity pulls — VTOL + assist auto-hovers, cruise-mode ships sag
+      const env = surfaceEnvAt(this.surfaceBodies, e.pos);
+      if (env) {
+        if (env.density > 0) {
+          const drag = Math.min(0.9, env.density * (0.10 + vlen(e.vel) / 4000) );
+          e.vel = vscale(e.vel, Math.max(0, 1 - drag * dt));
+        }
+        if (env.gravity > 0) {
+          e.vel = vsub(e.vel, vscale(env.up, env.gravity * dt));
+          if (meta.vtol && meta.flightAssist) {
+            e.vel = vadd(e.vel, vscale(env.up, env.gravity * dt)); // hover null
+          }
+        }
+        // gas giants have no floor, only pressure
+        if (!env.body.solid && env.dist < env.body.radius * 1.03) {
+          this.applyDamage(e, 30 * dt * (env.body.radius * 1.03 / Math.max(1, env.dist)), -1, true);
+          if (meta.forcefieldCooldown <= 0) {
+            meta.forcefieldCooldown = 3;
+            this.events.push({ type: 'forcefield', pid: meta.pid, body: env.body.name });
+          }
+        }
+      }
       if (meta.cruiseRequested) this.tryStartCruise(meta, e);
     }
     const moved = vlen(e.vel) * dt;
@@ -542,6 +638,10 @@ export class Sim {
 
     // collisions & hazards
     this.tickCollisions(meta, e, dt);
+    if (e.dockedAt) return; // a collision pass can complete a docking (#17)
+
+    // ATC pattern monitoring (#20)
+    this.tickApproach(meta, e, dt);
 
     // mining
     this.tickMining(meta, e, dt);
@@ -723,6 +823,13 @@ export class Sim {
     // cruise proper: exponential ramp toward a cap set by nearby masses (the
     // "gravity gearbox": deep space = full speed, near a body = crawl). The
     // cap shrinking as you approach gives automatic smooth arrival braking.
+    // atmospheric interface kills the cruise drive (#16)
+    const cruiseEnv = surfaceEnvAt(this.surfaceBodies, e.pos);
+    if (cruiseEnv && cruiseEnv.density > 0.04) {
+      this.dropCruise(e, 'atmosphere');
+      this.events.push({ type: 'log', text: `Atmospheric interface — ${cruiseEnv.body.name}. Cruise drive offline.`, color: '#fa4', pid: meta.pid });
+      return;
+    }
     let cap = Math.min(stats.cruiseMax, this.massSpeedCap(e.pos));
     if (meta.destination) {
       const d = vdist(e.pos, meta.destination.pos);
@@ -787,11 +894,13 @@ export class Sim {
   private massSpeedCap(pos: Vec3): number {
     let edge = Infinity;
     edge = Math.min(edge, vlen(pos) - this.system.starRadius * 2.2);
+    // 1.28: just above the atmosphere top (1.18) so a surface departure only
+    // needs a short climb before the cruise drive spools
     for (const p of this.system.planets) {
-      edge = Math.min(edge, vdist(pos, p.pos) - p.radius * 1.5);
+      edge = Math.min(edge, vdist(pos, p.pos) - p.radius * 1.28);
     }
     for (const m of this.system.moons) {
-      edge = Math.min(edge, vdist(pos, m.pos) - m.radius * 1.6);
+      edge = Math.min(edge, vdist(pos, m.pos) - m.radius * 1.35);
     }
     for (const s of this.system.stations) {
       edge = Math.min(edge, vdist(pos, s.pos) - 1500);
@@ -809,6 +918,33 @@ export class Sim {
   // Collisions & hazards
   // -------------------------------------------------------------------------
 
+  // Solid-contact resolution (#21): low-speed contact stops or slides along
+  // the surface, high-speed contact deals mass-scaled damage. No trampoline
+  // bounces, no clipping.
+  private resolveContact(
+    meta: PlayerMeta, e: Entity, n: Vec3, penetration: number, dt: number,
+    opts: { friction?: number; damageThreshold?: number; damageScale?: number } = {},
+  ): number {
+    const friction = opts.friction ?? 0.35;
+    const threshold = opts.damageThreshold ?? 25;
+    const scale = opts.damageScale ?? 0.6;
+    // push out of the surface
+    vaddTo(e.pos, vscale(n, penetration));
+    // split velocity: kill the inward normal component, keep (damped) tangent
+    const vn = vdot(e.vel, n);
+    const impact = vn < 0 ? -vn : 0;
+    if (vn < 0) {
+      e.vel = vsub(e.vel, vscale(n, vn));                 // stop, don't bounce
+      e.vel = vscale(e.vel, Math.max(0, 1 - friction * dt * 8)); // scrape
+    }
+    if (impact > threshold) {
+      // heavier hulls hit harder: damage scales with the ship's mass factor
+      this.applyDamage(e, (impact - threshold) * scale * meta.stats.mass, -1, true);
+      this.dropCruise(e, 'collision');
+    }
+    return impact;
+  }
+
   private tickCollisions(meta: PlayerMeta, e: Entity, dt: number): void {
     // star burn
     const starD = vlen(e.pos);
@@ -818,59 +954,161 @@ export class Sim {
         this.events.push({ type: 'log', text: 'WARNING: hull temperature critical.', color: '#f44', pid: meta.pid });
       }
     }
-    // planets & moons: planetary exclusion field well above the surface —
-    // an invisible wall that shoves you back out (no more clipping through)
     meta.forcefieldCooldown = Math.max(0, meta.forcefieldCooldown - dt);
-    const bounce = (center: Vec3, shellRadius: number, label: string) => {
-      const d = vdist(e.pos, center);
-      if (d >= shellRadius) return;
-      const n = vnorm(vsub(e.pos, center));
-      e.pos = vadd(center, vscale(n, shellRadius + 5));
-      // reflect velocity off the shell, heavily damped
-      const vn = vdot(e.vel, n);
-      if (vn < 0) {
-        e.vel = vsub(e.vel, vscale(n, vn * 1.6));
-        e.vel = vscale(e.vel, 0.45);
-      }
-      this.dropCruise(e, 'forcefield');
-      if (meta.forcefieldCooldown <= 0) {
-        meta.forcefieldCooldown = 3;
-        this.events.push({ type: 'forcefield', pid: meta.pid, body: label });
-      }
-    };
-    for (const p of this.system.planets) {
-      bounce(p.pos, p.radius * 1.15, p.name);
-    }
-    for (const m of this.system.moons) {
-      bounce(m.pos, m.radius * 1.3, 'moon');
-    }
-    // stations: bounce
-    for (const s of this.system.stations) {
-      const d = vdist(e.pos, s.pos);
-      if (d < s.radius + e.radius && !e.dockedAt) {
-        const n = vnorm(vsub(e.pos, s.pos));
-        e.pos = vadd(s.pos, vscale(n, s.radius + e.radius + 2));
-        const impact = vlen(e.vel);
-        e.vel = vscale(n, Math.max(10, impact * 0.25));
-        if (impact > COLLISION_DAMAGE_SPEED) {
-          this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.3, -1, true);
+
+    // ---- terrain (#16/#21): planets & moons are real ground now ----
+    const env = surfaceEnvAt(this.surfaceBodies, e.pos);
+    if (env && env.body.solid) {
+      const clearance = e.radius * 0.9; // gear/keel height
+      if (env.dist < env.surfR + clearance) {
+        const up = env.up;
+        const vN = vdot(e.vel, up);       // negative = sinking
+        const tangential = vsub(e.vel, vscale(up, vN));
+        const vT = vlen(tangential);
+        const gearDown = meta.gear >= 0.99;
+        if (gearDown && -vN <= PAD_MAX_VSPEED && vT <= PAD_MAX_LATERAL) {
+          // touchdown (#18): settle on the skids
+          e.pos = vadd(env.body.pos, vscale(up, env.surfR + clearance));
+          e.vel = v3();
+          e.angVel = v3();
+          meta.landedOn = env.body.id;
+          this.dropCruise(e, 'landed');
+          this.events.push({ type: 'touchdown', pid: meta.pid, bodyId: env.body.id, hard: false });
+          // on an assigned pad with clearance: that's a pad dock (#17)
+          const pad = env.body.pads.find((p) => vdist(e.pos, p.pos) < p.radius + e.radius);
+          if (pad && env.body.stationId) {
+            if (meta.approach && meta.approach.slot === pad.id) {
+              const st = this.station(env.body.stationId)!;
+              meta.dockPadId = pad.id;
+              this.dockShip(meta, e, st, false, 'pad');
+            } else {
+              this.events.push({ type: 'comms', pid: meta.pid, text: `You are parked on ${pad.name} without clearance. Request approach [SPACE] to use port services.` });
+            }
+          }
+          return;
+        }
+        // hard/gearless contact: structural damage proportional to the hit
+        const pen = env.surfR + clearance - env.dist;
+        const gearPenalty = gearDown ? 0 : 6; // slamming down on the belly hurts
+        const impact = this.resolveContact(meta, e, up, pen, dt, {
+          friction: 0.8,
+          damageThreshold: Math.max(2, PAD_MAX_VSPEED - gearPenalty),
+          damageScale: 2.2,
+        });
+        if (impact > 2) {
+          this.events.push({ type: 'touchdown', pid: meta.pid, bodyId: env.body.id, hard: true });
+          if (!gearDown && this.tickCount % 10 === 0) {
+            this.events.push({ type: 'log', text: 'GEAR UP — hull grinding on the surface!', color: '#f44', pid: meta.pid });
+          }
         }
       }
     }
-    // asteroids (active entities only)
+
+    // ---- stations (#17/#21): solid keep-out sphere with a real bay bored in ----
+    for (const st of this.system.stations) {
+      if (e.dockedAt) break;
+      const rel = vsub(e.pos, st.pos);
+      const d = vlen(rel);
+      if (d > st.radius * 1.3 + e.radius) continue;
+      const { axis, lat, up } = bayFrame(st);
+      const t = vdot(rel, axis);
+      const l = vdot(rel, lat);
+      const v = vdot(rel, up);
+      const mouthT = st.radius * BAY_MOUTH_MULT;
+      const floorT = st.radius * BAY_FLOOR_MULT;
+      const inAperture = t > 0 && Math.abs(l) < BAY_HALF_W && Math.abs(v) < BAY_HALF_H;
+      const inTunnel = inAperture && t < mouthT + 60 && t > floorT - 20;
+      if (inTunnel) {
+        // inside the hangar tunnel: walls are solid, the floor is the dock
+        if (Math.abs(l) > BAY_HALF_W - e.radius) {
+          const sign = Math.sign(l);
+          const n = vscale(lat, -sign);
+          this.resolveContact(meta, e, n, Math.abs(l) - (BAY_HALF_W - e.radius), dt, { damageThreshold: 15, damageScale: 0.8 });
+        }
+        if (Math.abs(v) > BAY_HALF_H - e.radius) {
+          const sign = Math.sign(v);
+          const n = vscale(up, -sign);
+          this.resolveContact(meta, e, n, Math.abs(v) - (BAY_HALF_H - e.radius), dt, { damageThreshold: 15, damageScale: 0.8 });
+        }
+        if (t < floorT + e.radius) {
+          // reached the deck: docked if slow, a wall if not
+          if (vlen(e.vel) <= BAY_DOCK_SPEED) {
+            if (this.requireClearance(meta, st, 'bay')) {
+              this.dockShip(meta, e, st, false, 'bay');
+              return;
+            }
+          }
+          this.resolveContact(meta, e, axis, floorT + e.radius - t, dt, { damageThreshold: 12, damageScale: 0.9 });
+        }
+      } else if (d < st.radius + e.radius && !inAperture) {
+        // hull shell: solid, slideable
+        const n = vnorm(rel);
+        this.resolveContact(meta, e, n, st.radius + e.radius - d, dt, {
+          damageThreshold: 20, damageScale: 0.7,
+        });
+      }
+
+      // external clamp (#17): capture when parked on the collar, aligned, slow
+      const collar = clampCollarPos(st);
+      const cd = vdist(e.pos, collar);
+      if (cd < CLAMP_CAPTURE_RADIUS && vlen(e.vel) < CLAMP_MAX_SPEED
+        && vdot(qForward(e.orient), vscale(st.clampDir, -1)) > CLAMP_ALIGN_COS) {
+        meta.clampHold += dt;
+        if (meta.clampHold >= CLAMP_HOLD_S) {
+          if (this.requireClearance(meta, st, 'clamp')) {
+            this.dockShip(meta, e, st, false, 'clamp');
+            return;
+          }
+          meta.clampHold = 0;
+        }
+      } else {
+        meta.clampHold = Math.max(0, meta.clampHold - dt * 2);
+      }
+    }
+
+    // ---- asteroids: solid rock, mass-based response ----
     for (const a of this.entities.values()) {
       if (a.kind !== 'asteroid') continue;
       const d = vdist(e.pos, a.pos);
       if (d < a.radius + e.radius) {
         const n = vnorm(vsub(e.pos, a.pos));
-        e.pos = vadd(a.pos, vscale(n, a.radius + e.radius + 1));
-        const impact = vlen(e.vel);
-        e.vel = vscale(n, Math.max(8, impact * 0.3));
-        if (impact > COLLISION_DAMAGE_SPEED) {
-          this.applyDamage(e, (impact - COLLISION_DAMAGE_SPEED) * 0.5, -1, true);
+        this.resolveContact(meta, e, n, a.radius + e.radius - d, dt, {
+          damageThreshold: 20, damageScale: 1.0,
+        });
+      }
+    }
+
+    // ---- other ships: credible push-apart, damage on hard rams (#21) ----
+    for (const s of this.entities.values()) {
+      if (s.kind !== 'ship' || s.id === e.id || s.dead || s.dockedAt) continue;
+      const d = vdist(e.pos, s.pos);
+      const minD = s.radius + e.radius;
+      if (d >= minD || d < 1e-6) continue;
+      const n = vnorm(vsub(e.pos, s.pos));
+      const relV = vsub(e.vel, s.vel);
+      const closing = -vdot(relV, n);
+      // heavier hull wins the shove
+      const otherMass = s.capital ? 20 : s.pirate === 'corvette' ? 8 : 1.2;
+      const share = otherMass / (otherMass + meta.stats.mass);
+      vaddTo(e.pos, vscale(n, (minD - d) * share));
+      if (closing > 0) {
+        e.vel = vsub(e.vel, vscale(n, vdot(relV, n)));
+        if (closing > 40) {
+          this.applyDamage(e, (closing - 40) * 0.5 * meta.stats.mass, -1, true);
+          this.applyDamage(s, (closing - 40) * 0.4 * meta.stats.mass, e.id, true);
         }
       }
     }
+  }
+
+  // Docking without clearance is refused — ATC runs a tight port (#20).
+  private requireClearance(meta: PlayerMeta, st: StationDef, slot: string): boolean {
+    if (meta.approach && meta.approach.targetId === st.id && meta.approach.slot === slot) return true;
+    if (meta.forcefieldCooldown <= 0) {
+      meta.forcefieldCooldown = 4;
+      this.events.push({ type: 'comms', pid: meta.pid, text: `${st.name} control: negative, no clearance on file. Request approach [SPACE] and hold off the structure.` });
+    }
+    return false;
   }
 
   // -------------------------------------------------------------------------
@@ -2013,40 +2251,182 @@ export class Sim {
   // Docking & station services
   // -------------------------------------------------------------------------
 
+  // [SPACE] in flight: request approach clearance from the nearest control
+  // tower (#20). Docking itself is earned by flying the approach (#17).
   requestDock(pid: number): void {
     const meta = this.players.get(pid);
     const e = this.entities.get(pid);
     if (!meta || !e || e.dead || e.dockedAt || meta.docking) return;
     if (e.cruise !== 'off') {
-      this.events.push({ type: 'log', text: 'Cannot dock at cruise speed.', color: '#f66', pid });
+      this.events.push({ type: 'log', text: 'Cannot request approach at cruise speed.', color: '#f66', pid });
       return;
     }
-    const st = this.system.stations.find((s) => vdist(s.pos, e.pos) < s.dockRadius);
-    if (!st) {
-      this.events.push({ type: 'log', text: 'No station in docking range.', color: '#f66', pid });
+    const callsign = `${e.name.slice(0, 12)}`;
+    // station tower?
+    const st = this.system.stations.find((s) => vdist(s.pos, e.pos) < APPROACH_RANGE_STATION);
+    if (st) {
+      const options = [
+        { id: 'bay', label: `BAY — fly the lit mouth` },
+        { id: 'clamp', label: `CLAMP A — external collar` },
+        { id: '__autodock', label: `AUTODOCK TUG — ${AUTODOCK_PRICE} cr` },
+      ];
+      const assigned = meta.approach?.targetId === st.id && meta.approach.slot === 'clamp' ? 'clamp' : 'bay';
+      meta.approach = { targetId: st.id, targetKind: 'station', slot: assigned };
+      this.events.push({ type: 'approach', pid, targetId: st.id, targetKind: 'station', options, assigned });
+      this.events.push({
+        type: 'comms', pid,
+        text: assigned === 'bay'
+          ? `${st.name} control: ${callsign}, cleared approach. Bay assigned — follow the green mouth lights, docking speed inside.`
+          : `${st.name} control: ${callsign}, cleared approach. Clamp A — match the collar, dead slow, hold alignment.`,
+      });
       return;
     }
-    if (vlen(e.vel) > DOCK_MAX_SPEED) {
-      this.events.push({ type: 'log', text: `Docking denied: reduce speed below ${DOCK_MAX_SPEED} m/s.`, color: '#fa4', pid });
+    // planetary port?
+    const body = this.surfaceBodies.find((b) =>
+      b.pads.length > 0 && vdist(b.pos, e.pos) < b.radius * 1.6);
+    if (body && body.stationId) {
+      const stB = this.station(body.stationId)!;
+      const options = body.pads.map((p) => ({ id: p.id, label: `${p.name} — surface port` }));
+      const assigned = meta.approach?.targetId === body.id ? meta.approach.slot : body.pads[0].id;
+      meta.approach = { targetId: body.id, targetKind: 'body', slot: assigned };
+      const pad = body.pads.find((p) => p.id === assigned)!;
+      this.events.push({ type: 'approach', pid, targetId: body.id, targetKind: 'body', options, assigned });
+      this.events.push({
+        type: 'comms', pid,
+        text: `${stB.name} surface control: ${callsign}, cleared to land, ${pad.name}. VTOL for final, gear down, mind the sink rate.`,
+      });
       return;
     }
-    meta.docking = { stationId: st.id, t: 0, from: vclone(e.pos) };
-    this.events.push({ type: 'log', text: `Docking clearance granted — ${st.name}.`, color: '#8fb', pid });
+    this.events.push({ type: 'log', text: 'No control tower answering on this band.', color: '#f66', pid });
   }
 
-  private dockShip(meta: PlayerMeta, e: Entity, st: StationDef, viaTow: boolean): void {
+  // Pick a different pad / dock type from the approach overlay (#20).
+  selectDockSlot(pid: number, slotId: string): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || !meta.approach) return;
+    const appr = meta.approach;
+    if (appr.targetKind === 'station') {
+      if (slotId !== 'bay' && slotId !== 'clamp') return;
+      appr.slot = slotId;
+      const st = this.station(appr.targetId)!;
+      this.events.push({
+        type: 'comms', pid,
+        text: slotId === 'bay'
+          ? `${st.name} control: copy, re-cleared for the bay. Green lights mark the mouth.`
+          : `${st.name} control: copy, re-cleared Clamp A. Nose on the collar, under ${CLAMP_MAX_SPEED} m/s.`,
+      });
+    } else {
+      const body = this.surfaceBodies.find((b) => b.id === appr.targetId);
+      const pad = body?.pads.find((p) => p.id === slotId);
+      if (!body || !pad) return;
+      appr.slot = slotId;
+      this.events.push({ type: 'comms', pid, text: `Surface control: reassigned, ${pad.name}. Beacon updated.` });
+    }
+  }
+
+  // Paid convenience layer (#17): the port flies the last leg for you.
+  autodock(pid: number): void {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e || e.dead || e.dockedAt || meta.docking || e.cruise !== 'off') return;
+    if (!meta.approach || meta.approach.targetKind !== 'station') {
+      this.events.push({ type: 'log', text: 'Autodock needs an active station approach clearance.', color: '#fa4', pid });
+      return;
+    }
+    const st = this.station(meta.approach.targetId)!;
+    if (vdist(st.pos, e.pos) > st.dockRadius * 1.6) {
+      this.events.push({ type: 'log', text: 'Too far out for the autodock tug.', color: '#fa4', pid });
+      return;
+    }
+    if (meta.profile.credits < AUTODOCK_PRICE) {
+      this.events.push({ type: 'log', text: `Autodock service costs ${AUTODOCK_PRICE} cr.`, color: '#f66', pid });
+      return;
+    }
+    meta.profile.credits -= AUTODOCK_PRICE;
+    meta.docking = { stationId: st.id, t: 0, from: vclone(e.pos) };
+    this.events.push({ type: 'log', text: `Autodock engaged (${AUTODOCK_PRICE} cr). Hands off the stick.`, color: '#8fb', pid });
+  }
+
+  toggleVtol(pid: number): boolean {
+    const meta = this.players.get(pid);
+    const e = this.entities.get(pid);
+    if (!meta || !e) return false;
+    if (e.cruise !== 'off') {
+      this.events.push({ type: 'log', text: 'Cannot switch to VTOL at cruise.', color: '#fa4', pid });
+      return meta.vtol;
+    }
+    meta.vtol = !meta.vtol;
+    this.events.push({ type: 'log', text: meta.vtol ? 'VTOL mode — thrust vectors rotated. Envelope limited.' : 'Cruise mode — thrust vectors aft.', color: '#8ad', pid });
+    return meta.vtol;
+  }
+
+  toggleGear(pid: number): boolean {
+    const meta = this.players.get(pid);
+    if (!meta) return false;
+    if (meta.landedOn !== null && meta.gearTarget === 1) {
+      this.events.push({ type: 'log', text: 'Cannot raise the gear while parked on it.', color: '#fa4', pid });
+      return true;
+    }
+    meta.gearTarget = meta.gearTarget === 1 ? 0 : 1;
+    this.events.push({ type: 'log', text: meta.gearTarget === 1 ? 'Landing gear deploying…' : 'Landing gear retracting…', color: '#8ad', pid });
+    return meta.gearTarget === 1;
+  }
+
+  // Approach housekeeping: wave-offs on hot finals, clearance expiry (#20).
+  private tickApproach(meta: PlayerMeta, e: Entity, dt: number): void {
+    meta.waveOffCooldown = Math.max(0, meta.waveOffCooldown - dt);
+    if (!meta.approach) return;
+    const target = approachTarget(this.system, this.surfaceBodies, meta.approach);
+    if (!target) {
+      meta.approach = null;
+      return;
+    }
+    const d = vdist(e.pos, target.pos);
+    const expiry = meta.approach.targetKind === 'station' ? APPROACH_RANGE_STATION * 2.2 : 1e9;
+    if (d > expiry) {
+      meta.approach = null;
+      this.events.push({ type: 'approachCleared', pid: meta.pid });
+      this.events.push({ type: 'comms', pid: meta.pid, text: 'Control: you left the pattern. Approach clearance cancelled.' });
+      return;
+    }
+    if (d < 700 && meta.waveOffCooldown <= 0) {
+      const closing = vdot(e.vel, vnorm(vsub(target.pos, e.pos))); // + = closing
+      const limit = meta.approach.slot === 'clamp' ? 40 : 90;
+      if (closing > limit) {
+        meta.waveOffCooldown = 8;
+        this.events.push({ type: 'comms', pid: meta.pid, text: 'Control: excessive closure rate. Go around.' });
+      }
+    }
+  }
+
+  private dockShip(meta: PlayerMeta, e: Entity, st: StationDef, viaTow: boolean, context: 'bay' | 'clamp' | 'pad' | 'legacy' = 'legacy'): void {
     e.dockedAt = st.id;
-    e.pos = vclone(st.pos);
+    // pad docks park on the planet surface; everything else berths inside
+    if (context !== 'pad') e.pos = vclone(st.pos);
     e.vel = v3();
     e.angVel = v3();
     e.firing = false;
     meta.firing = false;
     meta.drillOn = false;
     meta.cruiseRequested = false;
+    meta.dockContext = context;
+    if (context !== 'pad') meta.dockPadId = null;
+    meta.approach = null;
+    meta.clampHold = 0;
+    meta.landedOn = null;
     const prof = meta.profile;
     prof.respawnStation = st.id;
     if (!prof.knownStations.includes(st.id)) prof.knownStations.push(st.id);
     this.events.push({ type: 'docked', pid: meta.pid, stationId: st.id });
+    if (!viaTow) {
+      this.events.push({
+        type: 'comms', pid: meta.pid,
+        text: context === 'pad' ? `Surface control: contact. Welcome to ${st.name} ground side.`
+          : context === 'clamp' ? `Contact — clamps engaged. Welcome to ${st.name}.`
+            : `Contact. Welcome to ${st.name}.`,
+      });
+    }
 
     // customs inspection at legal stations
     if (!st.blackMarket && !viaTow) {
@@ -2088,14 +2468,47 @@ export class Sim {
     if (!meta || !e || !e.dockedAt) return;
     const st = this.station(e.dockedAt)!;
     e.dockedAt = null;
-    // launch outward, away from the planet if there is one
+    e.shield = e.maxShield;
+    meta.undockInvuln = 4;
+    // leave the way you came in (#17)
+    if (meta.dockContext === 'pad' && meta.dockPadId) {
+      // back on the pad, gear down, VTOL hot — lift off yourself (#16)
+      const body = this.surfaceBodies.find((b) => b.pads.some((p) => p.id === meta.dockPadId));
+      const pad = body?.pads.find((p) => p.id === meta.dockPadId);
+      if (body && pad) {
+        e.pos = vadd(pad.pos, vscale(pad.up, e.radius * 0.9));
+        e.vel = v3();
+        let fwd = vcross(pad.up, v3(0, 1, 0));
+        if (vlen(fwd) < 1e-6) fwd = vcross(pad.up, v3(1, 0, 0));
+        e.orient = qLookAt(vnorm(fwd), pad.up);
+        meta.landedOn = body.id;
+        meta.vtol = true;
+        meta.gear = 1;
+        meta.gearTarget = 1;
+        this.events.push({ type: 'undocked', pid, stationId: st.id });
+        return;
+      }
+    }
+    if (meta.dockContext === 'bay') {
+      e.pos = vadd(st.pos, vscale(st.bayDir, st.radius * 1.35));
+      e.orient = qLookAt(st.bayDir);
+      e.vel = vscale(st.bayDir, 30);
+      this.events.push({ type: 'undocked', pid, stationId: st.id });
+      return;
+    }
+    if (meta.dockContext === 'clamp') {
+      e.pos = vadd(st.pos, vscale(st.clampDir, st.radius * CLAMP_COLLAR_MULT + 60));
+      e.orient = qLookAt(st.clampDir);
+      e.vel = vscale(st.clampDir, 15);
+      this.events.push({ type: 'undocked', pid, stationId: st.id });
+      return;
+    }
+    // legacy/tow: launch outward, away from the planet if there is one
     const planet = this.system.planets.find((p) => p.stationId === st.id);
     const dir = planet ? vnorm(vsub(st.pos, planet.pos)) : vnorm(vsub(st.pos, v3()));
     e.pos = vadd(st.pos, vscale(dir, st.radius + 220));
     e.orient = qLookAt(dir);
     e.vel = vscale(dir, 45);
-    e.shield = e.maxShield;
-    meta.undockInvuln = 4;
     this.events.push({ type: 'undocked', pid, stationId: st.id });
   }
 

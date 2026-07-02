@@ -66,8 +66,9 @@ describe('transport contract lifecycle', () => {
     sim.undock(pid);
     e.pos = { x: dest.pos.x + 1200, y: dest.pos.y, z: dest.pos.z };
     e.vel = v3();
-    const creditsBefore = meta.profile.credits;
-    sim.requestDock(pid);
+    sim.requestDock(pid);   // ATC clearance (#20)
+    sim.autodock(pid);      // paid tug flies the last leg (#17)
+    const creditsBefore = meta.profile.credits; // after the autodock fee
     runTicks(sim, 20 * 6);
     expect(e.dockedAt).toBe(dest.id);
     expect(meta.profile.contracts.length).toBe(0);
@@ -184,6 +185,7 @@ describe('smuggling', () => {
       e.pos = { x: st.pos.x + 1200, y: st.pos.y, z: st.pos.z };
       e.vel = v3();
       sim.requestDock(pid);
+      sim.autodock(pid);
       for (let i = 0; i < 20 * 6; i++) sim.tick();
       if (sim.freeQty(meta.profile, 'stims') === 0) confiscated = true;
     }

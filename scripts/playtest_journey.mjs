@@ -175,7 +175,9 @@ async function main() {
       } else {
         bot.thrustForward = 0;
         bot.brake = true;
+        // new ATC flow (#17/#20): request clearance, then pay the autodock tug
         w.requestDock();
+        if (w.approach) w.autodock();
       }
       window.VF.botInput = bot;
       await sleep(100);

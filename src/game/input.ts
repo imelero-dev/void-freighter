@@ -7,6 +7,7 @@ import { settings } from '../ui/settings';
 
 export type GameAction =
   | 'toggleCruise' | 'zeroThrottle' | 'toggleAssist' | 'toggleDrill' | 'toggleLights'
+  | 'toggleVtol' | 'toggleGear'
   | 'dock' | 'tab' | 'targetReticle' | 'fireMissile' | 'rescue'
   | 'map' | 'cargo' | 'ship' | 'journal' | 'market' | 'contacts' | 'chat'
   | 'setDestination' | 'escape' | 'toggleCamera' | 'help' | 'controls';
@@ -14,7 +15,8 @@ export type GameAction =
 // bind id -> discrete action (axis-style binds are read in frame())
 const BIND_ACTIONS: Record<string, GameAction> = {
   cruise: 'toggleCruise', cutThrottle: 'zeroThrottle', assist: 'toggleAssist',
-  drill: 'toggleDrill', lights: 'toggleLights', dock: 'dock', tab: 'tab', reticle: 'targetReticle',
+  drill: 'toggleDrill', lights: 'toggleLights', vtol: 'toggleVtol', gear: 'toggleGear',
+  dock: 'dock', tab: 'tab', reticle: 'targetReticle',
   map: 'map', cargo: 'cargo', ship: 'ship', journal: 'journal',
   market: 'market', contacts: 'contacts', chat: 'chat', dest: 'setDestination',
   camera: 'toggleCamera', rescue: 'rescue', help: 'help',

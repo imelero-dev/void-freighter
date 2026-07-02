@@ -62,6 +62,11 @@ export class OfflineWorld implements IWorld {
   get drillOn(): boolean { return this.meta.drillOn; }
   get turboCharge(): number { return this.meta.turboCharge; }
   get turboActive(): boolean { return this.meta.turboActive; }
+  get surfaceBodies() { return this.sim.surfaceBodies; }
+  get vtol(): boolean { return this.meta.vtol; }
+  get gearFrac(): number { return this.meta.gear; }
+  get landedOn(): string | null { return this.meta.landedOn; }
+  get approach() { return this.meta.approach; }
   get input(): ShipInput { return this.meta.input; }
   set input(v: ShipInput) { Object.assign(this.meta.input, v); }
   get renderAlpha(): number { return this.acc / DT; }
@@ -138,6 +143,10 @@ export class OfflineWorld implements IWorld {
   targetReticle(): void { this.sim.targetReticle(this.playerId); }
   requestDock(): void { this.sim.requestDock(this.playerId); }
   undock(): void { this.sim.undock(this.playerId); }
+  toggleVtol(): void { this.sim.toggleVtol(this.playerId); }
+  toggleGear(): void { this.sim.toggleGear(this.playerId); }
+  selectDockSlot(slotId: string): void { this.sim.selectDockSlot(this.playerId, slotId); }
+  autodock(): void { this.sim.autodock(this.playerId); }
   setDestination(dest: Destination | null): void { this.sim.setDestination(this.playerId, dest); }
   hailRescue(): void { this.sim.hailRescue(this.playerId); }
   useFuelCells(qty: number): void { this.sim.useFuelCells(this.playerId, qty); }

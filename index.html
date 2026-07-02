@@ -202,6 +202,29 @@
       color: #d8cfc0; padding: 6px 10px; font-family: inherit; font-size: 12px; outline: none;
     }
 
+    /* ATC approach overlay (#20): compact, top-right, never over the reticle */
+    .vf-approach {
+      position: fixed; top: 40px; right: 16px; z-index: 7; width: 240px;
+      pointer-events: auto; font-size: 12px;
+    }
+    .vf-approach-title {
+      color: var(--amber); letter-spacing: 2px; font-size: 11px;
+      border-bottom: 1px solid rgba(217,164,65,0.4); padding-bottom: 4px; margin-bottom: 6px;
+      text-shadow: 0 0 6px #000;
+    }
+    .vf-approach-slot {
+      display: block; width: 100%; text-align: left; margin-bottom: 4px;
+      background: rgba(10,12,14,0.75); border: 1px solid rgba(217,164,65,0.3);
+      color: #c9b68a; padding: 6px 8px; font-family: inherit; font-size: 11px; cursor: pointer;
+    }
+    .vf-approach-slot:hover { background: rgba(217,164,65,0.18); }
+    .vf-approach-slot.assigned { border-color: rgba(127,201,127,0.6); color: #a9d9a9; }
+    .vf-approach-slot.confirm { color: #8a8d90; border-style: dashed; }
+    .vf-approach-chip {
+      color: #a9d9a9; background: rgba(10,12,14,0.6); border: 1px solid rgba(127,201,127,0.35);
+      padding: 4px 8px; cursor: pointer; display: none; font-size: 11px;
+    }
+
     /* credits HUD chip */
     .vf-credits-hud {
       position: fixed; top: 12px; right: 16px; z-index: 6;
