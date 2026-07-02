@@ -123,7 +123,7 @@ export class EntitiesLayer {
         tmpQ1.set(e.prevOrient.x, e.prevOrient.y, e.prevOrient.z, e.prevOrient.w);
         tmpQ2.set(e.orient.x, e.orient.y, e.orient.z, e.orient.w);
         view.obj.quaternion.slerpQuaternions(tmpQ1, tmpQ2, alpha);
-        if (view.ship) updateThrusters(view.ship, e);
+        if (view.ship) updateThrusters(view.ship, e, time, tmpV.length());
         if (e.id === world.playerId && !this.showPlayer) view.obj.visible = false;
         if (e.dockedAt) view.obj.visible = false;
       } else if (e.kind === 'bolt') {
@@ -169,6 +169,11 @@ export class EntitiesLayer {
           });
           for (const t of ship.thrusters) t.visible = false;
           ship.thrusters.length = 0;
+          // cold hulls run no lights
+          for (const g of ship.engineGlows) g.visible = false;
+          for (const n of ship.navLights) n.sprite.visible = false;
+          ship.engineGlows.length = 0;
+          ship.navLights.length = 0;
         }
         view = { obj: ship.group, ship, kindKey };
         break;
@@ -232,6 +237,8 @@ export class EntitiesLayer {
           const mat = mesh.material as THREE.Material | THREE.Material[];
           if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
           else mat?.dispose();
+        } else if ((node as THREE.Sprite).isSprite) {
+          (node as THREE.Sprite).material.dispose(); // shared glow map survives
         }
       });
     }

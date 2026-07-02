@@ -9,13 +9,90 @@ const HULL_DARK = 0x44474a;
 const RUST = 0x7a4a30;
 
 function mat(color: number, rough = 0.8, metal = 0.6): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, flatShading: true });
+  // faint self-illumination: hulls read as silhouettes instead of vanishing
+  // into the black (#9)
+  return new THREE.MeshStandardMaterial({
+    color, roughness: rough, metalness: metal, flatShading: true,
+    emissive: 0x171b21, emissiveIntensity: 0.5,
+  });
+}
+
+// shared radial-glow texture for engine plumes and running lights
+let shipGlowTex: THREE.Texture | null = null;
+function glowTex(): THREE.Texture {
+  if (shipGlowTex) return shipGlowTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.5)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  shipGlowTex = new THREE.CanvasTexture(c);
+  return shipGlowTex;
+}
+
+function lightSprite(color: number, size: number): THREE.Sprite {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTex(), color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  s.scale.setScalar(size);
+  return s;
+}
+
+export interface NavLight {
+  sprite: THREE.Sprite;
+  kind: 'port' | 'starboard' | 'strobe';
+  baseSize: number;
+}
+
+// bare hull as returned by the per-class builders, before dressing
+interface ShipHull {
+  group: THREE.Group;
+  thrusters: THREE.Mesh[];
+  kind: string;
 }
 
 export interface ShipView {
   group: THREE.Group;
   thrusters: THREE.Mesh[];
   kind: string;
+  engineGlows: THREE.Sprite[];
+  navLights: NavLight[];
+}
+
+// Running lights + engine plume glows placed from the built hull's extents:
+// red to port, green to starboard, a white strobe on the tail mast (#9).
+function dressShip(v: ShipHull): ShipView {
+  // box is in world units; children of a scaled group (pirates) need local
+  const inv = 1 / (v.group.scale.x || 1);
+  const box = new THREE.Box3().setFromObject(v.group);
+  const mid = box.getCenter(new THREE.Vector3());
+  const span = Math.max(1, box.max.x - box.min.x, box.max.z - box.min.z);
+  const navSize = Math.max(0.9, span * 0.09) * inv;
+
+  const navLights: NavLight[] = [];
+  const addNav = (x: number, y: number, z: number, color: number, kind: NavLight['kind']) => {
+    const sprite = lightSprite(color, navSize);
+    sprite.position.set(x * inv, y * inv, z * inv);
+    v.group.add(sprite);
+    navLights.push({ sprite, kind, baseSize: navSize });
+  };
+  addNav(box.min.x - 0.2, mid.y, mid.z, 0xff2a22, 'port');
+  addNav(box.max.x + 0.2, mid.y, mid.z, 0x27e05c, 'starboard');
+  addNav(mid.x, box.max.y + 0.4, box.max.z * 0.7, 0xffffff, 'strobe');
+
+  const engineGlows: THREE.Sprite[] = [];
+  for (const t of v.thrusters) {
+    const g = lightSprite(0xff9a3c, 1);
+    g.position.copy(t.position);
+    g.position.z += 0.8;
+    v.group.add(g);
+    engineGlows.push(g);
+  }
+  return { ...v, engineGlows, navLights };
 }
 
 function thruster(size: number): THREE.Mesh {
@@ -27,7 +104,7 @@ function thruster(size: number): THREE.Mesh {
   return m;
 }
 
-function buildShuttle(): ShipView {
+function buildShuttle(): ShipHull {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.4, 8.5), mat(HULL_GRAY));
   const nose = new THREE.Mesh(new THREE.ConeGeometry(1.7, 3.2, 4), mat(HULL_DARK));
@@ -49,7 +126,7 @@ function buildShuttle(): ShipView {
   return { group: g, thrusters: [tL, tR], kind: 'shuttle' };
 }
 
-function buildHauler(): ShipView {
+function buildHauler(): ShipHull {
   const g = new THREE.Group();
   const spine = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 18), mat(HULL_DARK));
   const cab = new THREE.Mesh(new THREE.BoxGeometry(4.6, 3.6, 4), mat(HULL_GRAY));
@@ -72,7 +149,7 @@ function buildHauler(): ShipView {
   return { group: g, thrusters: [t1, t2], kind: 'hauler' };
 }
 
-function buildProspector(): ShipView {
+function buildProspector(): ShipHull {
   const g = new THREE.Group();
   const pod = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 7, 8), mat(HULL_GRAY));
   pod.rotation.x = Math.PI / 2;
@@ -96,7 +173,7 @@ function buildProspector(): ShipView {
   return { group: g, thrusters: [t1], kind: 'prospector' };
 }
 
-function buildInterceptor(): ShipView {
+function buildInterceptor(): ShipHull {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.ConeGeometry(1.8, 11, 5), mat(HULL_GRAY));
   body.rotation.x = -Math.PI / 2;
@@ -117,7 +194,7 @@ function buildInterceptor(): ShipView {
   return { group: g, thrusters: [t1], kind: 'interceptor' };
 }
 
-function buildFreighter(): ShipView {
+function buildFreighter(): ShipHull {
   const g = new THREE.Group();
   const spine = new THREE.Mesh(new THREE.BoxGeometry(5, 5, 34), mat(HULL_DARK));
   const bridge = new THREE.Mesh(new THREE.BoxGeometry(7, 6, 5), mat(HULL_GRAY));
@@ -142,7 +219,7 @@ function buildFreighter(): ShipView {
   return { group: g, thrusters: ts, kind: 'freighter' };
 }
 
-function buildCorvette(): ShipView {
+function buildCorvette(): ShipHull {
   const g = new THREE.Group();
   const rust = mat(0x5a4438, 0.95, 0.4);
   const dark = mat(0x3a3632, 0.9, 0.5);
@@ -174,7 +251,7 @@ function buildCorvette(): ShipView {
   return { group: g, thrusters: ts, kind: 'pirate_corvette' };
 }
 
-function buildTurret(): ShipView {
+function buildTurret(): ShipHull {
   const g = new THREE.Group();
   const base = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 4, 2.6, 8), mat(0x4a443c, 0.9, 0.5));
   const head = new THREE.Mesh(new THREE.BoxGeometry(4, 2.4, 4.4), mat(0x6e3326, 0.85, 0.5));
@@ -189,7 +266,7 @@ function buildTurret(): ShipView {
   return { group: g, thrusters: [], kind: 'pirate_turret' };
 }
 
-function buildPirate(tier: PirateTier): ShipView {
+function buildPirate(tier: PirateTier): ShipHull {
   if (tier === 'corvette') return buildCorvette();
   if (tier === 'turret') return buildTurret();
   const scale = tier === 'elite' ? 1.7 : tier === 'raider' ? 1.35 : tier === 'fighter' ? 1.1 : 0.9;
@@ -217,21 +294,44 @@ function buildPirate(tier: PirateTier): ShipView {
 
 export function buildShipMesh(hullId: HullId | 'pirate', pirateTier?: PirateTier | null): ShipView {
   switch (hullId) {
-    case 'shuttle': return buildShuttle();
-    case 'hauler': return buildHauler();
-    case 'prospector': return buildProspector();
-    case 'interceptor': return buildInterceptor();
-    case 'freighter': return buildFreighter();
-    case 'pirate': return buildPirate(pirateTier ?? 'scout');
+    case 'shuttle': return dressShip(buildShuttle());
+    case 'hauler': return dressShip(buildHauler());
+    case 'prospector': return dressShip(buildProspector());
+    case 'interceptor': return dressShip(buildInterceptor());
+    case 'freighter': return dressShip(buildFreighter());
+    case 'pirate': return dressShip(buildPirate(pirateTier ?? 'scout'));
   }
 }
 
-// Per-frame thruster glow update from entity state.
-export function updateThrusters(view: ShipView, e: Entity): void {
+// Per-frame thruster/light update from entity state. camDist (m) drives
+// distance compensation: running lights and engine plumes scale up with
+// range so a ship reads as a moving point of light long before its hull
+// resolves — you aim at the ship, not at a HUD triangle (#9).
+export function updateThrusters(view: ShipView, e: Entity, time = 0, camDist = 0): void {
   const power = e.cruise === 'cruise' ? 1.4 : Math.max(Math.abs(e.throttle), 0.06);
   for (const t of view.thrusters) {
     const flicker = 0.85 + Math.random() * 0.3; // visual only — not sim state
     t.scale.set(power * flicker, power * 2.2 * flicker, power * flicker);
     (t.material as THREE.MeshBasicMaterial).opacity = Math.min(1, 0.25 + power * 0.7);
+  }
+  // distance term: ~constant apparent size out to 12 km, then it shrinks away
+  const distBoost = Math.min(camDist, 12_000) * 0.005;
+  for (const g of view.engineGlows) {
+    const s = Math.max(1.5 * power * (0.9 + Math.random() * 0.2), 0.4) + distBoost * (0.4 + power);
+    g.scale.setScalar(s);
+    (g.material as THREE.SpriteMaterial).opacity = Math.min(1, 0.3 + power * 0.7);
+  }
+  for (const nav of view.navLights) {
+    const mat = nav.sprite.material as THREE.SpriteMaterial;
+    if (nav.kind === 'strobe') {
+      // double-flash every ~2 s, offset per ship so fleets don't blink in sync
+      const t2 = (time * 0.55 + e.id * 0.317) % 1;
+      nav.sprite.visible = t2 < 0.05 || (t2 > 0.12 && t2 < 0.17);
+      mat.opacity = 1;
+    } else {
+      nav.sprite.visible = true;
+      mat.opacity = 0.55 + 0.25 * Math.sin(time * 2.2 + e.id);
+    }
+    nav.sprite.scale.setScalar(nav.baseSize + distBoost * 0.8);
   }
 }
