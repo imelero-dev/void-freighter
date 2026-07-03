@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { blankEntity, Sim } from '../src/sim/sim';
-import { vadd, vdist, v3 } from '../src/sim/vec';
+import { surfaceRadius } from '../src/sim/surface';
+import { vadd, vdist, vnorm, vsub, v3 } from '../src/sim/vec';
 
 function runTicks(sim: Sim, n: number) {
   const events = [];
@@ -313,19 +314,32 @@ describe('station info intel', () => {
   });
 });
 
-describe('planetary exclusion field', () => {
-  it('bounces ships off and raises a warning event', () => {
+describe('planetary surfaces are solid (#16/#21)', () => {
+  it('a ship diving at a planet never clips through the terrain', () => {
+    const sim = new Sim();
+    const { e } = deepSpacePlayer(sim);
+    const body = sim.surfaceBodies.find((b) => b.solid)!;
+    // drop the ship well inside the atmosphere, diving straight down
+    e.pos = vadd(body.pos, v3(body.radius * 1.1, 0, 0));
+    e.vel = v3(-400, 0, 0);
+    for (let i = 0; i < 20 * 30; i++) {
+      sim.tick();
+      const up = vnorm(vsub(e.pos, body.pos));
+      const surfR = surfaceRadius(body, up);
+      expect(vdist(e.pos, body.pos)).toBeGreaterThanOrEqual(surfR - 1);
+      e.vel = v3(-400, 0, 0); // keep diving — the ground must keep holding
+    }
+  });
+
+  it('gas giants crush instead of offering a surface', () => {
     const sim = new Sim();
     const { pid, e } = deepSpacePlayer(sim);
-    const planet = sim.system.planets[0];
-    // drop the ship just inside the shell, flying inward
-    const shell = planet.radius * 1.15;
-    e.pos = vadd(planet.pos, v3(shell - 2000, 0, 0));
-    e.vel = v3(-300, 0, 0);
-    const events = runTicks(sim, 10);
+    const gas = sim.surfaceBodies.find((b) => !b.solid)!;
+    e.pos = vadd(gas.pos, v3(gas.radius * 1.01, 0, 0));
+    e.vel = v3();
+    const events = runTicks(sim, 20 * 3);
+    expect(e.hull).toBeLessThan(e.maxHull);
     expect(events.some((ev) => ev.type === 'forcefield' && ev.pid === pid)).toBe(true);
-    expect(vdist(e.pos, planet.pos)).toBeGreaterThanOrEqual(shell);
-    expect(e.hull).toBe(e.maxHull); // the wall shoves, it doesn't wreck you
   });
 });
 

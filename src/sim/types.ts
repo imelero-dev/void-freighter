@@ -40,7 +40,7 @@ export interface HullDef {
   maxSpeed: number;       // m/s maneuver cap at engine tier 1
   turnRate: number;       // rad/s at gyro tier 1
   cruiseMax: number;      // m/s cruise cap at engine tier 1
-  massFactor: number;     // scales how sluggish it feels (visual/feel only)
+  massFactor: number;     // relative inertia: rotation onset + flight-assist authority
   // Max installable tier per slot; 0 = slot not available on this hull.
   slots: Record<ModuleSlot, number>;
 }
@@ -88,6 +88,8 @@ export interface StationDef {
   radius: number;       // physical size for render/collision
   dockRadius: number;   // request docking within this range
   safeRadius: number;   // station police zone: no PvP, turrets kill pirates
+  bayDir: Vec3;         // unit dir from center to the hangar-bay mouth (#17)
+  clampDir: Vec3;       // unit dir from center to the external docking collar (#17)
   services: StationService[];
   // economy profile: goods this station produces (cheap) / consumes (expensive)
   produces: Record<string, number>;  // goodId -> units per economy tick
@@ -192,6 +194,8 @@ export interface Entity {
   parentId: number;          // turrets: id of the carrier ship (0 = none)
   derelict: boolean;         // inert story wreck
   derelictOpened: boolean;
+  capital: boolean;          // capital-class hull (superfreighter / armed cargo capital)
+  navDest: Vec3 | null;      // ambient traffic: lane destination (world pos)
 
   // asteroid
   rockType: RockType | null;
@@ -262,6 +266,8 @@ export interface PlayerProfile {
   moduleStash: Array<{ slot: ModuleSlot; tier: number }>; // looted modules, install/sell at shipyard
   missileAmmo: number;
   cannonAmmo: number;
+  gearDown?: boolean;        // landing gear state (#18) — survives reload
+  landedOn?: string | null;  // parked on a surface body (#16) — survives reload
   // workshop rentals: stationId -> world-time expiry of the fabrication bay
   workshopRentals: Record<string, number>;
   // warehouse plots: stationId -> rented storage (volume-limited)
@@ -339,6 +345,8 @@ export type SimEvent =
   | { type: 'log'; text: string; color?: string; pid?: number }
   // fx/fy/fz: attacker position when known — drives the HUD damage-direction arrows
   | { type: 'hit'; entityId: number; shield: boolean; amount: number; x: number; y: number; z: number; fx?: number; fy?: number; fz?: number }
+  // a ship's shield just collapsed under fire — the moment combat turns
+  | { type: 'shieldDown'; entityId: number; x: number; y: number; z: number }
   | { type: 'shot'; entityId: number; x: number; y: number; z: number }
   | { type: 'explosion'; entityId: number; big: boolean; x: number; y: number; z: number }
   | { type: 'laser'; fromId: number; toX: number; toY: number; toZ: number; hit: boolean; mining?: boolean }
@@ -361,7 +369,19 @@ export type SimEvent =
   | { type: 'forcefield'; pid: number; body: string }
   | { type: 'derelict'; pid: number; entityId: number; name: string; story: string }
   | { type: 'cruiseChange'; entityId: number; state: CruiseState }
-  | { type: 'refined'; pid: number; goodIn: string; qtyIn: number; goodOut: string; qtyOut: number };
+  | { type: 'refined'; pid: number; goodIn: string; qtyIn: number; goodOut: string; qtyOut: number }
+  // ATC approach flow (#20): clearance granted, slot options for the overlay
+  | { type: 'approach'; pid: number; targetId: string; targetKind: 'station' | 'body'; options: Array<{ id: string; label: string }>; assigned: string }
+  | { type: 'approachCleared'; pid: number }  // clearance expired / cancelled
+  | { type: 'touchdown'; pid: number; bodyId: string; hard: boolean };
+
+// Player approach/docking state, mirrored to the client for the approach
+// radar (#18) and the ATC overlay (#20).
+export interface ApproachState {
+  targetId: string;              // stationId or surface body id
+  targetKind: 'station' | 'body';
+  slot: string;                  // 'bay' | 'clamp' | pad id
+}
 
 export function dist(a: Vec3, b: Vec3): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);

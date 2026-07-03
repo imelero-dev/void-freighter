@@ -10,10 +10,13 @@ import { FxLayer } from '../render/fx';
 import { PostPipeline } from '../render/post';
 import { SceneManager } from '../render/scene';
 import { buildStarfield } from '../render/starfield';
+import { TerrainLayer } from '../render/terrain';
 import { BOLT_SPEED, GOODS } from '../sim/data';
-import { leadPoint, qrot, vdist, vnorm, vsub } from '../sim/vec';
+import { surfaceEnvAt } from '../sim/surface';
+import { leadPoint, qrot, vdist, vlen, vnorm, vsub } from '../sim/vec';
 import { settings } from '../ui/settings';
 import type { IWorld } from '../world_api';
+import { ApproachOverlay } from '../ui/approach_overlay';
 import { ChatUi } from '../ui/chat';
 import { el, fmtCredits, fmtDistance } from '../ui/dom';
 import { Hud } from '../ui/hud';
@@ -23,7 +26,10 @@ import { WindowManager } from '../ui/windows';
 import { AudioEngine } from './audio';
 import { CameraRig } from './camera';
 import { bindAxis, bindButton, clearHotasBind, describeAxis, describeButton, GamepadManager } from './gamepad';
+import { buzz, HAPTIC } from './haptics';
 import { InputManager } from './input';
+import { isMobile } from './mobile';
+import { TouchControls } from './touch';
 import { BINDABLE, binds, HOTAS_AXES, HOTAS_BUTTONS, keyLabel, resetBinds, setBind } from '../ui/keybinds';
 
 export class GameApp {
@@ -32,12 +38,14 @@ export class GameApp {
   private entities: EntitiesLayer;
   private fx: FxLayer;
   private dust: DustLayer;
+  private terrain: TerrainLayer;
   private cockpit: THREE.Group;
   private gamepad = new GamepadManager();
   private gpFireWas: boolean | null = null;
   private post: PostPipeline;
   private hud: Hud;
   private input: InputManager;
+  private touchControls: TouchControls | null = null;
   private camera = new CameraRig();
   private audio = new AudioEngine();
   private wm = new WindowManager();
@@ -54,6 +62,10 @@ export class GameApp {
   private wasAligned = false;
   private fovCurrent = 68;
   private alarmUntil = 0;   // hull klaxon bursts on damage, then shuts up
+  private headlight!: THREE.SpotLight;
+  private headlightOn = false;
+  private approachOverlay!: ApproachOverlay;
+  private beepAcc = 0;
 
   onExit: (() => void) | null = null;
 
@@ -64,8 +76,18 @@ export class GameApp {
     this.entities = new EntitiesLayer(this.sm, world);
     this.fx = new FxLayer(this.sm, world, this.entities);
     this.dust = new DustLayer(this.sm, world);
+    this.terrain = new TerrainLayer(this.sm, world);
     // first-person cockpit interior rides on the camera
     this.sm.near.add(this.sm.camera);
+    // headlights: a hard forward beam from the nose. Physical falloff
+    // (decay 2) needs candela-scale intensity to read against the sun —
+    // this is ~8x sunlight at 500 m and still ~half sunlight at 2 km.
+    this.headlight = new THREE.SpotLight(0xfff2d8, 5e6, 6500, 0.42, 0.45, 2);
+    this.headlight.position.set(0, -1, -10); // ahead of the cockpit glass so the dash doesn't blow out
+    this.headlight.target.position.set(0, -6, -900);
+    this.headlight.visible = false;
+    this.sm.camera.add(this.headlight);
+    this.sm.camera.add(this.headlight.target);
     this.cockpit = buildCockpit();
     this.cockpit.scale.setScalar(2.2); // keeps geometry past the near plane
     this.cockpit.position.y = 0.28;    // dashboard peeks into the lower view
@@ -73,6 +95,10 @@ export class GameApp {
     this.post = new PostPipeline(this.sm);
     this.hud = new Hud(this.sm.camera);
     this.input = new InputManager(canvas);
+    if (isMobile()) {
+      this.touchControls = new TouchControls(this.input);
+      this.touchControls.setVisible(settings.mobileControls);
+    }
     this.chat = new ChatUi(() => this.world);
     this.stationUi = new StationUi(world, this.wm, this.audio);
     this.map = new SystemMap(world, this.wm, this.audio);
@@ -81,6 +107,11 @@ export class GameApp {
 
     this.creditsHud = el('div', 'vf-credits-hud');
     document.body.appendChild(this.creditsHud);
+    this.approachOverlay = new ApproachOverlay((slotId) => {
+      this.audio.click();
+      if (slotId === '__autodock') this.world.autodock();
+      else this.world.selectDockSlot(slotId);
+    });
 
     this.bindInput();
     this.hud.resize();
@@ -100,6 +131,7 @@ export class GameApp {
   destroy(): void {
     this.running = false;
     window.removeEventListener('resize', this.onResize);
+    this.touchControls?.destroy();
   }
 
   // -------------------------------------------------------------------------
@@ -111,6 +143,19 @@ export class GameApp {
     input.on('zeroThrottle', () => input.zeroThrottle());
     input.on('toggleAssist', () => w.toggleFlightAssist());
     input.on('toggleDrill', () => w.setDrill(!w.drillOn));
+    input.on('toggleLights', () => {
+      this.headlightOn = !this.headlightOn;
+      this.audio.click();
+      this.hud.pushLog(`Headlights ${this.headlightOn ? 'ON' : 'OFF'}.`, '#8ad');
+    });
+    input.on('toggleVtol', () => {
+      w.toggleVtol();
+      this.audio.vtolShift();
+    });
+    input.on('toggleGear', () => {
+      w.toggleGear();
+      this.audio.gearMove();
+    });
     input.on('dock', () => {
       if (w.player?.dockedAt) {
         this.wm.closeAll();
@@ -170,6 +215,9 @@ export class GameApp {
     });
     input.on('rescue', () => w.hailRescue());
     input.on('controls', () => this.toggleWindow('controls'));
+    // touch SYS menu: paid last-leg tug — the sim politely refuses without
+    // an active station approach clearance
+    input.on('autodock', () => w.autodock());
     this.chat.onOpenChange = (open) => {
       this.input.uiMode = open || this.wm.anyOpen();
     };
@@ -184,6 +232,7 @@ export class GameApp {
 
   applySettings(): void {
     this.audio.applyVolume();
+    this.touchControls?.setVisible(settings.mobileControls);
   }
 
   private assistLevel = 0; // smoothed aim-assist strength (no jerky grabs)
@@ -413,6 +462,7 @@ export class GameApp {
     if (dt > 0.25) dt = 0.25;
 
     const w = this.world;
+    this.touchControls?.update(dt); // throttle bar sync + look-stick recenter
     this.input.frame(dt, w.input);
     // E2E bot override: scripts write window.VF.botInput instead of fighting
     // the InputManager for w.input
@@ -448,8 +498,10 @@ export class GameApp {
       this.fovCurrent += (68 + Math.max(maneuverKick, cruiseKick, turboKick) - this.fovCurrent) * Math.min(1, dt * 4);
       this.sm.setFov(this.fovCurrent);
     }
+    this.headlight.visible = this.headlightOn && !!ship && !ship.dockedAt;
     this.bodies.update(w.time);
     this.entities.update(w.time);
+    this.terrain.update();
     this.fx.update(dt);
     this.dust.update();
 
@@ -468,6 +520,7 @@ export class GameApp {
 
     // dock state transitions
     const docked = !!ship?.dockedAt;
+    this.touchControls?.setDocked(docked);
     if (docked && !this.wasDocked) {
       this.stationUi.updateDockBar();
       this.input.releasePointer();
@@ -501,6 +554,30 @@ export class GameApp {
       }
     }
 
+    // atmosphere, entry heat & approach beeps (#16/#18)
+    let atmo = 0;
+    if (ship && !docked) {
+      const env = surfaceEnvAt(w.surfaceBodies, ship.pos);
+      if (env && env.density > 0) {
+        const speed = vlen(ship.vel);
+        atmo = Math.min(1, env.density * (0.3 + speed / 700));
+        this.hud.entryHeat = Math.min(1, env.density * speed / 550);
+      } else {
+        this.hud.entryHeat = 0;
+      }
+    } else {
+      this.hud.entryHeat = 0;
+    }
+    if (this.hud.approachQuality && ship && !docked) {
+      this.beepAcc += dt;
+      const interval = Math.min(1.1, Math.max(0.12, this.hud.approachDist / 1400));
+      if (this.beepAcc >= interval) {
+        this.beepAcc = 0;
+        this.audio.approachBeep(this.hud.approachQuality);
+      }
+    }
+    if ((docked || !w.approach) && this.approachOverlay.visible) this.approachOverlay.hide();
+
     // audio state
     if (ship) {
       this.audio.setState({
@@ -513,6 +590,7 @@ export class GameApp {
         dead: false,
         turbo: w.turboActive,
         alarm: performance.now() < this.alarmUntil,
+        atmo,
       });
     }
     this.miningActive = false; // re-set by mining laser events each tick
@@ -534,6 +612,7 @@ export class GameApp {
       case 'shot': {
         if (ev.entityId === w.playerId) {
           this.audio.laser(true);
+          this.camera.kick(0.5); // recoil shove (#12)
         } else {
           const ship = w.player;
           if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 2800) {
@@ -545,7 +624,10 @@ export class GameApp {
       case 'hit': {
         if (ev.entityId === w.playerId) {
           if (ev.shield) this.audio.hitShield();
-          else this.audio.hitHull();
+          else {
+            this.audio.hitHull();
+            buzz(HAPTIC.hullHit);
+          }
           // hull-critical klaxon: a 3.5 s burst per fresh hit, not a loop
           const p = w.player;
           if (!ev.shield && p && p.hull / p.maxHull < 0.3) {
@@ -558,13 +640,46 @@ export class GameApp {
         } else if (ev.amount > 0) {
           // floating combat text over whatever we (or someone) hit
           this.hud.pushFloater({ x: ev.x, y: ev.y, z: ev.z }, `-${ev.amount}`, ev.shield ? '#7fb1c9' : '#d9a441');
+          // audible hit confirms: shielded targets tink, bare hulls crunch (#12)
+          const ship = w.player;
+          if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 2200) {
+            if (ev.shield) this.audio.confirmShield();
+            else this.audio.confirmHull();
+          }
+        }
+        break;
+      }
+      case 'shieldDown': {
+        if (ev.entityId === w.playerId) {
+          this.audio.shieldBreak(true);
+          this.hud.flashAlert('⚠ SHIELDS DOWN ⚠', '#e8402a', 3200);
+        } else {
+          const ship = w.player;
+          if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 3000) {
+            this.audio.shieldBreak(false);
+            this.hud.pushFloater({ x: ev.x, y: ev.y, z: ev.z }, 'SHIELD DOWN', '#99ccff');
+          }
         }
         break;
       }
       case 'explosion':
         this.audio.explosion(ev.big);
         break;
+      case 'fragment': {
+        // ore chunk cracked off a rock nearby
+        const ship = w.player;
+        if (ship && Math.hypot(ev.x - ship.pos.x, ev.y - ship.pos.y, ev.z - ship.pos.z) < 1500) {
+          this.audio.oreChip();
+        }
+        break;
+      }
       case 'pickup': {
+        if (ev.credits === 0 && ev.good) {
+          // mined ore scooped into the hold: distinct stash feedback (#10)
+          this.audio.oreStash();
+          this.hud.pushLog(`+${ev.qty}× ${GOODS[ev.good]?.name ?? ev.good} → hold`, '#7fc97f');
+          break;
+        }
         this.audio.pickup();
         const bits: string[] = [];
         if (ev.credits > 0) bits.push(fmtCredits(ev.credits));
@@ -574,6 +689,7 @@ export class GameApp {
       }
       case 'docked': {
         this.audio.dockThunk();
+        buzz(HAPTIC.docked);
         const st = w.system.stations.find((s) => s.id === ev.stationId);
         this.hud.pushLog(`Docked at ${st?.name ?? ev.stationId}. Shields charging.`, '#8fb');
         break;
@@ -600,6 +716,7 @@ export class GameApp {
         break;
       case 'lockWarning':
         this.audio.lockWarning();
+        buzz(HAPTIC.lockWarning);
         this.hud.flashAlert('⚠ MISSILE LOCK ⚠');
         break;
       case 'hostileDetected':
@@ -637,14 +754,35 @@ export class GameApp {
           this.hud.pushLog('Cruise drive engaged.', '#8fb');
         }
         break;
-      case 'forcefield':
+      case 'forcefield': // repurposed (#16): gas giants crush, they don't bounce
         this.audio.deny();
         this.audio.alarmFuel();
-        this.hud.flashAlert(`PLANETARY EXCLUSION FIELD — ${ev.body.toUpperCase()} — TURN BACK`, '#e8402a', 3000);
+        this.hud.flashAlert(`ATMOSPHERIC PRESSURE CRITICAL — ${ev.body.toUpperCase()} — CLIMB`, '#e8402a', 3000);
         break;
       case 'derelict':
         this.audio.commsStatic();
         this.openDerelictWindow(ev.entityId, ev.name, ev.story);
+        break;
+      case 'approach': {
+        // ATC clearance granted: pop the compact slot-selection overlay (#20)
+        const st = w.system.stations.find((s) => s.id === ev.targetId);
+        const body = w.surfaceBodies.find((b) => b.id === ev.targetId);
+        this.approachOverlay.show(st?.name ?? body?.name ?? ev.targetId, ev.options, ev.assigned);
+        break;
+      }
+      case 'approachCleared':
+        this.approachOverlay.hide();
+        break;
+      case 'touchdown':
+        if (ev.hard) {
+          this.audio.hitHull();
+          buzz(HAPTIC.hardTouchdown);
+          this.hud.flashAlert('HARD CONTACT', '#e8402a', 1400);
+        } else {
+          this.audio.dockThunk();
+          buzz(HAPTIC.docked);
+          this.hud.pushLog('Touchdown. Skids holding.', '#7fc97f');
+        }
         break;
     }
   }

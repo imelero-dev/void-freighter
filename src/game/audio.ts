@@ -174,7 +174,7 @@ export class AudioEngine {
   setState(s: {
     throttle: number; cruise: 'off' | 'charging' | 'cruise'; cruiseFrac: number;
     docked: boolean; hullFrac: number; mining: boolean; dead: boolean; turbo: boolean;
-    alarm: boolean;
+    alarm: boolean; atmo?: number; // 0..1 — atmospheric rush (#16)
   }): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
@@ -183,13 +183,14 @@ export class AudioEngine {
     ramp(this.engineGain, flying ? 0.05 + Math.abs(s.throttle) * 0.16 + (s.turbo ? 0.1 : 0) : 0.015);
     this.engineOsc.frequency.setTargetAtTime(
       flying ? 48 + Math.abs(s.throttle) * 40 + (s.cruise === 'cruise' ? 35 : 0) + (s.turbo ? 55 : 0) : 36, t, 0.3);
-    ramp(this.cruiseGain, s.cruise === 'cruise' ? 0.10 + s.cruiseFrac * 0.16 : s.cruise === 'charging' ? 0.06 : s.turbo ? 0.08 : 0);
+    const atmoRush = (s.atmo ?? 0) * 0.22; // the whoosh doubles as air noise
+    ramp(this.cruiseGain, (s.cruise === 'cruise' ? 0.10 + s.cruiseFrac * 0.16 : s.cruise === 'charging' ? 0.06 : s.turbo ? 0.08 : 0) + atmoRush);
     ramp(this.lifeGain, flying ? 0.035 : 0);
     ramp(this.stationGain, s.docked ? 0.13 : 0, 0.8);
     // alarm is event-driven (bursts on new damage), not a constant siren —
     // a permanent klaxon just trains the player to mute the game
     ramp(this.alarmGain, flying && s.alarm && !s.dead ? 0.07 : 0, 0.05);
-    ramp(this.miningGain, s.mining ? 0.12 : 0, 0.08);
+    ramp(this.miningGain, s.mining ? 0.17 : 0, 0.08);
   }
 
   // ------------------------------------------------------------------
@@ -235,12 +236,47 @@ export class AudioEngine {
   }
 
   laser(own = true): void {
-    this.blip(900, 240, 0.09, 'square', own ? 0.08 : 0.03);
+    // own cannon has weight: crack + low thump under the zap
+    this.blip(900, 240, 0.09, 'square', own ? 0.11 : 0.03);
+    if (own) {
+      this.noiseBurst('lowpass', 300, 80, 0.07, 0.09);
+      this.blip(140, 70, 0.06, 'sine', 0.08);
+    }
+  }
+
+  // your shots landing on THEIR shield: crystalline tink
+  confirmShield(): void {
+    this.blip(1750, 1150, 0.07, 'sine', 0.05);
+  }
+
+  // your shots chewing THEIR hull: metallic crunch
+  confirmHull(): void {
+    this.noiseBurst('bandpass', 900, 250, 0.08, 0.07);
+    this.blip(220, 90, 0.07, 'triangle', 0.06);
+  }
+
+  // a shield collapsing (yours or theirs): deep pop + falling whine
+  shieldBreak(own: boolean): void {
+    this.noiseBurst('lowpass', 800, 60, own ? 0.5 : 0.3, own ? 0.3 : 0.12);
+    this.blip(1400, 180, own ? 0.5 : 0.3, 'sawtooth', own ? 0.12 : 0.05);
   }
 
   miningTick(): void {
     // handled by the continuous drone; occasional crackle
     if (Math.random() < 0.1) this.noiseBurst('bandpass', 700, 300, 0.06, 0.03);
+  }
+
+  // a chunk of ore cracks off the rock
+  oreChip(): void {
+    this.noiseBurst('bandpass', 1600, 400, 0.09, 0.06);
+    this.blip(420, 180, 0.07, 'triangle', 0.05);
+  }
+
+  // ore secured in the hold: a short satisfied clunk-chime
+  oreStash(): void {
+    this.noiseBurst('lowpass', 500, 150, 0.08, 0.08);
+    this.blip(660, 660, 0.06, 'sine', 0.07);
+    setTimeout(() => this.blip(990, 990, 0.09, 'sine', 0.06), 60);
   }
 
   hitShield(): void {
@@ -310,6 +346,24 @@ export class AudioEngine {
 
   alignSnap(): void {
     this.blip(880, 1240, 0.12, 'sine', 0.05);
+  }
+
+  // landing gear servo whine + clunk (#18)
+  gearMove(): void {
+    this.noiseBurst('bandpass', 300, 800, 0.9, 0.04);
+    setTimeout(() => this.blip(120, 60, 0.15, 'sine', 0.12), 950);
+  }
+
+  // VTOL transition: thrust vector servos + tone shift (#19)
+  vtolShift(): void {
+    this.blip(220, 420, 0.5, 'sawtooth', 0.05);
+    this.noiseBurst('bandpass', 500, 1200, 0.5, 0.04);
+  }
+
+  // approach radar proximity beep — pitch tracks approach quality (#18)
+  approachBeep(quality: 'red' | 'amber' | 'green'): void {
+    const freq = quality === 'green' ? 1180 : quality === 'amber' ? 880 : 520;
+    this.blip(freq, freq, 0.06, 'sine', 0.06);
   }
 
   alarmFuel(): void {

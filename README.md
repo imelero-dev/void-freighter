@@ -76,12 +76,18 @@ Notes:
 | Shift / W | throttle up (gradual) |
 | Ctrl / S | throttle down — hold past zero to brake |
 | Caps Lock | cruise drive ("hypervelocity") · X cut throttle |
-| A D R F | strafe · Q E roll · mouse pitch/yaw · Z flight assist |
+| A D R F | strafe · Q E roll · mouse pitch/yaw · Z flight assist on/off |
 | LMB / RMB | cannon / missile (when locked) |
 | Tab / T | cycle hostiles / target reticle |
-| G | mining drill · Space dock/undock · H rescue tow |
+| G | mining drill · Space request approach & undock · H rescue tow |
+| I / U / Y | headlights · VTOL mode · landing gear |
 | M B C J K L | map · cargo · ship · journal · market · contacts |
 | N / V / Enter / F1 | set destination · camera · chat · help |
+
+Docking is flown by hand now: request clearance with Space near a station or
+planetary port, then fly the assigned bay mouth, clamp collar or landing pad
+(VTOL + gear down for pads). The approach radar guides the final; an autodock
+tug can fly the last leg for 500 cr from the ATC overlay.
 
 ## Development
 

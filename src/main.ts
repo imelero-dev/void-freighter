@@ -50,6 +50,7 @@ function startGame(w: IWorld): void {
   world = w;
   (window as any).VF = { world: w, vec }; // exposed for E2E scripts/bots
   app = new GameApp(w, canvas);
+  (window as any).VF.app = app;
   app.menuHelp = () => menu.toggleHelp();
   // Esc with no windows open toggles the pause menu; the world keeps running
   // underneath and the save is flushed on every pause
@@ -67,3 +68,11 @@ function startGame(w: IWorld): void {
 window.addEventListener('beforeunload', () => {
   if (world instanceof OfflineWorld) world.save();
 });
+
+// PWA: installable + offline shell. Dev server stays uncached so HMR keeps
+// working.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => { /* http origin or unsupported */ });
+  });
+}

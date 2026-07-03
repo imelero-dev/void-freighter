@@ -167,6 +167,10 @@ export class GameServer {
       case 'reticle': sim.targetReticle(pid); break;
       case 'dock': sim.requestDock(pid); break;
       case 'undock': sim.undock(pid); break;
+      case 'vtol': sim.toggleVtol(pid); break;
+      case 'gear': sim.toggleGear(pid); break;
+      case 'slot': if (typeof msg.id === 'string') sim.selectDockSlot(pid, msg.id.slice(0, 64)); break;
+      case 'autodock': sim.autodock(pid); break;
       case 'rescue': sim.hailRescue(pid); break;
       case 'fuelcells': sim.useFuelCells(pid, int(msg.qty)); break;
       case 'repkit': sim.useRepairKit(pid); break;
@@ -283,7 +287,12 @@ export class GameServer {
         self: selfWire, ents,
         // clients generate pristine rocks deterministically; sync only damage
         rocks: this.sim.touchedRocks(),
+        // landing systems (#16-#20)
+        vt: meta.vtol ? 1 : 0,
+        gr: Math.round(meta.gear * 100),
+        appr: meta.approach ? { tid: meta.approach.targetId, tk: meta.approach.targetKind, slot: meta.approach.slot } : null,
       };
+      if (meta.landedOn) snap.ld = meta.landedOn;
       if (session.snapCounter % PROFILE_EVERY_SNAPS === 1) {
         snap.profile = this.sim.serializeProfile(session.pid);
         snap.dest = meta.destination;

@@ -5,9 +5,10 @@
 import { shipStats, ROCK_TYPES, TURBO_ACCEL_MULT, TURBO_SPEED, type ShipStats } from '../sim/data';
 import { integrateFlight } from '../sim/flight';
 import { blankEntity, defaultProfile, SHIP_RADIUS } from '../sim/sim';
+import { buildSurfaceBodies } from '../sim/surface';
 import { dangerAt, generateSystem, rockSpawn } from '../sim/system';
 import {
-  emptyShipInput, type Contract, type Destination, type Entity, type HullId, type MarketEntry,
+  emptyShipInput, type ApproachState, type Contract, type Destination, type Entity, type HullId, type MarketEntry,
   type ModuleSlot, type PlayerProfile, type ShipInput, type SimEvent, type StationDef,
 } from '../sim/types';
 import { qclone, qnlerp, v3, vclone, vdist, type Vec3 } from '../sim/vec';
@@ -78,6 +79,11 @@ export class ClientWorld implements IWorld {
   drillOn = false;
   turboCharge = 1;
   turboActive = false;
+  surfaceBodies = buildSurfaceBodies(this.system);
+  vtol = false;
+  gearFrac = 0;
+  landedOn: string | null = null;
+  approach: ApproachState | null = null;
   connected = false;
   time = 0;
   ready: Promise<void>;
@@ -217,7 +223,7 @@ export class ClientWorld implements IWorld {
         // mirroring the server's perf calculation)
         const stats = this.shipStats;
         const perf = this.turboActive
-          ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate }
+          ? { maxSpeed: TURBO_SPEED, accel: stats.accel * TURBO_ACCEL_MULT, turnRate: stats.turnRate, mass: stats.mass }
           : stats;
         integrateFlight(e, this.input, perf, dt, this.flightAssist);
         // reconcile against extrapolated server state
@@ -386,7 +392,7 @@ export class ClientWorld implements IWorld {
           e.hullId = w.hid as HullId | 'pirate';
           e.pirate = w.pir ?? null;
           e.isPlayer = !!w.pl;
-          e.radius = SHIP_RADIUS[w.hid] ?? 12;
+          e.radius = w.cp ? (w.pir ? 95 : 170) : SHIP_RADIUS[w.hid] ?? 12;
           e.hull = w.hl;
           e.maxHull = w.mhl;
           e.shield = w.sh;
@@ -396,6 +402,7 @@ export class ClientWorld implements IWorld {
           e.cruiseSpeed = w.cs;
           e.dockedAt = w.dk ?? null;
           e.derelict = !!w.dl;
+          e.capital = !!w.cp;
           break;
         }
         case 'f':
@@ -461,6 +468,12 @@ export class ClientWorld implements IWorld {
       e.throttle = s.th;
       this.turboCharge = (s.tb ?? 100) / 100;
       this.turboActive = !!s.ta;
+      this.vtol = snap.vt === 1;
+      this.gearFrac = (snap.gr ?? 0) / 100;
+      this.landedOn = snap.ld ?? null;
+      this.approach = snap.appr
+        ? { targetId: snap.appr.tid, targetKind: snap.appr.tk, slot: snap.appr.slot }
+        : null;
       if (performance.now() > this.targetLockUntil) {
         e.targetId = s.tg ?? null;
       }
@@ -534,6 +547,13 @@ export class ClientWorld implements IWorld {
   }
   requestDock(): void { this.cmd({ cmd: 'dock' }); }
   undock(): void { this.cmd({ cmd: 'undock' }); }
+  toggleVtol(): void {
+    this.vtol = !this.vtol; // optimistic; snap confirms
+    this.cmd({ cmd: 'vtol' });
+  }
+  toggleGear(): void { this.cmd({ cmd: 'gear' }); }
+  selectDockSlot(slotId: string): void { this.cmd({ cmd: 'slot', id: slotId }); }
+  autodock(): void { this.cmd({ cmd: 'autodock' }); }
   setDestination(dest: Destination | null): void {
     this.destination = dest;
     this.cmd({ cmd: 'dest', dest });

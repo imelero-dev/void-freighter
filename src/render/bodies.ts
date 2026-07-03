@@ -3,6 +3,7 @@
 // station mesh lives in the near scene and is positioned every frame.
 
 import * as THREE from 'three';
+import { BAY_FLOOR_MULT, BAY_HALF_H, BAY_HALF_W, BAY_MOUTH_MULT, CLAMP_COLLAR_MULT } from '../sim/docking';
 import { Rng, fbm2 } from '../sim/rng';
 import type { PlanetDef, StationDef, SystemDef } from '../sim/types';
 import { FAR_SCALE, SceneManager } from './scene';
@@ -238,7 +239,75 @@ function buildStationMesh(def: StationDef): { group: THREE.Group; ring: THREE.Me
   }
 
   group.rotation.y = rng.range(0, Math.PI * 2);
-  return { group, ring, blinkers };
+  // dock geometry (#17) must match the sim's collision frame exactly, so it
+  // hangs off an outer, un-rotated group aligned with def.bayDir/clampDir
+  const outer = new THREE.Group();
+  outer.add(group);
+  addDockGeometry(outer, def, blinkers);
+  return { group: outer, ring, blinkers };
+}
+
+// Hangar-bay tunnel + external clamp collar, in world-aligned station space.
+function addDockGeometry(parent: THREE.Group, def: StationDef, blinkers: THREE.Mesh[]): void {
+  const r = def.radius;
+  const wall = new THREE.MeshStandardMaterial({ color: 0x33363a, roughness: 0.9, metalness: 0.5 });
+  const glowStrip = new THREE.MeshBasicMaterial({ color: 0xffc27a });
+
+  const bay = new THREE.Group();
+  bay.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(def.bayDir.x, def.bayDir.y, def.bayDir.z));
+  const z0 = r * BAY_FLOOR_MULT;
+  const z1 = r * BAY_MOUTH_MULT;
+  const len = z1 - z0;
+  const zMid = z0 + len / 2;
+  // floor / ceiling / walls — solid in the sim (#21), visible reference here
+  const floor = new THREE.Mesh(new THREE.BoxGeometry((BAY_HALF_W + 16) * 2, 12, len), wall);
+  floor.position.set(0, -(BAY_HALF_H + 6), zMid);
+  const ceil = floor.clone();
+  ceil.position.y = BAY_HALF_H + 6;
+  const wallL = new THREE.Mesh(new THREE.BoxGeometry(12, (BAY_HALF_H + 16) * 2, len), wall);
+  wallL.position.set(-(BAY_HALF_W + 6), 0, zMid);
+  const wallR = wallL.clone();
+  wallR.position.x = BAY_HALF_W + 6;
+  // dock deck at the inner end, warm-lit
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(BAY_HALF_W * 2, BAY_HALF_H * 2, 10), new THREE.MeshStandardMaterial({
+    color: 0x3a3226, roughness: 0.7, metalness: 0.4, emissive: 0x2a1e0c, emissiveIntensity: 1.2,
+  }));
+  deck.position.set(0, 0, z0 - 5);
+  bay.add(floor, ceil, wallL, wallR, deck);
+  // interior guide strips
+  for (const side of [-1, 1]) {
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(2, 2, len * 0.9), glowStrip);
+    strip.position.set(side * (BAY_HALF_W - 4), -(BAY_HALF_H - 4), zMid);
+    bay.add(strip);
+  }
+  // green mouth lights: THE cue to find the bay from outside (#9/#17)
+  const greenMat = new THREE.MeshBasicMaterial({ color: 0x46e06c });
+  for (const [x, y] of [[-BAY_HALF_W, -BAY_HALF_H], [BAY_HALF_W, -BAY_HALF_H], [-BAY_HALF_W, BAY_HALF_H], [BAY_HALF_W, BAY_HALF_H], [0, -BAY_HALF_H], [0, BAY_HALF_H]] as Array<[number, number]>) {
+    const b = new THREE.Mesh(new THREE.SphereGeometry(4.5, 6, 6), greenMat);
+    b.position.set(x, y, z1 + 6);
+    bay.add(b);
+    blinkers.push(b);
+  }
+  // interior work light
+  const lamp = new THREE.PointLight(0xffc890, 2.5e5, len * 2.2, 2);
+  lamp.position.set(0, BAY_HALF_H - 10, zMid);
+  bay.add(lamp);
+  parent.add(bay);
+
+  // external clamp collar (#17): a lit ring you park your nose into
+  const clamp = new THREE.Group();
+  clamp.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(def.clampDir.x, def.clampDir.y, def.clampDir.z));
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(24, 3.5, 8, 20), wall);
+  collar.position.z = r * CLAMP_COLLAR_MULT;
+  clamp.add(collar);
+  const collarGlow = new THREE.Mesh(new THREE.TorusGeometry(24, 1.2, 6, 20), new THREE.MeshBasicMaterial({ color: 0x7fb1ff }));
+  collarGlow.position.z = r * CLAMP_COLLAR_MULT;
+  clamp.add(collarGlow);
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(6, 9, r * (CLAMP_COLLAR_MULT - 0.86), 8), wall);
+  stem.rotation.x = Math.PI / 2;
+  stem.position.z = r * (CLAMP_COLLAR_MULT + 0.86) / 2;
+  clamp.add(stem);
+  parent.add(clamp);
 }
 
 // ---------------------------------------------------------------------------

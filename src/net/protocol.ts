@@ -52,6 +52,7 @@ export interface WireShip {
   ca?: number; // cannon ammo (self only)
   pl?: 1;  // is a player
   dl?: 1;  // derelict hulk
+  cp?: 1;  // capital-class hull (superfreighter / armed cargo capital)
   tb?: number; // turbo charge ×100 (self only)
   ta?: 1;  // turbo active
 }
@@ -90,6 +91,11 @@ export interface SnapMsg {
   self: WireShip;
   ents: WireEntity[];
   rocks?: WireRock[]; // touched asteroids near the player (mined/destroyed)
+  // landing systems, every snap (#16-#20)
+  vt?: 0 | 1;         // VTOL mode
+  gr?: number;        // gear frac × 100
+  ld?: string;        // parked on this surface body
+  appr?: { tid: string; tk: 'station' | 'body'; slot: string } | null;
   // piggybacked at low rate or when dirty:
   profile?: PlayerProfile;
   dest?: { kind: string; id: string; name: string; pos: { x: number; y: number; z: number } } | null;
@@ -158,6 +164,7 @@ export function wireShip(e: Entity): WireShip {
   w.ca = e.cannonAmmo;
   if (e.isPlayer) w.pl = 1;
   if (e.derelict) w.dl = 1;
+  if (e.capital) w.cp = 1;
   return w;
 }
 

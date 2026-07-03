@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/sim';
 import { DT } from '../src/sim/types';
-import { qLookAt, vdist, vlen, vnorm, vsub, v3 } from '../src/sim/vec';
+import { qLookAt, vadd, vdist, vlen, vnorm, vscale, vsub, v3 } from '../src/sim/vec';
 
 function makeSim(): Sim {
   return new Sim();
@@ -79,39 +79,190 @@ describe('flight physics', () => {
   });
 });
 
+describe('simulator flight model (#15)', () => {
+  it('FA off: a ship released from all input drifts on its vector indefinitely', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.flightAssist = false;
+    e.vel = v3(80, 12, -40);
+    const before = { ...e.vel };
+    runTicks(sim, 20 * 20); // 20 s, hands off
+    expect(e.vel.x).toBeCloseTo(before.x, 5);
+    expect(e.vel.y).toBeCloseTo(before.y, 5);
+    expect(e.vel.z).toBeCloseTo(before.z, 5);
+  });
+
+  it('FA on bleeds angular momentum on release; FA off does not', () => {
+    const run = (assist: boolean) => {
+      const sim = makeSim();
+      const pid = sim.addPlayer('tester');
+      sim.undock(pid);
+      const e = sim.entities.get(pid)!;
+      const meta = sim.meta(pid)!;
+      meta.flightAssist = assist;
+      meta.input.yaw = 1;
+      runTicks(sim, 20 * 2); // spin up
+      meta.input.yaw = 0;
+      runTicks(sim, 20 * 4); // hands off
+      return Math.abs(e.angVel.y);
+    };
+    expect(run(true)).toBeLessThan(0.02);
+    expect(run(false)).toBeGreaterThan(0.5);
+  });
+
+  it('FA off: thrust adds momentum that is never auto-cancelled', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.flightAssist = false;
+    meta.input.thrustForward = 1;
+    runTicks(sim, 20 * 3);
+    meta.input.thrustForward = 0;
+    const speedAfterBurn = vlen(e.vel);
+    runTicks(sim, 20 * 15);
+    expect(vlen(e.vel)).toBeCloseTo(speedAfterBurn, 4);
+  });
+
+  it('orientation and velocity are decoupled with FA off', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.flightAssist = false;
+    meta.input.thrustForward = 1;
+    runTicks(sim, 20 * 3);
+    meta.input.thrustForward = 0;
+    const velDir = vnorm(e.vel);
+    // yaw the nose 180-ish degrees away — velocity must not follow
+    meta.input.yaw = 1;
+    runTicks(sim, 20 * 2);
+    meta.input.yaw = -1; // counter-spin to stop the rotation
+    runTicks(sim, 20 * 2);
+    meta.input.yaw = 0;
+    const newVelDir = vnorm(e.vel);
+    expect(newVelDir.x).toBeCloseTo(velDir.x, 5);
+    expect(newVelDir.z).toBeCloseTo(velDir.z, 5);
+  });
+
+  it('heavier hulls answer the helm later than light ones', () => {
+    // same integrator, same commanded turn — the freighter reaches the
+    // commanded turn rate later than the interceptor
+    const spinAt = (mass: number) => {
+      const sim = makeSim();
+      const pid = sim.addPlayer('tester');
+      sim.undock(pid);
+      const e = sim.entities.get(pid)!;
+      const meta = sim.meta(pid)!;
+      meta.stats = { ...meta.stats, mass, turnRate: 2 };
+      meta.input.yaw = 1;
+      runTicks(sim, 3); // 0.15 s after stick input
+      return Math.abs(e.angVel.y);
+    };
+    expect(spinAt(0.8)).toBeGreaterThan(spinAt(2.5) * 1.5);
+  });
+
+  it('FA can be toggled mid-flight', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('tester');
+    sim.undock(pid);
+    const meta = sim.meta(pid)!;
+    expect(meta.flightAssist).toBe(true);
+    expect(sim.toggleFlightAssist(pid)).toBe(false);
+    expect(meta.flightAssist).toBe(false);
+    expect(sim.toggleFlightAssist(pid)).toBe(true);
+  });
+});
+
 describe('docking', () => {
-  it('docks when close and slow, undocks cleanly', () => {
+  it('clearance + paid autodock completes a berth; undock is clean', () => {
     const sim = makeSim();
     const pid = sim.addPlayer('tester');
     const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
     expect(e.dockedAt).toBe('morrow_granary'); // starts docked
     sim.undock(pid);
     expect(e.dockedAt).toBeNull();
-    // come back
+    // come back: request approach, pay the tug
     const st = sim.station('morrow_granary')!;
     e.pos = { x: st.pos.x + 1500, y: st.pos.y, z: st.pos.z };
     e.vel = v3();
     sim.requestDock(pid);
+    expect(meta.approach).not.toBeNull();
+    const creditsBefore = meta.profile.credits;
+    sim.autodock(pid);
+    expect(meta.profile.credits).toBe(creditsBefore - 500);
     runTicks(sim, 20 * 5);
     expect(e.dockedAt).toBe('morrow_granary');
   });
 
-  it('refuses docking when too fast or too far', () => {
+  it('no clearance out of range; autodock needs clearance', () => {
     const sim = makeSim();
     const pid = sim.addPlayer('tester');
     sim.undock(pid);
     const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
     const st = sim.station('morrow_granary')!;
-    e.pos = { x: st.pos.x + 1500, y: st.pos.y, z: st.pos.z };
-    e.vel = v3(200, 0, 0);
-    sim.requestDock(pid);
-    runTicks(sim, 20);
-    expect(e.dockedAt).toBeNull();
-    e.vel = v3();
     e.pos = { x: st.pos.x + 50_000, y: st.pos.y, z: st.pos.z };
+    e.vel = v3();
     sim.requestDock(pid);
+    expect(meta.approach).toBeNull();
+    sim.autodock(pid);
     runTicks(sim, 20);
     expect(e.dockedAt).toBeNull();
+  });
+
+  it('manual bay fly-in docks with clearance and refuses without (#17/#20)', () => {
+    const flyIn = (withClearance: boolean) => {
+      const sim = makeSim();
+      const pid = sim.addPlayer('bay_pilot');
+      sim.undock(pid);
+      const e = sim.entities.get(pid)!;
+      const meta = sim.meta(pid)!;
+      meta.undockInvuln = 0;
+      const st = sim.station('morrow_granary')!;
+      if (withClearance) {
+        e.pos = vadd(st.pos, vscale(st.bayDir, 3000));
+        e.vel = v3();
+        sim.requestDock(pid);
+        expect(meta.approach?.slot).toBe('bay');
+      }
+      // place the ship inside the bay tunnel, drifting slowly toward the deck
+      // (assist off so nothing arrests the drift — pure #15 physics)
+      meta.flightAssist = false;
+      e.pos = vadd(st.pos, vscale(st.bayDir, st.radius * 0.7));
+      e.vel = vscale(st.bayDir, -10);
+      runTicks(sim, 20 * 45);
+      return e.dockedAt;
+    };
+    expect(flyIn(true)).toBe('morrow_granary');
+    expect(flyIn(false)).toBeNull();
+  });
+
+  it('external clamp captures an aligned, slow ship held on the collar (#17)', () => {
+    const sim = makeSim();
+    const pid = sim.addPlayer('clamp_pilot');
+    sim.undock(pid);
+    const e = sim.entities.get(pid)!;
+    const meta = sim.meta(pid)!;
+    meta.undockInvuln = 0;
+    const st = sim.station('morrow_granary')!;
+    e.pos = vadd(st.pos, vscale(st.bayDir, 3000));
+    e.vel = v3();
+    sim.requestDock(pid);
+    sim.selectDockSlot(pid, 'clamp');
+    expect(meta.approach?.slot).toBe('clamp');
+    // park on the collar, nose in, dead slow
+    e.pos = vadd(st.pos, vscale(st.clampDir, st.radius * 1.05));
+    e.vel = v3();
+    e.orient = qLookAt(vscale(st.clampDir, -1));
+    runTicks(sim, 20 * 3); // hold alignment past the capture delay
+    expect(e.dockedAt).toBe('morrow_granary');
   });
 });
 

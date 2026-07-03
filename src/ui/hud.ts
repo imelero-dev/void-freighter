@@ -2,9 +2,12 @@
 // instrument look, deliberately analog and a little dirty.
 
 import * as THREE from 'three';
+import { isMobile } from '../game/mobile';
 import { BOLT_SPEED, GOODS } from '../sim/data';
+import { approachTarget } from '../sim/docking';
+import { surfaceEnvAt } from '../sim/surface';
 import type { Entity } from '../sim/types';
-import { leadPoint, qForward, qRight, qUp, vdist, vlen, vsub, vnorm, vdot } from '../sim/vec';
+import { leadPoint, qForward, qRight, qUp, vdist, vlen, vscale, vsub, vnorm, vdot } from '../sim/vec';
 import type { IWorld } from '../world_api';
 import { fmtDistance, fmtTime } from './dom';
 
@@ -29,12 +32,17 @@ export class Hud {
   alert: { text: string; color: string; until: number } | null = null;
   cameraMode: 'cockpit' | 'chase' = 'cockpit';
   destAligned = false; // exposed so the app can play the snap tone on change
+  entryHeat = 0;       // 0..1 atmospheric-entry glow, set by the app (#16)
+  // approach radar state (#18), read back by the app for the proximity beep
+  approachQuality: 'red' | 'amber' | 'green' | null = null;
+  approachDist = Infinity;
 
   private proj = new THREE.Vector3();
   private floaters: Array<{ pos: { x: number; y: number; z: number }; text: string; color: string; at: number }> = [];
   private dmgDirs: Array<{ dir: { x: number; y: number; z: number }; at: number }> = [];
   private invQuat = new THREE.Quaternion();
   private dirV = new THREE.Vector3();
+  private mobile = isMobile();
 
   constructor(private camera: THREE.PerspectiveCamera) {
     this.canvas = document.createElement('canvas');
@@ -152,19 +160,47 @@ export class Hud {
         const r = 14;
         ctx.strokeRect(s.x - r, s.y - r, r * 2, r * 2);
       }
-      // lead pip: where to aim so your bolts intercept the target
-      if (target.kind === 'ship' && stats.weaponDamage > 0 && d < stats.weaponRange * 1.4) {
+      // lead pip: where to aim so your bolts intercept the target (#12).
+      // Big, animated, and it SNAPS when your nose is on the solution.
+      if (target.kind === 'ship' && stats.weaponDamage > 0 && d < stats.weaponRange * 1.6) {
         const aim = leadPoint(ship.pos, ship.vel, target.pos, target.vel, BOLT_SPEED);
         const al = new THREE.Vector3(aim.x - origin.x, aim.y - origin.y, aim.z - origin.z);
         const ap = this.toScreen(al);
         if (!ap.behind) {
-          ctx.strokeStyle = target.pirate ? RED : CYAN;
-          ctx.lineWidth = 1.2;
+          const aimDir = vnorm(vsub(aim, ship.pos));
+          const offAngle = Math.acos(Math.max(-1, Math.min(1, vdot(qForward(ship.orient), aimDir))));
+          const onTarget = offAngle < 0.022; // ~1.3° — bolts will connect
+          const inRange = d < stats.weaponRange;
+          const col = onTarget ? '#ffe08a' : target.pirate ? RED : CYAN;
+          ctx.globalAlpha = inRange ? 1 : 0.45;
+          ctx.strokeStyle = col;
+          ctx.fillStyle = col;
+          ctx.lineWidth = onTarget ? 2.2 : 1.6;
+          const r = onTarget ? 11 : 9;
           ctx.beginPath();
-          ctx.arc(ap.x, ap.y, 5, 0, Math.PI * 2);
+          ctx.arc(ap.x, ap.y, r, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.fillStyle = ctx.strokeStyle;
-          ctx.fillRect(ap.x - 0.5, ap.y - 0.5, 1.5, 1.5);
+          // crosshair ticks
+          ctx.beginPath();
+          ctx.moveTo(ap.x - r - 5, ap.y); ctx.lineTo(ap.x - r + 2, ap.y);
+          ctx.moveTo(ap.x + r - 2, ap.y); ctx.lineTo(ap.x + r + 5, ap.y);
+          ctx.moveTo(ap.x, ap.y - r - 5); ctx.lineTo(ap.x, ap.y - r + 2);
+          ctx.moveTo(ap.x, ap.y + r - 2); ctx.lineTo(ap.x, ap.y + r + 5);
+          ctx.stroke();
+          if (onTarget) {
+            // solid center + pulse ring: FIRE NOW
+            ctx.beginPath();
+            ctx.arc(ap.x, ap.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+            const pulse = (performance.now() % 500) / 500;
+            ctx.globalAlpha = (1 - pulse) * (inRange ? 0.8 : 0.3);
+            ctx.beginPath();
+            ctx.arc(ap.x, ap.y, r + pulse * 10, 0, Math.PI * 2);
+            ctx.stroke();
+          } else {
+            ctx.fillRect(ap.x - 1, ap.y - 1, 2, 2);
+          }
+          ctx.globalAlpha = 1;
         }
       }
     }
@@ -205,6 +241,25 @@ export class Hud {
     // ---- destination GPS marker ----
     this.drawDestination(world, ship, origin, cx, cy, W, H);
 
+    // ---- approach radar instrument (#18) ----
+    this.drawApproachRadar(world, ship, W);
+
+    // ---- surface flight cues (#16/#19) ----
+    const env = surfaceEnvAt(world.surfaceBodies, ship.pos);
+    if (env && env.altitude < 25_000) {
+      ctx.textAlign = 'center';
+      ctx.font = '13px "Lucida Console", monospace';
+      const vs = vdot(ship.vel, env.up);
+      ctx.fillStyle = env.altitude < 400 && vs < -12 ? RED : AMBER;
+      ctx.fillText(`ALT ${env.altitude > 9999 ? `${(env.altitude / 1000).toFixed(1)} km` : `${Math.max(0, Math.round(env.altitude))} m`}  VS ${vs > 0 ? '+' : ''}${Math.round(vs)}`, cx, H * 0.24);
+    }
+    if (world.landedOn) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = GREEN;
+      ctx.font = '14px "Lucida Console", monospace';
+      ctx.fillText('◆ LANDED — throttle up to lift off ◆', cx, H * 0.30);
+    }
+
     // ---- floating combat text ----
     for (let i = this.floaters.length - 1; i >= 0; i--) {
       const f = this.floaters[i];
@@ -227,14 +282,17 @@ export class Hud {
     // ---- contact blips in 3D view ----
     this.drawContacts(world, ship, origin);
 
-    // ---- docking prompt ----
-    const nearStation = world.system.stations.find((s) => vdist(s.pos, ship.pos) < s.dockRadius);
+    // ---- approach prompt (#20): Space asks the tower, flying does the rest ----
     ctx.textAlign = 'center';
-    if (nearStation) {
-      const slow = vlen(ship.vel) <= 60;
-      ctx.fillStyle = slow ? GREEN : AMBER;
-      ctx.font = '13px "Lucida Console", monospace';
-      ctx.fillText(slow ? `[SPACE] DOCK — ${nearStation.name}` : `${nearStation.name}: reduce speed to dock (<60 m/s)`, cx, H * 0.2);
+    if (!world.approach) {
+      const nearStation = world.system.stations.find((s) => vdist(s.pos, ship.pos) < s.dockRadius * 2.5);
+      const nearPort = nearStation ? undefined : world.surfaceBodies.find((b) =>
+        b.pads.length > 0 && vdist(b.pos, ship.pos) < b.radius * 1.6);
+      if (nearStation || nearPort) {
+        ctx.fillStyle = AMBER;
+        ctx.font = '13px "Lucida Console", monospace';
+        ctx.fillText(`[SPACE] REQUEST APPROACH — ${(nearStation?.name ?? nearPort?.name ?? '').toUpperCase()}`, cx, H * 0.2);
+      }
     }
 
     // ---- alert banner ----
@@ -245,6 +303,16 @@ export class Hud {
         ctx.font = '16px "Lucida Console", monospace';
         ctx.fillText(this.alert.text, cx, H * 0.27);
       }
+    }
+
+    // ---- atmospheric entry heat (#16): the edges of the canopy cook ----
+    if (this.entryHeat > 0.04) {
+      const a = Math.min(0.55, this.entryHeat * 0.5) * (0.75 + Math.random() * 0.25);
+      const grad = ctx.createRadialGradient(cx, cy, Math.min(W, H) * 0.30, cx, cy, Math.max(W, H) * 0.62);
+      grad.addColorStop(0, 'rgba(255,120,40,0)');
+      grad.addColorStop(1, `rgba(255,105,25,${a})`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
     }
 
     // ---- comms ticker ----
@@ -415,6 +483,87 @@ export class Hud {
     }
   }
 
+  // Approach radar (#18): a compact red/amber/green instrument that wakes on
+  // final approach and dims away otherwise. Shows a deviation scope (where
+  // the corridor is relative to your nose), distance and closure rate.
+  private drawApproachRadar(world: IWorld, ship: Entity, W: number): void {
+    this.approachQuality = null;
+    this.approachDist = Infinity;
+    const appr = world.approach;
+    if (!appr) return;
+    const target = approachTarget(world.system, world.surfaceBodies, appr);
+    if (!target) return;
+    const d = vdist(ship.pos, target.pos);
+    if (d > 6500) return; // not in the approach phase yet
+    const ctx = this.ctx;
+
+    const toT = vnorm(vsub(target.pos, ship.pos));
+    const closure = vdot(ship.vel, toT);
+    // lateral deviation from the approach axis through the target
+    const rel = vsub(ship.pos, target.pos);
+    const outDir = vscale(target.inDir, -1);
+    const axial = vdot(rel, outDir);
+    const latVec = vsub(rel, vscale(outDir, axial));
+    const lat = vlen(latVec);
+    const corridor = appr.slot === 'clamp' ? 28 : appr.slot === 'bay' ? 55 : 40;
+    const latNorm = lat / Math.max(1, corridor + d * 0.22); // funnel widens out
+    const vLimit = (appr.slot === 'clamp' ? 8 : appr.slot === 'bay' ? 20 : 10) + d / 12;
+    const wrongSide = axial < 0 && d < 900; // slipped behind the target plane
+    let quality: 'red' | 'amber' | 'green' = 'green';
+    if (latNorm > 1.6 || closure > vLimit * 1.8 || closure < -6 || wrongSide) quality = 'red';
+    else if (latNorm > 0.9 || closure > vLimit) quality = 'amber';
+    this.approachQuality = quality;
+    this.approachDist = d;
+
+    const pw = 190, ph = 96;
+    // phones: the top-right corner belongs to the FIRE button and credits
+    // chip — the approach aid moves to top-center, under the compass
+    const px = this.mobile ? Math.round((W - pw) / 2) : W - pw - 14;
+    const py = this.mobile ? 72 : 40;
+    this.holoPanel(px, py, pw, ph, 'APPROACH');
+    const col = quality === 'green' ? GREEN : quality === 'amber' ? '#e0b34d' : RED;
+
+    // deviation scope: dot = where the corridor axis is relative to you
+    const sx = px + 34, sy = py + 58, sr = 26;
+    ctx.strokeStyle = 'rgba(217,164,65,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sx - sr, sy); ctx.lineTo(sx + sr, sy);
+    ctx.moveTo(sx, sy - sr); ctx.lineTo(sx, sy + sr);
+    ctx.stroke();
+    // project the lateral offset onto camera right/up: fly TOWARD the dot
+    this.invQuat.copy(this.camera.quaternion).invert();
+    this.dirV.set(-latVec.x, -latVec.y, -latVec.z).applyQuaternion(this.invQuat);
+    const k = Math.min(1, latNorm) * sr * 0.85;
+    const norm = Math.hypot(this.dirV.x, this.dirV.y) || 1;
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(sx + (this.dirV.x / norm) * k * Math.min(1, latNorm), sy - (this.dirV.y / norm) * k * Math.min(1, latNorm), 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // status column
+    ctx.textAlign = 'left';
+    ctx.font = '11px "Lucida Console", monospace';
+    ctx.fillStyle = col;
+    const slotLabel = appr.slot === 'bay' ? 'BAY' : appr.slot === 'clamp' ? 'CLAMP A' : appr.slot.split('_pad_').length > 1 ? `PAD ${appr.slot.split('_pad_')[1]}` : appr.slot;
+    ctx.fillText(`● ${slotLabel}`, px + 72, py + 34);
+    ctx.fillStyle = AMBER_DIM;
+    ctx.fillText(`DST ${fmtDistance(d)}`, px + 72, py + 52);
+    ctx.fillStyle = closure > vLimit ? RED : AMBER_DIM;
+    ctx.fillText(`CLO ${Math.round(closure)} m/s`, px + 72, py + 68);
+    if (appr.slot !== 'bay' && appr.slot !== 'clamp') {
+      ctx.fillStyle = world.gearFrac >= 0.99 ? GREEN : RED;
+      ctx.fillText(world.gearFrac >= 0.99 ? 'GEAR ▼' : 'GEAR ▲ !', px + 72, py + 84);
+    } else if (appr.slot === 'clamp') {
+      const aln = vdot(qForward(ship.orient), target.inDir);
+      ctx.fillStyle = aln > 0.94 ? GREEN : AMBER_DIM;
+      ctx.fillText(`ALN ${Math.max(0, Math.round(aln * 100))}%`, px + 72, py + 84);
+    }
+  }
+
   private drawContacts(world: IWorld, ship: Entity, origin: { x: number; y: number; z: number }): void {
     const ctx = this.ctx;
     const stats = world.shipStats;
@@ -485,6 +634,7 @@ export class Hud {
 
   private drawBottomCluster(world: IWorld, ship: Entity, W: number, H: number): void {
     const ctx = this.ctx;
+    const now = performance.now();
     const cx = W / 2;
     const stats = world.shipStats;
     const rx = Math.max(95, Math.min(130, W * 0.085));
@@ -527,55 +677,116 @@ export class Hud {
       ctx.fillStyle = CYAN;
       ctx.fillText('FA OFF', gx + 30, gy - 74);
     }
-
-    // ---- shield arcs + hull (right of scanner) ----
-    const sx = cx + rx + 92;
-    const sy = scY + 4;
-    const shieldFrac = ship.maxShield > 0 ? ship.shield / ship.maxShield : 0;
-    // ship silhouette
-    ctx.strokeStyle = AMBER;
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(sx, sy - 9);
-    ctx.lineTo(sx + 7, sy + 7);
-    ctx.lineTo(sx, sy + 3);
-    ctx.lineTo(sx - 7, sy + 7);
-    ctx.closePath();
-    ctx.stroke();
-    // three concentric shield arcs, lit by charge level (front + rear)
-    for (let i = 0; i < 3; i++) {
-      const lit = shieldFrac > (i + 0.34) / 3;
-      ctx.strokeStyle = lit ? CYAN : 'rgba(127, 177, 201, 0.18)';
-      ctx.lineWidth = 2;
-      const r = 15 + i * 5.5;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, -Math.PI * 0.82, -Math.PI * 0.18);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, Math.PI * 0.18, Math.PI * 0.82);
-      ctx.stroke();
+    // flight mode + gear state (#18/#19): always visible
+    ctx.font = '10px "Lucida Console", monospace';
+    ctx.fillStyle = world.vtol ? '#7fd4ff' : AMBER_DIM;
+    ctx.fillText(world.vtol ? 'MODE: VTOL ▼' : 'MODE: CRUISE', gx + 30, gy - 88);
+    const gearT = world.gearFrac;
+    if (gearT >= 0.99) {
+      ctx.fillStyle = GREEN;
+      ctx.fillText('GEAR ▼ DOWN', gx + 30, gy - 100);
+    } else if (gearT > 0.01) {
+      if (Math.sin(now / 90) > 0) {
+        ctx.fillStyle = AMBER;
+        ctx.fillText('GEAR ◇ CYCLING', gx + 30, gy - 100);
+      }
+    } else {
+      ctx.fillStyle = 'rgba(138,141,144,0.6)';
+      ctx.fillText('GEAR ▲ UP', gx + 30, gy - 100);
     }
-    // hull bar + readouts
+
+    // ---- ship vitals (right of scanner): big glanceable gauges (#13) ----
+    // Combat-critical readouts as thick segmented bars with large numerics,
+    // pulsing on low/critical states. Nothing here sits over the center view.
+    const vx = cx + rx + 36;
+    const vw = Math.max(140, Math.min(210, W - vx - 24));
+    let vy = scY - 52;
+    const shieldFrac = ship.maxShield > 0 ? ship.shield / ship.maxShield : 0;
     const hullFrac = ship.hull / ship.maxHull;
-    this.hbar(sx - 34, sy + 36, 68, 6, hullFrac, hullFrac < 0.25 ? RED : AMBER);
-    ctx.textAlign = 'center';
-    ctx.font = '9px "Lucida Console", monospace';
-    ctx.fillStyle = AMBER_DIM;
-    ctx.fillText(`HUL ${Math.round(ship.hull)}`, sx, sy + 50);
-    ctx.fillText(`SHD ${Math.round(ship.shield)}`, sx, sy - 38);
-    const ammoBits: string[] = [];
-    if (stats.cannonAmmoMax > 0) ammoBits.push(`AMM ${ship.cannonAmmo}`);
-    if (stats.missileAmmoMax > 0) ammoBits.push(`MSL ${ship.missileAmmo}`);
-    if (ammoBits.length > 0) {
-      ctx.fillStyle = stats.cannonAmmoMax > 0 && ship.cannonAmmo <= 0 ? RED : AMBER_DIM;
-      ctx.fillText(ammoBits.join(' '), sx, sy + 62);
+    const pulse = Math.sin(now / 110) > -0.2; // fast blink for critical states
+
+    // SHIELD: 6 segments, blue; flat grey when down
+    const shieldDown = ship.maxShield > 0 && ship.shield <= 0.5;
+    ctx.textAlign = 'left';
+    ctx.font = '11px "Lucida Console", monospace';
+    ctx.fillStyle = shieldDown ? (pulse ? RED : AMBER_DIM) : CYAN;
+    ctx.fillText(shieldDown ? 'SHD ✕' : 'SHD', vx, vy);
+    ctx.textAlign = 'right';
+    ctx.font = '17px "Lucida Console", monospace';
+    ctx.fillText(`${Math.round(ship.shield)}`, vx + vw, vy);
+    this.segBar(vx, vy + 7, vw, 11, shieldFrac, 6, shieldDown && pulse ? 'rgba(232,64,42,0.5)' : CYAN);
+    vy += 34;
+
+    // HULL: solid thick bar, amber -> red under 25% with pulse
+    const hullCrit = hullFrac < 0.25;
+    ctx.textAlign = 'left';
+    ctx.font = '11px "Lucida Console", monospace';
+    ctx.fillStyle = hullCrit ? (pulse ? RED : AMBER_DIM) : AMBER;
+    ctx.fillText('HUL', vx, vy);
+    ctx.textAlign = 'right';
+    ctx.font = '17px "Lucida Console", monospace';
+    ctx.fillStyle = hullCrit ? RED : AMBER;
+    ctx.fillText(`${Math.round(hullFrac * 100)}%`, vx + vw, vy);
+    this.hbar(vx, vy + 7, vw, 11, hullFrac, hullCrit ? (pulse ? RED : 'rgba(232,64,42,0.45)') : AMBER);
+    vy += 34;
+
+    // AMMO: magazine blocks + big count; missile diamonds
+    if (stats.cannonAmmoMax > 0) {
+      const ammoFrac = ship.cannonAmmo / stats.cannonAmmoMax;
+      const ammoOut = ship.cannonAmmo <= 0;
+      const ammoLow = ammoFrac < 0.2;
+      ctx.textAlign = 'left';
+      ctx.font = '11px "Lucida Console", monospace';
+      ctx.fillStyle = ammoOut ? (pulse ? RED : AMBER_DIM) : ammoLow ? RED : AMBER_DIM;
+      ctx.fillText(ammoOut ? 'AMM — EMPTY' : 'AMM', vx, vy);
+      ctx.textAlign = 'right';
+      ctx.font = '17px "Lucida Console", monospace';
+      ctx.fillStyle = ammoOut ? RED : ammoLow ? RED : AMBER;
+      ctx.fillText(`${ship.cannonAmmo}`, vx + vw, vy);
+      this.segBar(vx, vy + 7, vw, 8, ammoFrac, 10, ammoLow ? RED : '#c9974a');
+      vy += 30;
+    }
+    if (stats.missileAmmoMax > 0) {
+      ctx.textAlign = 'left';
+      ctx.font = '11px "Lucida Console", monospace';
+      ctx.fillStyle = AMBER_DIM;
+      ctx.fillText('MSL', vx, vy);
+      for (let i = 0; i < stats.missileAmmoMax; i++) {
+        const mx = vx + 34 + i * 15;
+        if (mx > vx + vw - 4) break;
+        const have = i < ship.missileAmmo;
+        ctx.strokeStyle = have ? AMBER : 'rgba(217,164,65,0.25)';
+        ctx.fillStyle = have ? (ship.lockedOn ? RED : AMBER) : 'transparent';
+        ctx.beginPath(); // missile pip: small diamond
+        ctx.moveTo(mx, vy - 5);
+        ctx.lineTo(mx + 4, vy);
+        ctx.lineTo(mx, vy + 5);
+        ctx.lineTo(mx - 4, vy);
+        ctx.closePath();
+        if (have) ctx.fill();
+        ctx.stroke();
+      }
     }
 
     // ---- corner holo panels ----
     const pw = Math.min(252, Math.max(200, W * 0.19));
     const ph = 128;
-    this.drawTargetPanel(world, ship, 14, H - ph - 12, pw, ph);
-    this.drawStatusPanel(world, ship, W - pw - 14, H - ph - 12, pw, ph);
+    if (this.mobile) {
+      // phones: chromeless HUD text with a soft dark glow so it stays
+      // readable over bright backdrops. The target block lifts above the
+      // ◀ROLL button; the status block moves top-left under the NAV/SYS
+      // menus — its desktop corner is taken by the vitals stack (#13),
+      // the throttle slider and the FIRE cluster.
+      ctx.save();
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+      ctx.shadowBlur = 5;
+      this.drawTargetPanel(world, ship, 8, H - ph - 88, pw, ph);
+      this.drawStatusPanel(world, ship, 10, 80, pw, ph);
+      ctx.restore();
+    } else {
+      this.drawTargetPanel(world, ship, 14, H - ph - 12, pw, ph);
+      this.drawStatusPanel(world, ship, W - pw - 14, H - ph - 12, pw, ph);
+    }
   }
 
   // ED-style scanner: perspective ellipse, contacts as stalked blips showing
@@ -667,7 +878,8 @@ export class Hud {
       else if (e.kind === 'fragment') color = '#9ab3a0';
       else if (e.kind === 'missile') color = RED;
       else if (e.kind === 'bolt') continue;
-      blip(e.pos, color, false, e.id === ship.targetId);
+      // capitals paint as heavy square returns, like structures
+      blip(e.pos, color, e.kind === 'ship' && e.capital, e.id === ship.targetId);
     }
     for (const st of world.system.stations) {
       blip(st.pos, CYAN, true, false);
@@ -679,9 +891,23 @@ export class Hud {
     ctx.fillText(`SCAN ${fmtDistance(world.shipStats.sensorRange)}`, cx, cy + ry + 11);
   }
 
+  // window chrome on desktop; on phones just a dim spaced caption — the
+  // panels render as transparent HUD text straight over the game view
+  private panelFrame(x: number, y: number, w: number, h: number, title: string): void {
+    if (!this.mobile) {
+      this.holoPanel(x, y, w, h, title);
+      return;
+    }
+    const ctx = this.ctx;
+    ctx.fillStyle = 'rgba(217, 164, 65, 0.5)';
+    ctx.font = '9px "Lucida Console", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(title.split('').join(' '), x + 10, y + 10);
+  }
+
   private drawTargetPanel(world: IWorld, ship: Entity, x: number, y: number, w: number, h: number): void {
     const ctx = this.ctx;
-    this.holoPanel(x, y, w, h, 'TARGET');
+    this.panelFrame(x, y, w, h, 'TARGET');
     const target = ship.targetId !== null ? world.entities.get(ship.targetId) : null;
     ctx.textAlign = 'left';
     if (!target || target.dead) {
@@ -734,7 +960,7 @@ export class Hud {
 
   private drawStatusPanel(world: IWorld, ship: Entity, x: number, y: number, w: number, h: number): void {
     const ctx = this.ctx;
-    this.holoPanel(x, y, w, h, 'SHIP STATUS');
+    this.panelFrame(x, y, w, h, 'SHIP STATUS');
     ctx.textAlign = 'left';
     ctx.font = '11px "Lucida Console", monospace';
     const prof = world.profile;
@@ -754,13 +980,14 @@ export class Hud {
     } else {
       lines.push(['DEST', '— set on chart [M]', GRAY]);
     }
-    let ly = y + 32;
+    let ly = y + (this.mobile ? 26 : 32);
+    const step = this.mobile ? 15 : 17;
     for (const [k, v, color] of lines) {
       ctx.fillStyle = AMBER_DIM;
       ctx.fillText(k, x + 10, ly);
       ctx.fillStyle = color;
       ctx.fillText(v, x + 60, ly);
-      ly += 17;
+      ly += step;
     }
   }
 
@@ -789,6 +1016,25 @@ export class Hud {
     ctx.fillStyle = color;
     const fh = Math.max(0, Math.min(1, frac)) * (h - 2);
     ctx.fillRect(x + 1, y + h - 1 - fh, w - 2, fh);
+  }
+
+  // segmented gauge: reads at a glance as 'how many blocks left' (#13)
+  private segBar(x: number, y: number, w: number, h: number, frac: number, segments: number, color: string): void {
+    const ctx = this.ctx;
+    const gap = 2;
+    const segW = (w - gap * (segments - 1)) / segments;
+    const f = Math.max(0, Math.min(1, frac));
+    for (let i = 0; i < segments; i++) {
+      const sx = x + i * (segW + gap);
+      const segFill = Math.max(0, Math.min(1, f * segments - i));
+      ctx.strokeStyle = 'rgba(217, 164, 65, 0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx, y, segW, h);
+      if (segFill > 0) {
+        ctx.fillStyle = color;
+        ctx.fillRect(sx + 1, y + 1, (segW - 2) * segFill, h - 2);
+      }
+    }
   }
 
   private hbar(x: number, y: number, w: number, h: number, frac: number, color: string): void {

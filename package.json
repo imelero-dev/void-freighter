@@ -17,6 +17,8 @@
     "server": "npm run build:server && node dist-server/server.cjs",
     "smoke": "node scripts/smoke_trade.mjs && node scripts/smoke_mine.mjs && node scripts/smoke_combat.mjs",
     "tour": "node scripts/visual_tour.mjs",
+    "tour:mobile": "node scripts/mobile_tour.mjs",
+    "icons": "node scripts/gen_icons.mjs",
     "tour:online": "npm run build:server && node scripts/online_tour.mjs"
   },
   "dependencies": {

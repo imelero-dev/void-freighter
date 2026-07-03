@@ -70,9 +70,15 @@ function fragMat(goodId: string | null): THREE.MeshStandardMaterial {
 const lootGeo = new THREE.BoxGeometry(2.6, 2.6, 2.6);
 const lootMat = new THREE.MeshStandardMaterial({ color: 0x8a6a2a, roughness: 0.5, metalness: 0.7, emissive: 0x332200 });
 // weapon bolts: shared elongated tracer (cylinder axis +Y), oriented per frame
-const boltGeo = new THREE.CylinderGeometry(0.45, 0.45, 9, 5, 1, true);
+// beefy tracer with a hot core — shots should look like they hurt (#12)
+const boltGeo = new THREE.CylinderGeometry(0.8, 0.8, 16, 6, 1, true);
 const boltMat = new THREE.MeshBasicMaterial({
-  color: 0xff6a3a, transparent: true, opacity: 0.95,
+  color: 0xff7a45, transparent: true, opacity: 1,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const boltCoreGeo = new THREE.CylinderGeometry(0.3, 0.3, 12, 5, 1, true);
+const boltCoreMat = new THREE.MeshBasicMaterial({
+  color: 0xffe0b0, transparent: true, opacity: 1,
   blending: THREE.AdditiveBlending, depthWrite: false,
 });
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
@@ -99,7 +105,7 @@ export class EntitiesLayer {
       // own ship handled by the camera layer (cockpit hides it; 3rd person shows it)
       seen.add(e.id);
       let view = this.views.get(e.id);
-      const kindKey = e.kind === 'ship' ? `ship_${e.hullId}_${e.pirate ?? ''}${e.derelict ? '_dead' : ''}` : e.kind;
+      const kindKey = e.kind === 'ship' ? `ship_${e.hullId}_${e.pirate ?? ''}${e.derelict ? '_dead' : ''}${e.capital ? '_cap' : ''}` : e.kind;
       if (view && view.kindKey !== kindKey) {
         this.dispose(e.id);
         view = undefined;
@@ -123,7 +129,7 @@ export class EntitiesLayer {
         tmpQ1.set(e.prevOrient.x, e.prevOrient.y, e.prevOrient.z, e.prevOrient.w);
         tmpQ2.set(e.orient.x, e.orient.y, e.orient.z, e.orient.w);
         view.obj.quaternion.slerpQuaternions(tmpQ1, tmpQ2, alpha);
-        if (view.ship) updateThrusters(view.ship, e);
+        if (view.ship) updateThrusters(view.ship, e, time, tmpV.length());
         if (e.id === world.playerId && !this.showPlayer) view.obj.visible = false;
         if (e.dockedAt) view.obj.visible = false;
       } else if (e.kind === 'bolt') {
@@ -155,7 +161,7 @@ export class EntitiesLayer {
     let view: View;
     switch (e.kind) {
       case 'ship': {
-        const ship = buildShipMesh(e.hullId, e.pirate);
+        const ship = buildShipMesh(e.hullId, e.pirate, e.capital);
         if (e.derelict) {
           // cold hull: darken everything, kill thruster glow
           ship.group.traverse((node) => {
@@ -169,6 +175,11 @@ export class EntitiesLayer {
           });
           for (const t of ship.thrusters) t.visible = false;
           ship.thrusters.length = 0;
+          // cold hulls run no lights
+          for (const g of ship.engineGlows) g.visible = false;
+          for (const n of ship.navLights) n.sprite.visible = false;
+          ship.engineGlows.length = 0;
+          ship.navLights.length = 0;
         }
         view = { obj: ship.group, ship, kindKey };
         break;
@@ -191,6 +202,7 @@ export class EntitiesLayer {
       }
       case 'bolt': {
         const mesh = new THREE.Mesh(boltGeo, boltMat); // shared pool — never disposed
+        mesh.add(new THREE.Mesh(boltCoreGeo, boltCoreMat));
         view = { obj: mesh, kindKey };
         break;
       }
@@ -232,6 +244,8 @@ export class EntitiesLayer {
           const mat = mesh.material as THREE.Material | THREE.Material[];
           if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
           else mat?.dispose();
+        } else if ((node as THREE.Sprite).isSprite) {
+          (node as THREE.Sprite).material.dispose(); // shared glow map survives
         }
       });
     }

@@ -3,8 +3,9 @@
 // it — rendering and UI never know whether they are offline or online.
 
 import type { ShipStats } from './sim/data';
+import type { SurfaceBody } from './sim/surface';
 import type {
-  Contract, Destination, Entity, HullId, MarketEntry, ModuleSlot, PlayerProfile,
+  ApproachState, Contract, Destination, Entity, HullId, MarketEntry, ModuleSlot, PlayerProfile,
   ShipInput, SimEvent, StationDef, SystemDef,
 } from './sim/types';
 import type { Vec3 } from './sim/vec';
@@ -26,6 +27,12 @@ export interface IWorld {
   readonly drillOn: boolean;
   readonly turboCharge: number;  // 0..1 burst gauge
   readonly turboActive: boolean;
+  // landing & docking systems (#16-#20)
+  readonly surfaceBodies: SurfaceBody[];
+  readonly vtol: boolean;
+  readonly gearFrac: number;       // 0 stowed .. 1 deployed
+  readonly landedOn: string | null;
+  readonly approach: ApproachState | null;
   // 0..1 fraction between the previous and current sim tick, for render interpolation
   readonly renderAlpha: number;
 
@@ -51,6 +58,10 @@ export interface IWorld {
   targetReticle(): void;
   requestDock(): void;
   undock(): void;
+  toggleVtol(): void;
+  toggleGear(): void;
+  selectDockSlot(slotId: string): void;
+  autodock(): void;
   setDestination(dest: Destination | null): void;
   hailRescue(): void;
   useFuelCells(qty: number): void;
