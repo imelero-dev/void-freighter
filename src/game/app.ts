@@ -26,7 +26,9 @@ import { WindowManager } from '../ui/windows';
 import { AudioEngine } from './audio';
 import { CameraRig } from './camera';
 import { bindAxis, bindButton, clearHotasBind, describeAxis, describeButton, GamepadManager } from './gamepad';
+import { buzz, HAPTIC } from './haptics';
 import { InputManager } from './input';
+import { isMobile, TouchControls } from './touch';
 import { BINDABLE, binds, HOTAS_AXES, HOTAS_BUTTONS, keyLabel, resetBinds, setBind } from '../ui/keybinds';
 
 export class GameApp {
@@ -42,6 +44,7 @@ export class GameApp {
   private post: PostPipeline;
   private hud: Hud;
   private input: InputManager;
+  private touchControls: TouchControls | null = null;
   private camera = new CameraRig();
   private audio = new AudioEngine();
   private wm = new WindowManager();
@@ -91,6 +94,10 @@ export class GameApp {
     this.post = new PostPipeline(this.sm);
     this.hud = new Hud(this.sm.camera);
     this.input = new InputManager(canvas);
+    if (isMobile()) {
+      this.touchControls = new TouchControls(this.input);
+      this.touchControls.setVisible(settings.mobileControls);
+    }
     this.chat = new ChatUi(() => this.world);
     this.stationUi = new StationUi(world, this.wm, this.audio);
     this.map = new SystemMap(world, this.wm, this.audio);
@@ -123,6 +130,7 @@ export class GameApp {
   destroy(): void {
     this.running = false;
     window.removeEventListener('resize', this.onResize);
+    this.touchControls?.destroy();
   }
 
   // -------------------------------------------------------------------------
@@ -206,6 +214,9 @@ export class GameApp {
     });
     input.on('rescue', () => w.hailRescue());
     input.on('controls', () => this.toggleWindow('controls'));
+    // touch SYS menu: paid last-leg tug — the sim politely refuses without
+    // an active station approach clearance
+    input.on('autodock', () => w.autodock());
     this.chat.onOpenChange = (open) => {
       this.input.uiMode = open || this.wm.anyOpen();
     };
@@ -220,6 +231,7 @@ export class GameApp {
 
   applySettings(): void {
     this.audio.applyVolume();
+    this.touchControls?.setVisible(settings.mobileControls);
   }
 
   private assistLevel = 0; // smoothed aim-assist strength (no jerky grabs)
@@ -449,6 +461,7 @@ export class GameApp {
     if (dt > 0.25) dt = 0.25;
 
     const w = this.world;
+    this.touchControls?.update(dt); // throttle bar sync + look-stick recenter
     this.input.frame(dt, w.input);
     // E2E bot override: scripts write window.VF.botInput instead of fighting
     // the InputManager for w.input
@@ -506,6 +519,7 @@ export class GameApp {
 
     // dock state transitions
     const docked = !!ship?.dockedAt;
+    this.touchControls?.setDocked(docked);
     if (docked && !this.wasDocked) {
       this.stationUi.updateDockBar();
       this.input.releasePointer();
@@ -609,7 +623,10 @@ export class GameApp {
       case 'hit': {
         if (ev.entityId === w.playerId) {
           if (ev.shield) this.audio.hitShield();
-          else this.audio.hitHull();
+          else {
+            this.audio.hitHull();
+            buzz(HAPTIC.hullHit);
+          }
           // hull-critical klaxon: a 3.5 s burst per fresh hit, not a loop
           const p = w.player;
           if (!ev.shield && p && p.hull / p.maxHull < 0.3) {
@@ -671,6 +688,7 @@ export class GameApp {
       }
       case 'docked': {
         this.audio.dockThunk();
+        buzz(HAPTIC.docked);
         const st = w.system.stations.find((s) => s.id === ev.stationId);
         this.hud.pushLog(`Docked at ${st?.name ?? ev.stationId}. Shields charging.`, '#8fb');
         break;
@@ -697,6 +715,7 @@ export class GameApp {
         break;
       case 'lockWarning':
         this.audio.lockWarning();
+        buzz(HAPTIC.lockWarning);
         this.hud.flashAlert('⚠ MISSILE LOCK ⚠');
         break;
       case 'hostileDetected':
@@ -756,9 +775,11 @@ export class GameApp {
       case 'touchdown':
         if (ev.hard) {
           this.audio.hitHull();
+          buzz(HAPTIC.hardTouchdown);
           this.hud.flashAlert('HARD CONTACT', '#e8402a', 1400);
         } else {
           this.audio.dockThunk();
+          buzz(HAPTIC.docked);
           this.hud.pushLog('Touchdown. Skids holding.', '#7fc97f');
         }
         break;

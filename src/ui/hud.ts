@@ -2,6 +2,7 @@
 // instrument look, deliberately analog and a little dirty.
 
 import * as THREE from 'three';
+import { isMobile } from '../game/touch';
 import { BOLT_SPEED, GOODS } from '../sim/data';
 import { approachTarget } from '../sim/docking';
 import { surfaceEnvAt } from '../sim/surface';
@@ -41,6 +42,7 @@ export class Hud {
   private dmgDirs: Array<{ dir: { x: number; y: number; z: number }; at: number }> = [];
   private invQuat = new THREE.Quaternion();
   private dirV = new THREE.Vector3();
+  private mobile = isMobile();
 
   constructor(private camera: THREE.PerspectiveCamera) {
     this.canvas = document.createElement('canvas');
@@ -514,7 +516,10 @@ export class Hud {
     this.approachDist = d;
 
     const pw = 190, ph = 96;
-    const px = W - pw - 14, py = 40;
+    // phones: the top-right corner belongs to the FIRE button and credits
+    // chip — the approach aid moves to top-center, under the compass
+    const px = this.mobile ? Math.round((W - pw) / 2) : W - pw - 14;
+    const py = this.mobile ? 72 : 40;
     this.holoPanel(px, py, pw, ph, 'APPROACH');
     const col = quality === 'green' ? GREEN : quality === 'amber' ? '#e0b34d' : RED;
 
@@ -766,8 +771,22 @@ export class Hud {
     // ---- corner holo panels ----
     const pw = Math.min(252, Math.max(200, W * 0.19));
     const ph = 128;
-    this.drawTargetPanel(world, ship, 14, H - ph - 12, pw, ph);
-    this.drawStatusPanel(world, ship, W - pw - 14, H - ph - 12, pw, ph);
+    if (this.mobile) {
+      // phones: chromeless HUD text with a soft dark glow so it stays
+      // readable over bright backdrops. The target block lifts above the
+      // ◀ROLL button; the status block moves top-left under the NAV/SYS
+      // menus — its desktop corner is taken by the vitals stack (#13),
+      // the throttle slider and the FIRE cluster.
+      ctx.save();
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+      ctx.shadowBlur = 5;
+      this.drawTargetPanel(world, ship, 8, H - ph - 88, pw, ph);
+      this.drawStatusPanel(world, ship, 10, 80, pw, ph);
+      ctx.restore();
+    } else {
+      this.drawTargetPanel(world, ship, 14, H - ph - 12, pw, ph);
+      this.drawStatusPanel(world, ship, W - pw - 14, H - ph - 12, pw, ph);
+    }
   }
 
   // ED-style scanner: perspective ellipse, contacts as stalked blips showing
@@ -872,9 +891,23 @@ export class Hud {
     ctx.fillText(`SCAN ${fmtDistance(world.shipStats.sensorRange)}`, cx, cy + ry + 11);
   }
 
+  // window chrome on desktop; on phones just a dim spaced caption — the
+  // panels render as transparent HUD text straight over the game view
+  private panelFrame(x: number, y: number, w: number, h: number, title: string): void {
+    if (!this.mobile) {
+      this.holoPanel(x, y, w, h, title);
+      return;
+    }
+    const ctx = this.ctx;
+    ctx.fillStyle = 'rgba(217, 164, 65, 0.5)';
+    ctx.font = '9px "Lucida Console", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(title.split('').join(' '), x + 10, y + 10);
+  }
+
   private drawTargetPanel(world: IWorld, ship: Entity, x: number, y: number, w: number, h: number): void {
     const ctx = this.ctx;
-    this.holoPanel(x, y, w, h, 'TARGET');
+    this.panelFrame(x, y, w, h, 'TARGET');
     const target = ship.targetId !== null ? world.entities.get(ship.targetId) : null;
     ctx.textAlign = 'left';
     if (!target || target.dead) {
@@ -927,7 +960,7 @@ export class Hud {
 
   private drawStatusPanel(world: IWorld, ship: Entity, x: number, y: number, w: number, h: number): void {
     const ctx = this.ctx;
-    this.holoPanel(x, y, w, h, 'SHIP STATUS');
+    this.panelFrame(x, y, w, h, 'SHIP STATUS');
     ctx.textAlign = 'left';
     ctx.font = '11px "Lucida Console", monospace';
     const prof = world.profile;
@@ -947,13 +980,14 @@ export class Hud {
     } else {
       lines.push(['DEST', '— set on chart [M]', GRAY]);
     }
-    let ly = y + 32;
+    let ly = y + (this.mobile ? 26 : 32);
+    const step = this.mobile ? 15 : 17;
     for (const [k, v, color] of lines) {
       ctx.fillStyle = AMBER_DIM;
       ctx.fillText(k, x + 10, ly);
       ctx.fillStyle = color;
       ctx.fillText(v, x + 60, ly);
-      ly += 17;
+      ly += step;
     }
   }
 
