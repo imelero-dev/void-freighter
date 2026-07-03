@@ -1,6 +1,6 @@
 // Player settings: persisted to localStorage, applied live.
 
-import { isMobile } from '../game/touch';
+import { isMobile } from '../game/mobile';
 
 export interface GameSettings {
   sensitivity: number;  // mouse multiplier, 0.4–2.5

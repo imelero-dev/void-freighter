@@ -1,7 +1,7 @@
 // Haptic feedback for phones (navigator.vibrate — Android Chrome; iOS Safari
 // has no vibration API, so everything degrades to a silent no-op).
 
-import { isMobile } from './touch';
+import { isMobile } from './mobile';
 
 export const HAPTIC = {
   hullHit: [40],

@@ -9,16 +9,6 @@ import { el } from '../ui/dom';
 import { settings } from '../ui/settings';
 import type { GameAction, InputManager } from './input';
 
-// Touch screen and no fine pointer (mouse) -> phone/tablet. Guarded so it can
-// be evaluated headless (vitest / node) where there is no DOM at all.
-export function isMobile(): boolean {
-  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
-  const touch = 'ontouchstart' in window || (navigator.maxTouchPoints ?? 0) > 0;
-  if (!touch) return false;
-  const fine = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: fine)').matches;
-  return !fine;
-}
-
 const NUB_RADIUS = 80;     // max visual stick deflection, px
 const RECENTER_S = 0.15;   // cursor glide back to center after release
 const STRAFE_ENGAGE = 22;  // px of drag off a ROLL button before strafe kicks in

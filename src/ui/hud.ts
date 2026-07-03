@@ -2,7 +2,7 @@
 // instrument look, deliberately analog and a little dirty.
 
 import * as THREE from 'three';
-import { isMobile } from '../game/touch';
+import { isMobile } from '../game/mobile';
 import { BOLT_SPEED, GOODS } from '../sim/data';
 import { approachTarget } from '../sim/docking';
 import { surfaceEnvAt } from '../sim/surface';

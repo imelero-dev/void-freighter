@@ -28,7 +28,8 @@ import { CameraRig } from './camera';
 import { bindAxis, bindButton, clearHotasBind, describeAxis, describeButton, GamepadManager } from './gamepad';
 import { buzz, HAPTIC } from './haptics';
 import { InputManager } from './input';
-import { isMobile, TouchControls } from './touch';
+import { isMobile } from './mobile';
+import { TouchControls } from './touch';
 import { BINDABLE, binds, HOTAS_AXES, HOTAS_BUTTONS, keyLabel, resetBinds, setBind } from '../ui/keybinds';
 
 export class GameApp {

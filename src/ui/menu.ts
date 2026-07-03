@@ -1,6 +1,6 @@
 // Main menu + help overlay. Shown before play and on Escape.
 
-import { isMobile } from '../game/touch';
+import { isMobile } from '../game/mobile';
 import { OfflineWorld } from '../offline_world';
 import { button, el } from './dom';
 import { saveSettings, settings } from './settings';

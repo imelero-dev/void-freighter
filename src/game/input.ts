@@ -4,7 +4,7 @@
 import type { ShipInput } from '../sim/types';
 import { binds } from '../ui/keybinds';
 import { settings } from '../ui/settings';
-import { isMobile } from './touch';
+import { isMobile } from './mobile';
 
 export type GameAction =
   | 'toggleCruise' | 'zeroThrottle' | 'toggleAssist' | 'toggleDrill' | 'toggleLights'

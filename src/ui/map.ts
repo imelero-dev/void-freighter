@@ -2,7 +2,7 @@
 // Set Destination. Unvisited stations are unlabeled hollow marks — the
 // frontier stays dark until you fly it.
 
-import { isMobile } from '../game/touch';
+import { isMobile } from '../game/mobile';
 import { stationInfoCost } from '../sim/system';
 import type { Destination, StationDef } from '../sim/types';
 import type { IWorld } from '../world_api';
