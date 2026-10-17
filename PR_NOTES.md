@@ -37,16 +37,23 @@ market (K) → accept the ★ TUTORIAL haul → undock (Space) → set destinati
   "new player" that follows the hints through the real UI. It then checks that
   the tutorial stays gone after CONTINUE and NEW GAME, and that SKIP works.
 
-## Verification status (be aware)
-- Earlier in this session: `npm run typecheck` was clean, the 70 existing tests
-  plus the first 7 tutorial tests passed, and the browser playtest advanced
-  through steps 1→6, with each hint rendering correctly and moving forward on
-  the real UI action or event (screenshots `screenshots/20–23_tutorial_*.png`).
-  I did not see that run's delivery, "never reappears" and skip checks finish.
-- After that run I made two final changes: the rookie pick now prefers the
-  shortest route and checks hold capacity, and one test was added for it.
-  Shell commands then needed approval in this session, so **typecheck, `npm
-  test` and the full playtest were not re-run on the final commit**. Run
-  `npm run typecheck && npm test && npm run playtest:tutorial` before merging.
-- Not done: the manual playtest by a real first-time player (with time noted)
-  from the Definition of done. The signal to watch is time-to-first-delivery.
+## Verification
+- `npm run typecheck`: clean. `npm test`: 78/78 passing (70 existing plus 8
+  new in `tests/tutorial.test.ts`).
+- `npm run playtest:tutorial` passed in headless Chrome on the final code:
+  - all 6 hints appeared in order, each advancing on the real UI action or
+    sim event
+  - the ★ TUTORIAL haul (8× Textiles to Cinder Forge, 18.1 Mm) was delivered
+    and paid
+  - the tutorial did not reappear after CONTINUE or NEW GAME
+  - SKIP TUTORIAL on a fresh profile works and sets the flag
+  - screenshots: `screenshots/20–24_tutorial_*.png`
+- Time to first delivery for the scripted pilot was **249 s of game time**,
+  under the 5-minute goal. Wall-clock time was much longer (681 s) because
+  the machine was loaded. Headless SwiftShader frames were slow, and the sim
+  clamps `dt`, so wall time overstates what a player would see.
+- Not done: the manual playtest by a real first-time player, with the time
+  noted, that the Definition of done asks for. Please do one before merging.
+  The scripted pilot flies perfectly, so a human will be slower, mostly on
+  the cruise and docking legs. If players go well over 5 minutes, the first
+  lever is a shorter rookie route.

@@ -41,12 +41,13 @@ async function main() {
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));
+  page.on('dialog', (d) => void d.accept()); // NEW GAME asks to confirm the wipe
   await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle0' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'networkidle0' });
   await sleep(500);
 
-  const hasSkip = await page.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.textContent === 'SKIP TUTORIAL'));
+  const hasSkip = await page.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.textContent === 'SKIP TUTORIAL' && b.offsetParent !== null));
   if (!hasSkip) throw new Error('fresh menu has no SKIP TUTORIAL button');
 
   const clickText = (re) => page.evaluate((src) => {
@@ -77,6 +78,8 @@ async function main() {
   if (!(await clickText(/^LAUNCH$/))) throw new Error('no LAUNCH button');
   await page.waitForFunction(() => !!window.VF?.app, { timeout: 10_000 });
   await sleep(800);
+  // game-clock start: headless frames are slow under load, so wall time overstates
+  const sim0 = await page.evaluate(() => window.VF.world.time);
 
   // 1. market — opened automatically on the first dock frame
   await expectStep('market', '20_tutorial_market.png');
@@ -150,11 +153,15 @@ async function main() {
     window.VF.botInput = { thrustForward: 1, thrustRight: 0, thrustUp: 0, yaw: 0, pitch: 0, roll: 0, brake: false };
   });
   const tc = Date.now();
+  let routeMm = null;
   while (Date.now() - tc < 240_000) {
     const d = await page.evaluate(() => window.VF.vec.vdist(window.VF.world.player.pos, window.VF.world.destination.pos));
+    routeMm ??= d / 1e6;
     if (d < 35_000) break;
     await sleep(500);
   }
+  const ta = Date.now();
+  console.log(`  cruise leg: ${routeMm.toFixed(1)} Mm in ${((ta - tc) / 1000).toFixed(0)} s`);
   // final approach (same pilot logic as playtest_journey), Space to dock
   const docked = await page.evaluate(async () => {
     const w = window.VF.world;
@@ -190,6 +197,7 @@ async function main() {
   });
   await page.evaluate(() => { delete window.VF.botInput; });
   if (!docked) throw new Error('never docked at the drop-off');
+  console.log(`  final approach + docking: ${((Date.now() - ta) / 1000).toFixed(0)} s`);
   await sleep(800);
   const end = await page.evaluate(() => ({
     step: window.VF.app.tutorial?.step ?? 'done',
@@ -197,18 +205,19 @@ async function main() {
     credits: window.VF.world.profile.credits,
     done: window.VF.world.profile.stats.contractsDone,
     flag: localStorage.getItem('void_freighter_tutorial_done'),
+    simTime: window.VF.world.time,
   }));
   await page.screenshot({ path: join(SHOTS, '24_tutorial_complete.png') });
   const secs = (Date.now() - t0) / 1000;
   if (end.step !== 'done' || end.hint !== null || end.done !== 1) throw new Error(`tutorial did not finish: ${JSON.stringify(end)}`);
   if (end.flag !== '1') throw new Error('tutorial-done flag not persisted');
-  console.log(`  delivered: ${end.credits} cr, time to first delivery ${secs.toFixed(0)} s`);
+  const simSecs = end.simTime - sim0;
+  console.log(`  delivered: ${end.credits} cr, time to first delivery ${simSecs.toFixed(0)} s game time (${secs.toFixed(0)} s wall)`);
 
   // never again: reload -> CONTINUE, and NEW GAME, both without a hint
   for (const btn of [/^CONTINUE$/, /^NEW GAME$/]) {
     await page.reload({ waitUntil: 'networkidle0' });
     await sleep(400);
-    page.once('dialog', (d) => d.accept());
     if (!(await clickText(btn))) throw new Error(`no ${btn} button`);
     await page.waitForFunction(() => !!window.VF?.app, { timeout: 10_000 });
     await sleep(800);
@@ -217,19 +226,29 @@ async function main() {
   }
   console.log('  tutorial stays gone after CONTINUE and NEW GAME');
 
-  // skip path: fresh storage -> SKIP TUTORIAL -> no hint, flag set
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'networkidle0' });
+  // skip path: a fresh browser profile (a reload would re-save on unload)
+  await page.close();
+  const ctx = await browser.createBrowserContext();
+  const fresh = await ctx.newPage();
+  fresh.on('pageerror', (err) => errors.push(err.message));
+  await fresh.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle0' });
   await sleep(400);
-  if (!(await clickText(/^SKIP TUTORIAL$/))) throw new Error('no SKIP TUTORIAL button');
-  await page.waitForFunction(() => !!window.VF?.app, { timeout: 10_000 });
+  const skipClicked = await fresh.evaluate(() => {
+    // the visible one next to LAUNCH (the pause-menu copy is hidden)
+    const b = [...document.querySelectorAll('button')].find((x) => x.textContent === 'SKIP TUTORIAL' && x.offsetParent !== null);
+    b?.click();
+    return !!b;
+  });
+  if (!skipClicked) throw new Error('no SKIP TUTORIAL button');
+  await fresh.waitForFunction(() => !!window.VF?.app, { timeout: 30_000 });
   await sleep(800);
-  const skipped = await page.evaluate(() => ({
+  const skipped = await fresh.evaluate(() => ({
     active: window.VF.app.tutorialActive, hint: window.VF.app.hud.hint,
     flag: localStorage.getItem('void_freighter_tutorial_done'),
   }));
   if (skipped.active || skipped.hint || skipped.flag !== '1') throw new Error(`skip failed: ${JSON.stringify(skipped)}`);
   console.log('  SKIP TUTORIAL works');
+  await ctx.close();
 
   await browser.close();
   server.close();
@@ -238,7 +257,7 @@ async function main() {
     console.error('❌ page errors:', fatal.slice(0, 5));
     process.exit(1);
   }
-  console.log(`\n✅ tutorial playtest passed — ${seen.length} hints, first haul in ${secs.toFixed(0)} s`);
+  console.log(`\n✅ tutorial playtest passed — ${seen.length} hints, first haul in ${simSecs.toFixed(0)} s game time`);
 }
 
 main().catch((err) => {
