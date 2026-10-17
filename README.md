@@ -5,11 +5,20 @@ arbitrage, crack asteroids and survive pirate ambushes in the cold of the
 Vesper system. *Euro Truck Simulator in space + Elite Dangerous lite + a
 living EVE-style economy.*
 
-**Everything is procedural** — ships, planets, stations, asteroids, UI icons,
-post-processing and every sound are generated from code at runtime. The repo
-contains zero binary assets.
+**Everything in the game is procedural** — ships, planets, stations, asteroids,
+UI icons, post-processing and every sound are generated from code at runtime.
+The game itself loads no image, audio, model or font files; the only binary
+files in the repo are the PNG screenshots in `screenshots/`.
+
+**Play it:** the public demo is the **offline (solo) mode** — it runs entirely
+in your browser, no account or server needed: [ENLACE]
+
+Multiplayer is **self-hosted only**: there is no official public server. To
+play online you run your own server (see [Multiplayer server](#multiplayer-server-self-hosted)).
 
 ![screenshot](screenshots/05_cruise.png)
+
+[CAPTURA]
 
 ## How it plays
 
@@ -35,9 +44,31 @@ npm run dev          # http://localhost:5173 — press LAUNCH
 Offline play runs the full simulation in your browser and saves to
 localStorage. `F1` shows the flight manual. Start docked, check the market
 (K), grab a contract, undock (Space), set a destination on the chart (M) and
-hold Shift to cruise.
+engage the cruise drive with Caps Lock.
 
-## Multiplayer server
+### Publishing the offline build as a static site
+
+```bash
+npm run build        # static client -> dist/ (index.html + assets/)
+```
+
+`dist/` is a self-contained static folder with relative paths (`base: './'`),
+so it can be served from any static host or sub-path, no backend needed. Test
+it locally with any simple static server, e.g.:
+
+```bash
+npm run preview                              # http://localhost:4173
+# or
+python3 -m http.server 8080 --directory dist # http://localhost:8080
+```
+
+Press LAUNCH in the SOLO panel. The ONLINE panel needs a game server on the
+same origin (`/api`, `/ws`), so on a static host LOG IN / REGISTER just fail
+with a request error.
+
+## Multiplayer server (self-hosted)
+
+There is no official public server — these steps run your own.
 
 ```bash
 npm run build        # client -> dist/
@@ -86,7 +117,7 @@ Notes:
 ## Development
 
 ```bash
-npm test             # 51 vitest specs: physics, economy, combat, mining,
+npm test             # 70 vitest tests: physics, economy, combat, mining,
                      # contracts, auth/WS/persistence/anti-dupe
 npm run typecheck
 npm run smoke        # trade / mine / combat bot runs against the real sim
@@ -113,6 +144,11 @@ World seed is fixed (`WORLD_SEED` in `src/sim/system.ts`): the Vesper system
 is the same place for every client, so only dynamic state crosses the wire —
 asteroid fields sync as damage deltas over deterministic local generation.
 
+## Feedback
+
+Bugs, ideas and balance complaints are welcome as issues: [ENLACE]
+
 ## License
 
-MIT — see [DESIGN.md](DESIGN.md) for the original design document.
+MIT — see [LICENSE](LICENSE). The original design document (in Spanish) is
+[DESIGN.md](DESIGN.md).
