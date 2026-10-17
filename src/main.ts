@@ -13,7 +13,7 @@ let app: GameApp | null = null;
 let world: IWorld | null = null;
 
 const menu = new Menu({
-  startOffline(pilotName: string, fresh: boolean) {
+  startOffline(pilotName: string, fresh: boolean, skipTutorial = false) {
     if (app && world instanceof OfflineWorld && !fresh) {
       // session already running: CONTINUE means resume, not recreate
       menu.hide();
@@ -22,11 +22,12 @@ const menu = new Menu({
     if (app) {
       // switching sessions mid-game: a clean reload avoids duplicated apps
       if (fresh) OfflineWorld.clearSave();
+      if (skipTutorial) OfflineWorld.markTutorialDone();
       location.reload();
       return;
     }
     if (fresh) OfflineWorld.clearSave();
-    const w = new OfflineWorld(pilotName);
+    const w = new OfflineWorld(pilotName, true, skipTutorial);
     startGame(w);
   },
   async startOnline(username: string, password: string, register: boolean) {
@@ -39,6 +40,13 @@ const menu = new Menu({
     startGame(w);
   },
   resume() {
+    menu.hide();
+  },
+  tutorialActive() {
+    return app?.tutorialActive ?? false;
+  },
+  skipTutorial() {
+    app?.skipTutorial();
     menu.hide();
   },
   settingsChanged() {
@@ -54,7 +62,11 @@ function startGame(w: IWorld): void {
   if (import.meta.env.DEV || import.meta.env.VITE_DEV_TOOLS === 'true') {
     (window as any).VF = { world: w, vec };
   }
-  app = new GameApp(w, canvas);
+  const tutorial = w instanceof OfflineWorld
+    ? { state: w.tutorial, persist: (state: import('./game/tutorial').TutorialState) => w.setTutorial(state) }
+    : undefined;
+  app = new GameApp(w, canvas, tutorial);
+  if (import.meta.env.DEV || import.meta.env.VITE_DEV_TOOLS === 'true') (window as any).VF.app = app;
   app.menuHelp = () => menu.toggleHelp();
   // Esc with no windows open toggles the pause menu; the world keeps running
   // underneath and the save is flushed on every pause

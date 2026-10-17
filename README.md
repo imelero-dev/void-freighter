@@ -42,9 +42,12 @@ npm run dev          # http://localhost:5173 — press LAUNCH
 ```
 
 Offline play runs the full simulation in your browser and saves to
-localStorage. `F1` shows the flight manual. Start docked, check the market
-(K), grab a contract, undock (Space), set a destination on the chart (M) and
-engage the cruise drive with Caps Lock.
+localStorage. `F1` shows the flight manual. On a first launch a guided first
+haul walks you through it in six on-screen steps: check the market (K), grab
+the ★ TUTORIAL contract, undock (Space), set a destination on the chart (M/N),
+throttle up and engage the cruise drive (Caps Lock), then dock and get paid.
+**SKIP TUTORIAL** sits next to LAUNCH (and in the Esc menu while it runs);
+once finished or skipped it never comes back in that browser.
 
 ### Publishing the offline build as a static site
 
@@ -117,9 +120,10 @@ Notes:
 ## Development
 
 ```bash
-npm test             # 70 vitest tests: physics, economy, combat, mining,
-                     # contracts, auth/WS/persistence/anti-dupe
+npm test             # vitest: physics, economy, combat, mining, contracts,
+                     # tutorial steps, auth/WS/persistence/anti-dupe
 npm run typecheck
+npm run playtest:tutorial  # headless first-time player follows the tutorial
 npm run smoke        # trade / mine / combat bot runs against the real sim
 npm run tour         # headless-browser screenshot tour (needs Chromium)
 npm run tour:online  # 2 real browser clients vs the real server

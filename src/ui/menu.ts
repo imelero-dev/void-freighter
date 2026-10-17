@@ -5,10 +5,12 @@ import { button, el } from './dom';
 import { saveSettings, settings } from './settings';
 
 export interface MenuCallbacks {
-  startOffline(pilotName: string, fresh: boolean): void;
+  startOffline(pilotName: string, fresh: boolean, skipTutorial?: boolean): void;
   startOnline(username: string, password: string, register: boolean): Promise<void>;
   resume(): void;
   settingsChanged(): void;
+  tutorialActive(): boolean;
+  skipTutorial(): void;
 }
 
 const CONTROLS: Array<[string, string]> = [
@@ -45,6 +47,7 @@ export class Menu {
   }
 
   private resumeBtn: HTMLButtonElement | null = null;
+  private skipTutorialBtn: HTMLButtonElement | null = null;
 
   private build(): void {
     const box = el('div', 'vf-menu-box');
@@ -55,6 +58,10 @@ export class Menu {
     this.resumeBtn = button('▶ RESUME FLIGHT  [Esc]', 'vf-btn big accept vf-resume', () => this.cb.resume());
     this.resumeBtn.style.display = 'none';
     box.appendChild(this.resumeBtn);
+    // pause menu: bail out of a running tutorial
+    this.skipTutorialBtn = button('SKIP TUTORIAL', 'vf-btn', () => this.cb.skipTutorial());
+    this.skipTutorialBtn.style.display = 'none';
+    box.appendChild(this.skipTutorialBtn);
 
     const nameInput = document.createElement('input');
     nameInput.className = 'vf-input';
@@ -79,6 +86,12 @@ export class Menu {
       row.appendChild(button('LAUNCH', 'vf-btn big accept', () => {
         this.start(() => this.cb.startOffline(nameInput.value.trim() || 'Drifter', true), nameInput.value);
       }));
+      // first launch runs the guided first haul; veterans can skip it
+      if (!OfflineWorld.tutorialDone()) {
+        row.appendChild(button('SKIP TUTORIAL', 'vf-btn big', () => {
+          this.start(() => this.cb.startOffline(nameInput.value.trim() || 'Drifter', true, true), nameInput.value);
+        }));
+      }
     }
     offlineBox.appendChild(row);
     box.appendChild(offlineBox);
@@ -229,6 +242,9 @@ export class Menu {
     this.visible = true;
     this.root.style.display = 'flex';
     if (this.resumeBtn) this.resumeBtn.style.display = this.inGame ? 'block' : 'none';
+    if (this.skipTutorialBtn) {
+      this.skipTutorialBtn.style.display = this.inGame && this.cb.tutorialActive() ? 'block' : 'none';
+    }
   }
 
   hide(): void {

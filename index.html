@@ -115,6 +115,10 @@
 
     /* contracts */
     .vf-contract { border: 1px solid rgba(217,164,65,0.2); padding: 8px 10px; margin-bottom: 8px; }
+    .vf-contract.vf-tutorial-focus { border-color: #7fb1c9; box-shadow: 0 0 12px rgba(127,177,201,0.35); }
+    .vf-ctype.tutorial { color: #7fb1c9; border-color: #7fb1c9; margin-right: 6px; }
+    @keyframes vf-tutorial-pulse { 50% { box-shadow: 0 0 14px #7fb1c9; border-color: #7fb1c9; } }
+    .vf-btn.vf-tutorial-pulse { animation: vf-tutorial-pulse 1.2s ease-in-out infinite; }
     .vf-ctype { font-size: 9px; letter-spacing: 1px; padding: 2px 6px; border: 1px solid; margin-right: 8px; }
     .vf-ctype.transport { color: var(--cyan); }
     .vf-ctype.urgent { color: var(--red); }

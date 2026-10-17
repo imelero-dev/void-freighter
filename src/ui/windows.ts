@@ -17,6 +17,8 @@ export class WindowManager {
   private windows = new Map<string, GameWindow>();
   private open = new Set<string>();
   onChange: (() => void) | null = null;
+  // per-window open/close notifications (tutorial hooks)
+  onWindow: ((id: string, open: boolean) => void) | null = null;
 
   constructor() {
     this.container = el('div', 'vf-windows');
@@ -57,9 +59,11 @@ export class WindowManager {
     const idx = this.open.has(id) ? 0 : this.open.size;
     win.root.style.transform = idx > 0 ? `translate(${idx * 30}px, ${idx * 30}px)` : '';
     win.root.style.display = 'flex';
+    const wasOpen = this.open.has(id);
     this.open.add(id);
     win.refresh();
     this.onChange?.();
+    if (!wasOpen) this.onWindow?.(id, true);
   }
 
   close(id: string): void {
@@ -67,9 +71,10 @@ export class WindowManager {
     if (!win) return;
     win.root.style.display = 'none';
     win.root.style.transform = '';
-    this.open.delete(id);
+    const wasOpen = this.open.delete(id);
     win.onClose?.();
     this.onChange?.();
+    if (wasOpen) this.onWindow?.(id, false);
   }
 
   closeTop(): boolean {

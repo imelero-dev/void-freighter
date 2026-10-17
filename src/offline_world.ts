@@ -4,9 +4,13 @@
 import { Sim, defaultProfile } from './sim/sim';
 import { DT, type Contract, type Destination, type Entity, type HullId, type MarketEntry, type ModuleSlot, type PlayerProfile, type ShipInput, type SimEvent, type StationDef } from './sim/types';
 import type { Vec3 } from './sim/vec';
+import { doneTutorialState, freshTutorialState, type TutorialState } from './game/tutorial';
 import type { IWorld } from './world_api';
 
 const SAVE_KEY = 'void_freighter_save_v1';
+// survives NEW GAME (clearSave): a pilot who finished or skipped the
+// tutorial once never sees it again in this browser
+const TUTORIAL_DONE_KEY = 'void_freighter_tutorial_done';
 const AUTOSAVE_S = 30;
 
 interface SaveBlob {
@@ -14,6 +18,8 @@ interface SaveBlob {
   economy: ReturnType<Sim['economy']['serialize']>;
   time: number;
   pilotName: string;
+  // guided first haul progress; missing in pre-tutorial saves (= done)
+  tutorial?: TutorialState;
 }
 
 export class OfflineWorld implements IWorld {
@@ -24,10 +30,13 @@ export class OfflineWorld implements IWorld {
   private acc = 0;
   private saveAcc = 0;
   private eventQueue: SimEvent[] = [];
+  tutorial: TutorialState;
 
-  constructor(public pilotName: string, restore = true) {
+  // skipTutorial: the menu's SKIP TUTORIAL button
+  constructor(public pilotName: string, restore = true, skipTutorial = false) {
     this.sim = new Sim();
     let profile: PlayerProfile | undefined;
+    let tutorial: TutorialState | null = null;
     if (restore) {
       const blob = loadSave();
       if (blob) {
@@ -35,13 +44,40 @@ export class OfflineWorld implements IWorld {
         this.sim.economy.restore(blob.economy);
         this.sim.time = blob.time;
         this.pilotName = blob.pilotName || pilotName;
+        tutorial = blob.tutorial ?? doneTutorialState();
       }
     }
+    if (!tutorial) tutorial = OfflineWorld.tutorialDone() ? doneTutorialState() : freshTutorialState();
+    // pre-tutorial saves count as veterans: NEW GAME will not replay it either
+    if (tutorial.step === 'done') OfflineWorld.markTutorialDone();
+    this.tutorial = tutorial;
     this.playerId = this.sim.addPlayer(this.pilotName, profile);
+    if (skipTutorial) this.setTutorial(doneTutorialState());
   }
 
   static hasSave(): boolean {
     return loadSave() !== null;
+  }
+
+  static tutorialDone(): boolean {
+    try {
+      return localStorage.getItem(TUTORIAL_DONE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  static markTutorialDone(): void {
+    try {
+      localStorage.setItem(TUTORIAL_DONE_KEY, '1');
+    } catch { /* private mode */ }
+  }
+
+  // persist tutorial progress right away (step changes are rare)
+  setTutorial(state: TutorialState): void {
+    this.tutorial = { ...state };
+    if (state.step === 'done') OfflineWorld.markTutorialDone();
+    this.save();
   }
 
   static clearSave(): void {
@@ -107,6 +143,7 @@ export class OfflineWorld implements IWorld {
       economy: this.sim.economy.serialize(),
       time: this.sim.time,
       pilotName: this.pilotName,
+      tutorial: this.tutorial,
     };
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify(blob));
