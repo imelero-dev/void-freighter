@@ -100,10 +100,11 @@ async function main() {
   await page.keyboard.up('KeyW');
   await shot('04_flying');
 
-  // cruise toward somewhere ("hypervelocity" is CapsLock now)
+  // CapsLock this close to the station shows the mass-lock refusal; real
+  // cruise footage comes from `npm run media` (screenshots/cruise.gif)
   await page.keyboard.press('CapsLock');
   await sleep(4500);
-  await shot('05_cruise');
+  await shot('05_cruise_masslocked');
 
   // system map
   await page.keyboard.press('KeyM');
