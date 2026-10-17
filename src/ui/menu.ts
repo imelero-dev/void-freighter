@@ -108,11 +108,25 @@ export class Menu {
         this.statusLine.textContent = `✕ ${err?.message ?? 'connection failed'}`;
       }
     };
-    orow.appendChild(button('LOG IN', 'vf-btn big', () => void doOnline(false)));
-    orow.appendChild(button('REGISTER', 'vf-btn big', () => void doOnline(true)));
+    const loginBtn = button('LOG IN', 'vf-btn big', () => void doOnline(false));
+    const registerBtn = button('REGISTER', 'vf-btn big', () => void doOnline(true));
+    orow.appendChild(loginBtn);
+    orow.appendChild(registerBtn);
     onlineBox.appendChild(orow);
     box.appendChild(onlineBox);
     box.appendChild(this.statusLine);
+
+    // static hosts (GitHub Pages, itch.io) have no game server: say so up
+    // front instead of letting LOG IN fail with a bare request error
+    void fetch('/api/status')
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .catch(() => {
+        for (const b of [loginBtn, registerBtn, user, pass]) {
+          b.disabled = true;
+          b.style.opacity = '0.4';
+        }
+        onlineBox.appendChild(el('div', 'vf-menu-sub', 'no game server on this host — multiplayer is self-hosted'));
+      });
 
     // settings
     const setBox = el('div', 'vf-menu-section');

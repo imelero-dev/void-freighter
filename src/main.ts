@@ -48,7 +48,12 @@ const menu = new Menu({
 
 function startGame(w: IWorld): void {
   world = w;
-  (window as any).VF = { world: w, vec }; // exposed for E2E scripts/bots
+  // E2E/bot hook: only on the dev server and dev-tools builds
+  // (`npm run build:e2e`). Vite inlines these flags, so the public build
+  // drops this line entirely.
+  if (import.meta.env.DEV || import.meta.env.VITE_DEV_TOOLS === 'true') {
+    (window as any).VF = { world: w, vec };
+  }
   app = new GameApp(w, canvas);
   app.menuHelp = () => menu.toggleHelp();
   // Esc with no windows open toggles the pause menu; the world keeps running

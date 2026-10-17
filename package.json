@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:e2e": "vite build --mode e2e --outDir dist-e2e --emptyOutDir",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -16,8 +17,10 @@
     "build:server": "esbuild server/main.ts --bundle --platform=node --format=cjs --external:pg-native --external:bufferutil --external:utf-8-validate --outfile=dist-server/server.cjs",
     "server": "npm run build:server && node dist-server/server.cjs",
     "smoke": "node scripts/smoke_trade.mjs && node scripts/smoke_mine.mjs && node scripts/smoke_combat.mjs",
-    "tour": "node scripts/visual_tour.mjs",
-    "tour:online": "npm run build:server && node scripts/online_tour.mjs"
+    "tour": "npm run build:e2e && node scripts/visual_tour.mjs",
+    "tour:online": "npm run build:e2e && npm run build:server && node scripts/online_tour.mjs",
+    "playtest": "npm run build:e2e && node scripts/playtest_journey.mjs",
+    "media": "npm run build:e2e && node scripts/capture_media.mjs"
   },
   "dependencies": {
     "pg": "^8.21.0",

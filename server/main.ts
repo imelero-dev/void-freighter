@@ -12,7 +12,8 @@ import { json, readBody } from './http_util';
 import { rateLimited } from './ratelimit';
 
 const PORT = Number(process.env.PORT ?? 8788);
-const STATIC_DIR = path.join(__dirname, '..', 'dist');
+// STATIC_DIR lets the browser tours serve the dev-tools build (dist-e2e/)
+const STATIC_DIR = path.resolve(process.env.STATIC_DIR ?? path.join(__dirname, '..', 'dist'));
 
 const db = createDb();
 const game = new GameServer(db);
@@ -198,6 +199,9 @@ export async function startServer(port = PORT): Promise<http.Server> {
   console.log(`Void Freighter server listening on http://localhost:${port}`);
   console.log(`  REST: /api/register /api/login /api/status`);
   console.log(`  WS:   /ws, first message {t:"auth",token}`);
+  if (process.env.ALLOW_DEV_COMMANDS === '1') {
+    console.warn('  WARNING: ALLOW_DEV_COMMANDS=1 — dev_credits/dev_teleport/dev_give are ON. Never in production.');
+  }
 
   const shutdown = async () => {
     console.log('shutting down: saving pilots + market...');
