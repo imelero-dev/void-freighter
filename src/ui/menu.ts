@@ -83,52 +83,22 @@ export class Menu {
     offlineBox.appendChild(row);
     box.appendChild(offlineBox);
 
-    const onlineBox = el('div', 'vf-menu-section');
-    onlineBox.appendChild(el('div', 'vf-menu-h', 'ONLINE (shared world)'));
-    const user = document.createElement('input');
-    user.className = 'vf-input';
-    user.placeholder = 'callsign (username)';
-    user.maxLength = 24;
-    user.value = localStorage.getItem('vf_user') ?? '';
-    const pass = document.createElement('input');
-    pass.className = 'vf-input';
-    pass.type = 'password';
-    pass.placeholder = 'password';
-    onlineBox.appendChild(user);
-    onlineBox.appendChild(pass);
-    const orow = el('div', 'vf-menu-row');
-    const doOnline = async (register: boolean) => {
-      this.statusLine.textContent = 'connecting…';
-      try {
-        localStorage.setItem('vf_user', user.value);
-        await this.cb.startOnline(user.value.trim(), pass.value, register);
+    // offline-only builds (itch.io, `npm run build:itch`) have no ONLINE panel
+    // and never touch the network
+    if (import.meta.env.VITE_OFFLINE_ONLY !== 'true') {
+      buildOnlinePanel(box, this.statusLine, async (username, password, register) => {
+        await this.cb.startOnline(username, password, register);
         this.hide();
         this.inGame = true;
-      } catch (err: any) {
-        this.statusLine.textContent = `✕ ${err?.message ?? 'connection failed'}`;
-      }
-    };
-    const loginBtn = button('LOG IN', 'vf-btn big', () => void doOnline(false));
-    const registerBtn = button('REGISTER', 'vf-btn big', () => void doOnline(true));
-    orow.appendChild(loginBtn);
-    orow.appendChild(registerBtn);
-    onlineBox.appendChild(orow);
-    box.appendChild(onlineBox);
+      });
+    }
     box.appendChild(this.statusLine);
 
-    // static hosts (GitHub Pages, itch.io) have no game server: say so up
-    // front instead of letting LOG IN fail with a bare request error
-    void fetch('/api/status')
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
-      .catch(() => {
-        for (const b of [loginBtn, registerBtn, user, pass]) {
-          b.disabled = true;
-          b.style.opacity = '0.4';
-        }
-        onlineBox.appendChild(el('div', 'vf-menu-sub', 'no game server on this host — multiplayer is self-hosted'));
-      });
+    this.buildSettings(box);
+    this.root.appendChild(box);
+  }
 
-    // settings
+  private buildSettings(box: HTMLElement): void {
     const setBox = el('div', 'vf-menu-section');
     setBox.appendChild(el('div', 'vf-menu-h', 'SETTINGS'));
     const slider = (label: string, min: number, max: number, step: number, get: () => number, set: (v: number) => void, fmt: (v: number) => string) => {
@@ -192,7 +162,6 @@ export class Menu {
     fsRow.appendChild(button('CONTROLS [F1]', 'vf-btn', () => this.toggleHelp()));
     box.appendChild(fsRow);
     box.appendChild(el('div', 'vf-menu-foot', 'all visuals & audio procedural · no assets were harmed'));
-    this.root.appendChild(box);
   }
 
   private start(fn: () => void, pilotName: string): void {
@@ -239,4 +208,54 @@ export class Menu {
   setStatus(text: string): void {
     this.statusLine.textContent = text;
   }
+}
+
+// ONLINE login panel. A plain function (not a Menu method) so offline-only
+// builds tree-shake it, /api/status probe included.
+function buildOnlinePanel(
+  box: HTMLElement,
+  statusLine: HTMLElement,
+  login: (username: string, password: string, register: boolean) => Promise<void>,
+): void {
+  const onlineBox = el('div', 'vf-menu-section');
+  onlineBox.appendChild(el('div', 'vf-menu-h', 'ONLINE (shared world)'));
+  const user = document.createElement('input');
+  user.className = 'vf-input';
+  user.placeholder = 'callsign (username)';
+  user.maxLength = 24;
+  user.value = localStorage.getItem('vf_user') ?? '';
+  const pass = document.createElement('input');
+  pass.className = 'vf-input';
+  pass.type = 'password';
+  pass.placeholder = 'password';
+  onlineBox.appendChild(user);
+  onlineBox.appendChild(pass);
+  const orow = el('div', 'vf-menu-row');
+  const doOnline = async (register: boolean) => {
+    statusLine.textContent = 'connecting…';
+    try {
+      localStorage.setItem('vf_user', user.value);
+      await login(user.value.trim(), pass.value, register);
+    } catch (err: any) {
+      statusLine.textContent = `✕ ${err?.message ?? 'connection failed'}`;
+    }
+  };
+  const loginBtn = button('LOG IN', 'vf-btn big', () => void doOnline(false));
+  const registerBtn = button('REGISTER', 'vf-btn big', () => void doOnline(true));
+  orow.appendChild(loginBtn);
+  orow.appendChild(registerBtn);
+  onlineBox.appendChild(orow);
+  box.appendChild(onlineBox);
+
+  // static hosts (GitHub Pages, itch.io) have no game server: say so up
+  // front instead of letting LOG IN fail with a bare request error
+  void fetch('/api/status')
+    .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+    .catch(() => {
+      for (const b of [loginBtn, registerBtn, user, pass]) {
+        b.disabled = true;
+        b.style.opacity = '0.4';
+      }
+      onlineBox.appendChild(el('div', 'vf-menu-sub', 'no game server on this host — multiplayer is self-hosted'));
+    });
 }
