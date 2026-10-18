@@ -1,125 +1,88 @@
-# VOID FREIGHTER
+# Void Freighter
 
-**A gritty space-hauling sim that runs in your browser: haul freight, chase
-arbitrage, crack asteroids and survive pirate ambushes in the Vesper system.**
+A gritty multiplayer space-hauling sim that runs in the browser. Haul freight, work trade routes, mine asteroids and survive pirate ambushes in the Vesper system.
 
-![Cruising toward Cinder Forge at 7,000 m/s with a contract in the hold](screenshots/10_journey_arrival.png)
+![Cockpit view next to Morrow Granary station](docs/images/cockpit.jpg)
 
-*Euro Truck Simulator in space + Elite Dangerous lite + a living EVE-style
-economy.* **Everything is procedural**: ships, planets, stations, asteroids,
-UI icons, post-processing and every sound are generated from code at runtime.
-The game loads no image, audio, model or font files. The only binary files
-in the repo are the screenshots and GIF in `screenshots/`.
-
-## Play
-
-There is no hosted demo yet. The **solo (offline) mode** is the full game,
-running entirely in your browser with no account or server needed:
-
-- **From source:** `npm install && npm run dev`, open http://localhost:5173
-  and press LAUNCH (see [Quick start](#quick-start-offline)).
-- **Offline web build:** `npm run build` (or `npm run build:itch` for a
-  ready-to-upload zip) and serve the folder from any static host
-  (see [Publishing the offline build](#publishing-the-offline-build)).
-
-Multiplayer is **self-hosted only**. There is no official public server: to
-play online you run your own (see [Multiplayer server](#multiplayer-server-self-hosted)).
+Ships, planets, stations, asteroids, UI icons, post-processing and sound are all generated in code at runtime. The game ships no image, model or audio files.
 
 ## How it plays
 
-![Undock, turn to the destination marker and spool up the cruise drive (time-lapse)](screenshots/cruise.gif)
+- **Haul**: take transport contracts from station boards and deliver before the deadline.
+- **Trade**: buy where goods are produced, sell where they are consumed. Prices react to supply, demand and your own orders.
+- **Mine**: crack rocks in four asteroid belts, scoop the fragments, refine the ore.
+- **Fight**: pirates patrol red zones and interdict rich cargo. Their wrecks drop loot and modules.
+- **Upgrade**: 5 hulls and 12 module types (engine, shield, drill, scanner and more) across 5 tiers.
+- **Lose things**: death costs your cargo and an insurance deductible. Fuel is finite.
 
-- **Haul** — take transport contracts from station boards, beat the deadline.
-- **Trade** — buy cheap at producers, sell dear at consumers. Prices move with
-  supply/demand, your own orders included, and revert over time.
-- **Mine** — crack rocks in four asteroid belts, scoop fragments, refine ore.
-- **Fight** — pirates patrol red zones and interdict rich cargo. Loot pays.
-- **Upgrade** — 5 hulls and 12 module families across 5 tiers.
-- Death loses your cargo and an insurance deductible. Fuel is finite. The void
-  does not care about you.
+All players share one star system and one economy, so every trade moves the same prices. Stations are safe; deep space is not.
 
-One shared star system, one shared economy: every player's trades move the
-same prices. Stations are safe ground; deep space is not.
+<table>
+  <tr>
+    <td><img src="docs/images/market.jpg" alt="Station market"></td>
+    <td><img src="docs/images/system-chart.jpg" alt="System chart of Vesper"></td>
+  </tr>
+  <tr>
+    <td align="center">Station market</td>
+    <td align="center">System chart</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/asteroid-field.jpg" alt="Asteroid field"></td>
+    <td><img src="docs/images/dogfight.jpg" alt="Dogfight with a pirate fighter"></td>
+  </tr>
+  <tr>
+    <td align="center">Asteroid field</td>
+    <td align="center">Pirate dogfight</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/ship-modules.jpg" alt="Ship modules window"></td>
+    <td><img src="docs/images/chase-camera.jpg" alt="Chase camera"></td>
+  </tr>
+  <tr>
+    <td align="center">Ship modules</td>
+    <td align="center">Chase camera</td>
+  </tr>
+</table>
 
-| | | |
-|---|---|---|
-| ![Station market](screenshots/02_docked_station.png) | ![Asteroid field](screenshots/12_asteroid_field.png) | ![Pirate dogfight](screenshots/13_dogfight.png) |
-| Docked: market, contracts, shipyard | Mining in an asteroid belt | Pirate interdiction |
-
-## Controls
-
-| Key | Action |
-|---|---|
-| Shift / W | throttle up (gradual) |
-| Ctrl / S | throttle down — hold past zero to brake |
-| Caps Lock | cruise drive ("hypervelocity") · X cut throttle |
-| A D R F | strafe · Q E roll · mouse pitch/yaw · Z flight assist |
-| LMB / RMB | cannon / missile (when locked) |
-| Tab / T | cycle hostiles / target reticle |
-| G | mining drill · Space dock/undock · H rescue tow |
-| M B C J K L | map · cargo · ship · journal · market · contacts |
-| N / V / Enter / F1 | set destination · camera · chat · help |
-
-F1 in game shows the full flight manual; F2 rebinds keys and sets up HOTAS.
-
-## Quick start (offline)
+## Quick start (solo)
 
 ```bash
 npm install
-npm run dev          # http://localhost:5173 — press LAUNCH
+npm run dev          # open http://localhost:5173 and press LAUNCH
 ```
 
-Offline play runs the full simulation in your browser and saves to
-localStorage. `F1` shows the flight manual. Start docked, check the market
-(K), grab a contract, undock (Space), set a destination on the chart (M) and
-engage the cruise drive with Caps Lock.
+Solo mode runs the full simulation in the browser and saves to localStorage. You start docked: check the market (`K`), take a contract, undock (`Space`), pick a destination on the chart (`M`, then `N`) and engage cruise with `Caps Lock`. `F1` opens the flight manual.
 
-### Publishing the offline build
+## Offline web build
+
+Solo mode needs no server, so the client can be published on any static host.
 
 ```bash
-npm run build        # static client -> dist/ (index.html + assets/)
+npm run build        # static client -> dist/, relative paths
+npm run preview      # or serve dist/ with any static server
 ```
 
-`dist/` is a self-contained static folder with relative paths (`base: './'`),
-so it can be served from any static host or sub-path, no backend needed. Test
-it locally with any simple static server, e.g.:
+`dist/` works from any sub-path. The ONLINE panel needs a game server on the same origin (`/api`, `/ws`). On a static host the menu detects that there is none and disables LOG IN and REGISTER.
 
-```bash
-npm run preview                              # http://localhost:4173
-# or
-python3 -m http.server 8080 --directory dist # http://localhost:8080
-```
-
-Press LAUNCH in the SOLO panel. The ONLINE panel needs a game server on the
-same origin (`/api`, `/ws`); on a static host the menu detects that there is
-none and disables LOG IN / REGISTER.
-
-**itch.io (HTML5):**
+For itch.io:
 
 ```bash
 npm run build:itch   # -> release/void-freighter-<version>-itch-html5.zip
-npm run verify:itch  # unzip + serve in an iframe sub-path + launch in headless Chrome
+npm run verify:itch  # serves the zip in an iframe sub-path and launches it in headless Chrome
 ```
 
-The itch build is offline-only: the ONLINE panel and all `/api` / WebSocket
-code are compiled out, so it makes no network requests. `index.html` sits at
-the zip root and all paths are relative. `build:itch` fails if the package
-breaks itch.io's HTML5 rules (file count and size limits, root-absolute
-paths, leftover network code). On itch.io, create an HTML project, upload
-the zip, tick "This file will be played in the browser", and set the
-viewport to 1280×720 or larger with the fullscreen button enabled.
-`verify:itch` needs Chrome or Chromium (set `CHROME_BIN` if it is not found).
+The itch build is offline only: the ONLINE panel and all `/api` and WebSocket code are compiled out, and `build:itch` fails if any network code or root-absolute path is left. Upload the zip as an HTML project played in the browser, with a viewport of 1280×720 or larger.
 
-## Multiplayer server (self-hosted)
+## Multiplayer server
 
-There is no official public server — these steps run your own.
+There is no official public server. These steps run your own.
 
 ```bash
 npm run build        # client -> dist/
-npm run server       # http://localhost:8788 (in-memory DB without Postgres)
+npm run server       # http://localhost:8788, in-memory DB if no Postgres is configured
 ```
 
-With Docker (persistent Postgres):
+With Docker and a persistent Postgres:
 
 ```bash
 cp .env.example .env # set POSTGRES_PASSWORD
@@ -127,8 +90,7 @@ docker compose up -d --build
 # open http://localhost:8788
 ```
 
-For internet hosting put a TLS reverse proxy in front (the WebSocket lives at
-`/ws`; the client auto-selects `wss://` on https pages). Caddy example:
+For internet hosting, put a TLS reverse proxy in front. The game container binds to loopback only, the WebSocket lives at `/ws`, and the client switches to `wss://` on https pages. Caddy example:
 
 ```
 game.example.com {
@@ -136,52 +98,82 @@ game.example.com {
 }
 ```
 
-Notes:
-- Accounts: scrypt password hashes, 7-day bearer tokens, per-IP rate limiting.
-- The game container publishes on loopback only; the proxy is the public door.
-- `ALLOW_DEV_COMMANDS=1` enables teleport/credits cheats for test bots —
-  never set it in production.
-- Player state is JSONB in Postgres, autosaved every 30 s, on logout and on
-  shutdown. Market state persists too.
+- Accounts use scrypt password hashes, expiring bearer tokens and per-IP rate limiting.
+- Player and market state are stored as JSONB in Postgres, autosaved every 30 s, on logout and on shutdown.
+- `ALLOW_DEV_COMMANDS=1` enables teleport and credit cheats for test bots. Never set it in production.
+
+## Controls
+
+Keyboard bindings can be changed in-game. HOTAS and gamepads are supported through the browser Gamepad API.
+
+| Key | Action |
+|---|---|
+| `W` / `Shift` | Throttle up |
+| `S` / `Ctrl` | Throttle down (hold past zero to brake) |
+| `Caps Lock` / `X` | Cruise drive / cut throttle |
+| `A` `D` `R` `F` | Strafe |
+| `Q` `E` / mouse | Roll / pitch and yaw |
+| `Z` | Flight assist |
+| Left / right mouse | Cannon / missile (when locked) |
+| `Tab` / `T` | Cycle hostiles / target reticle |
+| `G` / `Space` / `H` | Mining drill / dock and undock / rescue tow |
+| `M` `B` `C` `J` `K` `L` | Chart, cargo, ship, journal, market, contacts |
+| `N` / `V` / `Enter` / `F1` | Set destination / camera / chat / help |
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph Browser
+        UI[src/ui<br/>HUD, windows, chart] --> API[IWorld<br/>src/world_api.ts]
+        R[src/render<br/>procedural three.js] --> API
+        API --> OFF[OfflineWorld<br/>local Sim + localStorage]
+        API --> CW[ClientWorld<br/>prediction + reconciliation]
+    end
+    CW <-->|WebSocket /ws| SRV[server/<br/>authoritative Sim, 20 Hz]
+    SRV --> PG[(Postgres JSONB)]
+    OFF -. same code .- SIM[src/sim<br/>deterministic core]
+    SRV -. same code .- SIM
+```
+
+- `src/sim/` is the deterministic core (flight, economy, combat, mining, AI, loot) with no DOM access. The same code runs in the browser for solo play and on the server for multiplayer.
+- Rendering and UI only talk to `IWorld`, so they don't know whether they're offline or online.
+- The world seed is fixed (`WORLD_SEED` in `src/sim/system.ts`), so every client generates the same Vesper system and only dynamic state crosses the wire. Asteroid fields sync as damage deltas on top of local generation.
+
+| Path | Contents |
+|---|---|
+| `src/sim/` | Simulation core |
+| `src/render/` | three.js scene: bodies, ships, asteroids, effects, post-processing |
+| `src/game/` | Input, cameras, WebAudio synth, gamepad, app orchestrator |
+| `src/ui/` | Canvas HUD and radar, system chart, station windows, chat, menu |
+| `src/net/` | Network protocol and `ClientWorld` |
+| `server/` | HTTP auth, WebSocket world, Postgres persistence (in-memory fallback) |
+| `tests/`, `scripts/` | Vitest specs; smoke bots and headless-browser tours |
+
+Balance numbers and the reasoning behind them are in [docs/design/BALANCE.md](docs/design/BALANCE.md). The original design document (Spanish) is [DESIGN.md](DESIGN.md).
 
 ## Development
 
 ```bash
-npm test             # 70 vitest tests: physics, economy, combat, mining,
-                     # contracts, auth/WS/persistence/anti-dupe
+npm test             # vitest: physics, economy, combat, mining, contracts, server auth/WS/persistence
 npm run typecheck
-npm run smoke        # trade / mine / combat bot runs against the real sim
-npm run tour         # headless-browser screenshot tour (needs Chromium)
-npm run tour:online  # 2 real browser clients vs the real server
-npm run playtest     # a full contract run, inputs only: accept, fly, dock, get paid
-npm run media        # README GIF: undock -> cruise time-lapse (needs ffmpeg)
+npm run smoke        # trade, mining and combat bots against the real sim
+npm run tour         # headless-browser screenshot tour (needs Chrome/Chromium, or set CHROME_BIN)
+npm run tour:online  # two browser clients against the real server
+npm run playtest     # a full contract run driven by inputs only: accept, fly, dock, get paid
+npm run media        # cruise time-lapse GIF in screenshots/ (needs ffmpeg)
 ```
 
-Architecture (mirrors the `world-of-claudecraft` stack):
+The browser scripts use a separate dev-tools build (`npm run build:e2e` -> `dist-e2e/`) that exposes the `window.VF` hook. The dev server has it too; the public `npm run build` does not.
 
-```
-src/sim/      deterministic core — flight, economy, combat, mining, AI, loot.
-              No DOM. Same code runs offline (browser) and in the server.
-src/render/   three.js, all procedural: bodies, ships, asteroids, fx, post
-src/game/     input, cameras, WebAudio synth, orchestrator
-src/ui/       canvas HUD + radar, system chart, station windows, chat, menu
-src/net/      protocol + ClientWorld (prediction/reconciliation mirror)
-src/world_api.ts  IWorld — render/UI never know if they're offline or online
-server/       HTTP auth + WS world + Postgres JSONB (in-memory fallback)
-tests/        vitest; scripts/ smoke bots + browser tours
-docs/design/  balance numbers & design decisions
-```
+Tech stack: TypeScript, three.js, Vite, Node (`ws`), PostgreSQL 16, Vitest, Docker.
 
-World seed is fixed (`WORLD_SEED` in `src/sim/system.ts`): the Vesper system
-is the same place for every client, so only dynamic state crosses the wire —
-asteroid fields sync as damage deltas over deterministic local generation.
+## Status
 
-## Feedback
+Early version (0.1.0). Playable solo and online.
 
-Bugs, ideas and balance complaints are welcome on the
-[issue tracker](https://github.com/imelero-dev/void-freighter/issues).
+Bugs, ideas and balance complaints are welcome on the [issue tracker](https://github.com/imelero-dev/void-freighter/issues).
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The original design document (in Spanish) is
-[DESIGN.md](DESIGN.md).
+[MIT](LICENSE)
