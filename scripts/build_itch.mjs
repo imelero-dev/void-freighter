@@ -10,6 +10,7 @@
 
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { build } from 'vite';
 import { ROOT } from './lib/browser.mjs';
 import { writeZip } from './lib/zip.mjs';
@@ -76,7 +77,8 @@ async function main() {
   console.log(`✓ ${relative(ROOT, ITCH_ZIP)}  (${files.length} files, ${mb(total)} MB extracted, ${mb(zip.length)} MB zipped)`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// pathToFileURL: a plain `file://${argv[1]}` never matches on Windows
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     console.error(err);
     process.exit(1);
