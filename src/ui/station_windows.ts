@@ -18,6 +18,10 @@ const ALL_SLOTS: ModuleSlot[] = [
 
 export class StationUi {
   private dockBar: HTMLElement;
+  // tutorial hooks: the contract to single out on the board, and the dock
+  // bar button to highlight (both null outside the tutorial)
+  tutorialFocus: () => string | null = () => null;
+  tutorialButton: () => string | null = () => null;
   private shipyardTab: 'mech' | 'workshop' | 'warehouse' = 'mech';
 
   constructor(private world: IWorld, private wm: WindowManager, private audio: { click(): void; deny(): void; kaching(): void }) {
@@ -68,8 +72,10 @@ export class StationUi {
       }));
     }
     // keep active highlights in sync (windows also close via Esc)
+    const tutBtn = this.tutorialButton();
     for (const b of this.dockBar.querySelectorAll<HTMLButtonElement>('button[data-win]')) {
       b.classList.toggle('active', this.wm.isOpen(b.dataset.win!));
+      b.classList.toggle('vf-tutorial-pulse', tutBtn === b.dataset.win && !this.wm.isOpen(b.dataset.win!));
     }
   }
 
@@ -304,6 +310,12 @@ export class StationUi {
 
   private contractCard(c: Contract, factionId: string, onBoard: boolean): HTMLElement {
     const card = el('div', 'vf-contract');
+    // guided first haul: one offer is singled out, the rest wait
+    const focus = onBoard ? this.tutorialFocus() : null;
+    if (focus === c.id) {
+      card.classList.add('vf-tutorial-focus');
+      card.appendChild(el('span', 'vf-ctype tutorial', '★ TUTORIAL'));
+    }
     const tag = el('span', `vf-ctype ${c.type}`, c.type.toUpperCase());
     card.appendChild(tag);
     card.appendChild(el('span', 'vf-cdesc', c.desc));
@@ -318,6 +330,8 @@ export class StationUi {
       const myRep = this.world.profile.reputation[factionId] ?? 0;
       if (myRep < repNeed) {
         card.appendChild(el('div', 'vf-locked', `Requires faction rep ≥ ${repNeed}`));
+      } else if (focus !== null && focus !== c.id) {
+        card.appendChild(el('div', 'vf-locked', 'Take the ★ TUTORIAL haul first'));
       } else {
         card.appendChild(button('ACCEPT', 'vf-btn accept', () => {
           this.audio.click();

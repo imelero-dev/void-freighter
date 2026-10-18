@@ -24,6 +24,7 @@ import { AudioEngine } from './audio';
 import { CameraRig } from './camera';
 import { bindAxis, bindButton, clearHotasBind, describeAxis, describeButton, GamepadManager } from './gamepad';
 import { InputManager } from './input';
+import { TutorialController, type TutorialKeys, type TutorialState, type TutorialView } from './tutorial';
 import { BINDABLE, binds, HOTAS_AXES, HOTAS_BUTTONS, keyLabel, resetBinds, setBind } from '../ui/keybinds';
 
 export class GameApp {
@@ -56,8 +57,12 @@ export class GameApp {
   private alarmUntil = 0;   // hull klaxon bursts on damage, then shuts up
 
   onExit: (() => void) | null = null;
+  // guided first haul (offline only; null when finished or online)
+  private tutorial: TutorialController | null = null;
 
-  constructor(private world: IWorld, canvas: HTMLCanvasElement) {
+  // tutorial: saved progress + a persistence hook (offline sessions only)
+  constructor(private world: IWorld, canvas: HTMLCanvasElement,
+    tutorial?: { state: TutorialState; persist(state: TutorialState): void }) {
     this.sm = new SceneManager(canvas);
     this.sm.far.add(buildStarfield(world.system.seed));
     this.bodies = new BodiesLayer(this.sm, world.system);
@@ -88,6 +93,7 @@ export class GameApp {
     this.audio.ensure();
     this.hud.pushLog('Systems online. Fly safe out there.', '#8fb');
     this.hud.pushLog('F1 — flight manual. M — system chart.', '#8a8d90');
+    if (tutorial && tutorial.state.step !== 'done' && !world.online) this.startTutorial(tutorial);
     this.frame();
   }
 
@@ -181,6 +187,71 @@ export class GameApp {
   }
 
   menuHelp: (() => void) | null = null;
+
+  get tutorialActive(): boolean {
+    return this.tutorial?.active ?? false;
+  }
+
+  skipTutorial(): void {
+    this.tutorial?.skip();
+  }
+
+  private startTutorial(t: { state: TutorialState; persist(state: TutorialState): void }): void {
+    const ctl = new TutorialController(t.state, (state) => {
+      t.persist(state);
+      this.audio.click();
+      if (state.step !== 'done') return;
+      this.hud.clearHint();
+      if (ctl.delivered) {
+        this.hud.flashAlert('FIRST HAUL COMPLETE', '#7fc97f', 4000);
+      }
+      this.hud.pushLog(ctl.completionText(), '#7fb1c9');
+      this.hud.pushLog('F1 — flight manual · J — contract journal · the board refreshes every few minutes.', '#8a8d90');
+      this.tutorial = null;
+      this.stationUi.tutorialFocus = () => null;
+      this.stationUi.tutorialButton = () => null;
+      this.wm.refreshOpen();
+    });
+    this.tutorial = ctl;
+    this.wm.onWindow = (id, open) => {
+      this.tutorial?.handleSignal({ type: open ? 'windowOpened' : 'windowClosed', id });
+    };
+    this.stationUi.tutorialFocus = () => {
+      if (!this.tutorial) return null;
+      return this.tutorial.focusContract(this.tutorialView())?.id ?? null;
+    };
+    this.stationUi.tutorialButton = () => (this.tutorial?.step === 'contract' ? 'contracts' : null);
+  }
+
+  private tutorialView(): TutorialView {
+    const w = this.world;
+    const ship = w.player;
+    const st = w.dockedStation;
+    return {
+      dockedAt: ship?.dockedAt ?? null,
+      contracts: w.profile.contracts,
+      board: st ? w.board(st.id) : [],
+      destinationId: w.destination?.kind === 'station' ? w.destination.id : null,
+      cruise: ship?.cruise ?? 'off',
+      stationName: (id) => w.system.stations.find((s) => s.id === id)?.name ?? id,
+      routeLength: (id) => {
+        const to = w.system.stations.find((s) => s.id === id);
+        return st && to ? vdist(st.pos, to.pos) : Infinity;
+      },
+      cargoFree: w.shipStats.cargoCapacity -
+        w.profile.cargo.reduce((sum, c) => sum + (GOODS[c.good]?.volume ?? 1) * c.qty, 0),
+    };
+  }
+
+  private updateTutorial(): void {
+    const t = this.tutorial;
+    if (!t) return;
+    const view = this.tutorialView();
+    t.sync(view);
+    if (!this.tutorial) return; // finished during sync
+    const hint = t.hint(view, tutorialKeys());
+    if (hint) this.hud.setHint(`TUTORIAL ${hint.index}/${hint.total}`, hint.text);
+  }
 
   applySettings(): void {
     this.audio.applyVolume();
@@ -432,7 +503,10 @@ export class GameApp {
     w.update(dt);
 
     // events
-    for (const ev of w.drainEvents()) this.handleEvent(ev);
+    for (const ev of w.drainEvents()) {
+      this.handleEvent(ev);
+      this.tutorial?.handleEvent(ev, w.playerId);
+    }
 
     const ship = w.player;
     if (ship) {
@@ -480,6 +554,7 @@ export class GameApp {
       this.stationUi.updateDockBar();
     }
     this.wasDocked = docked;
+    this.updateTutorial();
 
     // periodic UI refresh of open windows
     this.uiRefreshAcc += dt;
@@ -648,6 +723,17 @@ export class GameApp {
         break;
     }
   }
+}
+
+function tutorialKeys(): TutorialKeys {
+  return {
+    market: keyLabel(binds.market),
+    dock: keyLabel(binds.dock),
+    map: keyLabel(binds.map),
+    dest: keyLabel(binds.dest),
+    throttleUp: `SHIFT/${keyLabel(binds.throttleUp)}`,
+    cruise: keyLabel(binds.cruise),
+  };
 }
 
 function clampInput(v: number): number {

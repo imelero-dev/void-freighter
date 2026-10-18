@@ -53,6 +53,8 @@ npm run dev          # open http://localhost:5173 and press LAUNCH
 
 Solo mode runs the full simulation in the browser and saves to localStorage. You start docked: check the market (`K`), take a contract, undock (`Space`), pick a destination on the chart (`M`, then `N`) and engage cruise with `Caps Lock`. `F1` opens the flight manual.
 
+On the first launch a skippable guided first haul walks you through those steps with on-screen hints and a ★ TUTORIAL contract. `SKIP TUTORIAL` sits next to `LAUNCH` and in the `Esc` menu while it runs. Once finished or skipped it does not come back in that browser, even after a new game.
+
 ## Offline web build
 
 Solo mode needs no server, so the client can be published on any static host.
@@ -161,6 +163,7 @@ npm run smoke        # trade, mining and combat bots against the real sim
 npm run tour         # headless-browser screenshot tour (needs Chrome/Chromium, or set CHROME_BIN)
 npm run tour:online  # two browser clients against the real server
 npm run playtest     # a full contract run driven by inputs only: accept, fly, dock, get paid
+npm run playtest:tutorial  # a headless first-time player follows the tutorial hints
 npm run media        # cruise time-lapse GIF in screenshots/ (needs ffmpeg)
 ```
 

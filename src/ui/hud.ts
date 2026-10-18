@@ -28,6 +28,8 @@ export class Hud {
   comms: { text: string; at: number } | null = null;
   alert: { text: string; color: string; until: number } | null = null;
   cameraMode: 'cockpit' | 'chase' = 'cockpit';
+  // pinned tutorial objective (one line, wraps to two on narrow screens)
+  hint: { label: string; text: string; at: number } | null = null;
   destAligned = false; // exposed so the app can play the snap tone on change
 
   private proj = new THREE.Vector3();
@@ -46,6 +48,15 @@ export class Hud {
   pushLog(text: string, color = AMBER): void {
     this.log.push({ text, color, at: performance.now() });
     if (this.log.length > 8) this.log.shift();
+  }
+
+  setHint(label: string, text: string): void {
+    if (this.hint?.text === text && this.hint.label === label) return;
+    this.hint = { label, text, at: performance.now() };
+  }
+
+  clearHint(): void {
+    this.hint = null;
   }
 
   setComms(text: string): void {
@@ -98,6 +109,8 @@ export class Hud {
 
     if (ship.dockedAt) {
       this.drawLog(now, W, H);
+      // bottom-center: station windows sit in the middle, the dock bar on top
+      this.drawHint(now, W / 2, H - 52);
       return; // station UI takes over
     }
 
@@ -259,6 +272,52 @@ export class Hud {
     }
 
     this.drawLog(now, W, H);
+    // under the compass tape and the comms line, clear of the bottom cluster
+    this.drawHint(now, cx, H * 0.085 + 34);
+  }
+
+  private drawHint(now: number, cx: number, y: number): void {
+    const hint = this.hint;
+    if (!hint) return;
+    const ctx = this.ctx;
+    ctx.font = '13px "Lucida Console", monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const maxW = Math.min(820, this.canvas.width - 40);
+    const labelW = ctx.measureText(hint.label + '  ').width;
+    // greedy word wrap
+    const lines: string[] = [];
+    let cur = '';
+    for (const word of hint.text.split(' ')) {
+      const test = cur ? `${cur} ${word}` : word;
+      if (ctx.measureText(test).width > maxW - labelW - 24 && cur) {
+        lines.push(cur);
+        cur = word;
+      } else {
+        cur = test;
+      }
+    }
+    if (cur) lines.push(cur);
+    const textW = Math.max(...lines.map((l) => ctx.measureText(l).width));
+    const boxW = labelW + textW + 24;
+    const boxH = lines.length * 18 + 12;
+    const x = cx - boxW / 2;
+    // a fresh hint pulses for a moment so the change gets noticed
+    const pulse = Math.max(0, 1 - (now - hint.at) / 1200);
+    ctx.fillStyle = 'rgba(6, 9, 12, 0.82)';
+    ctx.fillRect(x, y - boxH / 2, boxW, boxH);
+    ctx.strokeStyle = `rgba(127, 177, 201, ${0.5 + pulse * 0.5})`;
+    ctx.lineWidth = 1 + pulse * 2;
+    ctx.strokeRect(x, y - boxH / 2, boxW, boxH);
+    ctx.lineWidth = 1;
+    let ly = y - boxH / 2 + 15;
+    ctx.fillStyle = CYAN;
+    ctx.fillText(hint.label, x + 12, ly);
+    ctx.fillStyle = '#e6dcc4';
+    for (const line of lines) {
+      ctx.fillText(line, x + 12 + labelW, ly);
+      ly += 18;
+    }
   }
 
   // Scrolling heading tape with destination/target markers: tells you which

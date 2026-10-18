@@ -22,6 +22,7 @@
     "tour": "npm run build:e2e && node scripts/visual_tour.mjs",
     "tour:online": "npm run build:e2e && npm run build:server && node scripts/online_tour.mjs",
     "playtest": "npm run build:e2e && node scripts/playtest_journey.mjs",
+    "playtest:tutorial": "npm run build:e2e && node scripts/playtest_tutorial.mjs",
     "media": "npm run build:e2e && node scripts/capture_media.mjs"
   },
   "dependencies": {
