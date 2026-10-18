@@ -3,31 +3,16 @@
 // This exercises contracts, GPS, cruise, mass-lock arrival and docking
 // exactly the way a player does (inputs only — no teleports).
 //
-//   npm run build && node scripts/playtest_journey.mjs
+//   npm run playtest    (= npm run build:e2e && node scripts/playtest_journey.mjs)
 
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { join, extname, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { join, extname } from 'node:path';
 import puppeteer from 'puppeteer-core';
+import { E2E_DIST as DIST, ROOT, findChrome } from './lib/browser.mjs';
 
-const DIST = resolve(import.meta.dirname, '..', 'dist');
-const SHOTS = resolve(import.meta.dirname, '..', 'screenshots');
+const SHOTS = join(ROOT, 'screenshots');
 const PORT = 4793;
-
-function findChrome() {
-  if (process.env.CHROME_BIN && existsSync(process.env.CHROME_BIN)) return process.env.CHROME_BIN;
-  const pwRoot = join(homedir(), '.cache', 'ms-playwright');
-  if (existsSync(pwRoot)) {
-    for (const dir of readdirSync(pwRoot)) {
-      for (const bin of ['chrome-linux/headless_shell', 'chrome-linux/chrome']) {
-        const p = join(pwRoot, dir, bin);
-        if (existsSync(p)) return p;
-      }
-    }
-  }
-  throw new Error('no Chromium found — set CHROME_BIN');
-}
 
 const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css' };
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));

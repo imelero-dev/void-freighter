@@ -1,31 +1,16 @@
 // Online E2E: boots the real game server (in-memory DB), connects two real
 // browser clients, verifies they see each other in space + shared economy.
 //
-//   npm run build && npm run build:server && node scripts/online_tour.mjs
+//   npm run tour:online (= build:e2e + build:server + this script)
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import puppeteer from 'puppeteer-core';
+import { E2E_DIST, ROOT, findChrome } from './lib/browser.mjs';
 
-const ROOT = resolve(import.meta.dirname, '..');
 const SHOTS = join(ROOT, 'screenshots');
 const PORT = 4791;
-
-function findChrome() {
-  if (process.env.CHROME_BIN && existsSync(process.env.CHROME_BIN)) return process.env.CHROME_BIN;
-  const pwRoot = join(homedir(), '.cache', 'ms-playwright');
-  if (existsSync(pwRoot)) {
-    for (const dir of readdirSync(pwRoot)) {
-      for (const bin of ['chrome-linux/headless_shell', 'chrome-linux/chrome']) {
-        const p = join(pwRoot, dir, bin);
-        if (existsSync(p)) return p;
-      }
-    }
-  }
-  throw new Error('no Chromium found — set CHROME_BIN');
-}
 
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
@@ -51,7 +36,7 @@ async function newClient(browser, name) {
 async function main() {
   mkdirSync(SHOTS, { recursive: true });
   const server = spawn('node', [join(ROOT, 'dist-server', 'server.cjs')], {
-    env: { ...process.env, PORT: String(PORT), ALLOW_DEV_COMMANDS: '1', DATABASE_URL: '' },
+    env: { ...process.env, PORT: String(PORT), ALLOW_DEV_COMMANDS: '1', DATABASE_URL: '', STATIC_DIR: E2E_DIST },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   server.stdout.on('data', (d) => process.stdout.write(`[server] ${d}`));

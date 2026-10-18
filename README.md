@@ -53,7 +53,29 @@ npm run dev          # open http://localhost:5173 and press LAUNCH
 
 Solo mode runs the full simulation in the browser and saves to localStorage. You start docked: check the market (`K`), take a contract, undock (`Space`), pick a destination on the chart (`M`, then `N`) and engage cruise with `Caps Lock`. `F1` opens the flight manual.
 
+## Offline web build
+
+Solo mode needs no server, so the client can be published on any static host.
+
+```bash
+npm run build        # static client -> dist/, relative paths
+npm run preview      # or serve dist/ with any static server
+```
+
+`dist/` works from any sub-path. The ONLINE panel needs a game server on the same origin (`/api`, `/ws`). On a static host the menu detects that there is none and disables LOG IN and REGISTER.
+
+For itch.io:
+
+```bash
+npm run build:itch   # -> release/void-freighter-<version>-itch-html5.zip
+npm run verify:itch  # serves the zip in an iframe sub-path and launches it in headless Chrome
+```
+
+The itch build is offline only: the ONLINE panel and all `/api` and WebSocket code are compiled out, and `build:itch` fails if any network code or root-absolute path is left. Upload the zip as an HTML project played in the browser, with a viewport of 1280×720 or larger.
+
 ## Multiplayer server
+
+There is no official public server. These steps run your own.
 
 ```bash
 npm run build        # client -> dist/
@@ -136,15 +158,21 @@ Balance numbers and the reasoning behind them are in [docs/design/BALANCE.md](do
 npm test             # vitest: physics, economy, combat, mining, contracts, server auth/WS/persistence
 npm run typecheck
 npm run smoke        # trade, mining and combat bots against the real sim
-npm run tour         # headless-browser screenshot tour (needs Chromium, or set CHROME_BIN)
+npm run tour         # headless-browser screenshot tour (needs Chrome/Chromium, or set CHROME_BIN)
 npm run tour:online  # two browser clients against the real server
+npm run playtest     # a full contract run driven by inputs only: accept, fly, dock, get paid
+npm run media        # cruise time-lapse GIF in screenshots/ (needs ffmpeg)
 ```
+
+The browser scripts use a separate dev-tools build (`npm run build:e2e` -> `dist-e2e/`) that exposes the `window.VF` hook. The dev server has it too; the public `npm run build` does not.
 
 Tech stack: TypeScript, three.js, Vite, Node (`ws`), PostgreSQL 16, Vitest, Docker.
 
 ## Status
 
 Early version (0.1.0). Playable solo and online.
+
+Bugs, ideas and balance complaints are welcome on the [issue tracker](https://github.com/imelero-dev/void-freighter/issues).
 
 ## License
 

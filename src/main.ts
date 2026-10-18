@@ -30,8 +30,11 @@ const menu = new Menu({
     startGame(w);
   },
   async startOnline(username: string, password: string, register: boolean) {
+    // offline-only builds (itch.io): Vite inlines the flag, so the online
+    // client chunk is dropped from the bundle entirely
+    if (import.meta.env.VITE_OFFLINE_ONLY === 'true') throw new Error('multiplayer is not available in this build');
     if (app) {
-      menu.setStatus('Ya hay una partida en curso — recarga la página (F5) para cambiar de modo.');
+      menu.setStatus('A session is already running — reload the page (F5) to switch modes.');
       throw new Error('refresh the page (F5) to switch modes');
     }
     const { connectOnline } = await import('./net/client_world');
@@ -48,7 +51,12 @@ const menu = new Menu({
 
 function startGame(w: IWorld): void {
   world = w;
-  (window as any).VF = { world: w, vec }; // exposed for E2E scripts/bots
+  // E2E/bot hook: only on the dev server and dev-tools builds
+  // (`npm run build:e2e`). Vite inlines these flags, so the public build
+  // drops this line entirely.
+  if (import.meta.env.DEV || import.meta.env.VITE_DEV_TOOLS === 'true') {
+    (window as any).VF = { world: w, vec };
+  }
   app = new GameApp(w, canvas);
   app.menuHelp = () => menu.toggleHelp();
   // Esc with no windows open toggles the pause menu; the world keeps running

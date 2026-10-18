@@ -1,38 +1,18 @@
 // E2E visual tour: serves the built client, drives it in headless Chromium,
 // captures screenshots and fails on any page error.
 //
-//   npm run build && node scripts/visual_tour.mjs
+//   npm run tour        (= npm run build:e2e && node scripts/visual_tour.mjs)
 //
-// Browser binary resolution: PLAYWRIGHT/PUPPETEER caches or CHROME_BIN.
+// Browser binary resolution: CHROME_BIN, Playwright cache or system Chromium.
 
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { join, extname, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { join, extname } from 'node:path';
 import puppeteer from 'puppeteer-core';
+import { E2E_DIST as DIST, ROOT, findChrome, isExpectedConsoleError } from './lib/browser.mjs';
 
-const DIST = resolve(import.meta.dirname, '..', 'dist');
-const SHOTS = resolve(import.meta.dirname, '..', 'screenshots');
+const SHOTS = join(ROOT, 'screenshots');
 const PORT = 4789;
-
-function findChrome() {
-  if (process.env.CHROME_BIN && existsSync(process.env.CHROME_BIN)) return process.env.CHROME_BIN;
-  const candidates = [];
-  const pwRoot = join(homedir(), '.cache', 'ms-playwright');
-  if (existsSync(pwRoot)) {
-    for (const dir of readdirSync(pwRoot)) {
-      for (const bin of ['chrome-linux/headless_shell', 'chrome-linux/chrome']) {
-        const p = join(pwRoot, dir, bin);
-        if (existsSync(p)) candidates.push(p);
-      }
-    }
-  }
-  for (const p of ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome']) {
-    if (existsSync(p)) candidates.push(p);
-  }
-  if (candidates.length === 0) throw new Error('no Chromium found — set CHROME_BIN');
-  return candidates[0];
-}
 
 const MIME = {
   '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json',
@@ -70,7 +50,7 @@ async function main() {
   const errors = [];
   page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
   page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(`console.error: ${msg.text()}`);
+    if (msg.type() === 'error' && !isExpectedConsoleError(msg)) errors.push(`console.error: ${msg.text()}`);
   });
 
   const shot = async (name) => {
@@ -120,10 +100,11 @@ async function main() {
   await page.keyboard.up('KeyW');
   await shot('04_flying');
 
-  // cruise toward somewhere ("hypervelocity" is CapsLock now)
+  // CapsLock this close to the station shows the mass-lock refusal; real
+  // cruise footage comes from `npm run media` (screenshots/cruise.gif)
   await page.keyboard.press('CapsLock');
   await sleep(4500);
-  await shot('05_cruise');
+  await shot('05_cruise_masslocked');
 
   // system map
   await page.keyboard.press('KeyM');
