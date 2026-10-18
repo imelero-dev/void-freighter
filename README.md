@@ -1,50 +1,66 @@
-# VOID FREIGHTER
+# Void Freighter
 
-A gritty multiplayer space-hauling sim in the browser: haul freight, chase
-arbitrage, crack asteroids and survive pirate ambushes in the cold of the
-Vesper system. *Euro Truck Simulator in space + Elite Dangerous lite + a
-living EVE-style economy.*
+A gritty multiplayer space-hauling sim that runs in the browser. Haul freight, work trade routes, mine asteroids and survive pirate ambushes in the Vesper system.
 
-**Everything is procedural** — ships, planets, stations, asteroids, UI icons,
-post-processing and every sound are generated from code at runtime. The repo
-contains zero binary assets.
+![Cockpit view next to Morrow Granary station](docs/images/cockpit.jpg)
 
-![screenshot](screenshots/05_cruise.png)
+Ships, planets, stations, asteroids, UI icons, post-processing and sound are all generated in code at runtime. The game ships no image, model or audio files.
 
 ## How it plays
 
-- **Haul** — take transport contracts from station boards, beat the deadline.
-- **Trade** — buy cheap at producers, sell dear at consumers. Prices move with
-  supply/demand, your own orders included, and revert over time.
-- **Mine** — crack rocks in four asteroid belts, scoop fragments, refine ore.
-- **Fight** — pirates patrol red zones and interdict rich cargo. Loot pays.
-- **Upgrade** — 5 hulls and 12 module families across 5 tiers.
-- Death loses your cargo and an insurance deductible. Fuel is finite. The void
-  does not care about you.
+- **Haul**: take transport contracts from station boards and deliver before the deadline.
+- **Trade**: buy where goods are produced, sell where they are consumed. Prices react to supply, demand and your own orders.
+- **Mine**: crack rocks in four asteroid belts, scoop the fragments, refine the ore.
+- **Fight**: pirates patrol red zones and interdict rich cargo. Their wrecks drop loot and modules.
+- **Upgrade**: 5 hulls and 12 module types (engine, shield, drill, scanner and more) across 5 tiers.
+- **Lose things**: death costs your cargo and an insurance deductible. Fuel is finite.
 
-One shared star system, one shared economy: every player's trades move the
-same prices. Stations are safe ground; deep space is not.
+All players share one star system and one economy, so every trade moves the same prices. Stations are safe; deep space is not.
 
-## Quick start (offline)
+<table>
+  <tr>
+    <td><img src="docs/images/market.jpg" alt="Station market"></td>
+    <td><img src="docs/images/system-chart.jpg" alt="System chart of Vesper"></td>
+  </tr>
+  <tr>
+    <td align="center">Station market</td>
+    <td align="center">System chart</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/asteroid-field.jpg" alt="Asteroid field"></td>
+    <td><img src="docs/images/dogfight.jpg" alt="Dogfight with a pirate fighter"></td>
+  </tr>
+  <tr>
+    <td align="center">Asteroid field</td>
+    <td align="center">Pirate dogfight</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/ship-modules.jpg" alt="Ship modules window"></td>
+    <td><img src="docs/images/chase-camera.jpg" alt="Chase camera"></td>
+  </tr>
+  <tr>
+    <td align="center">Ship modules</td>
+    <td align="center">Chase camera</td>
+  </tr>
+</table>
+
+## Quick start (solo)
 
 ```bash
 npm install
-npm run dev          # http://localhost:5173 — press LAUNCH
+npm run dev          # open http://localhost:5173 and press LAUNCH
 ```
 
-Offline play runs the full simulation in your browser and saves to
-localStorage. `F1` shows the flight manual. Start docked, check the market
-(K), grab a contract, undock (Space), set a destination on the chart (M) and
-hold Shift to cruise.
+Solo mode runs the full simulation in the browser and saves to localStorage. You start docked: check the market (`K`), take a contract, undock (`Space`), pick a destination on the chart (`M`, then `N`) and engage cruise with `Caps Lock`. `F1` opens the flight manual.
 
 ## Multiplayer server
 
 ```bash
 npm run build        # client -> dist/
-npm run server       # http://localhost:8788 (in-memory DB without Postgres)
+npm run server       # http://localhost:8788, in-memory DB if no Postgres is configured
 ```
 
-With Docker (persistent Postgres):
+With Docker and a persistent Postgres:
 
 ```bash
 cp .env.example .env # set POSTGRES_PASSWORD
@@ -52,8 +68,7 @@ docker compose up -d --build
 # open http://localhost:8788
 ```
 
-For internet hosting put a TLS reverse proxy in front (the WebSocket lives at
-`/ws`; the client auto-selects `wss://` on https pages). Caddy example:
+For internet hosting, put a TLS reverse proxy in front. The game container binds to loopback only, the WebSocket lives at `/ws`, and the client switches to `wss://` on https pages. Caddy example:
 
 ```
 game.example.com {
@@ -61,58 +76,76 @@ game.example.com {
 }
 ```
 
-Notes:
-- Accounts: scrypt password hashes, 7-day bearer tokens, per-IP rate limiting.
-- The game container publishes on loopback only; the proxy is the public door.
-- `ALLOW_DEV_COMMANDS=1` enables teleport/credits cheats for test bots —
-  never set it in production.
-- Player state is JSONB in Postgres, autosaved every 30 s, on logout and on
-  shutdown. Market state persists too.
+- Accounts use scrypt password hashes, expiring bearer tokens and per-IP rate limiting.
+- Player and market state are stored as JSONB in Postgres, autosaved every 30 s, on logout and on shutdown.
+- `ALLOW_DEV_COMMANDS=1` enables teleport and credit cheats for test bots. Never set it in production.
 
 ## Controls
 
+Keyboard bindings can be changed in-game. HOTAS and gamepads are supported through the browser Gamepad API.
+
 | Key | Action |
 |---|---|
-| Shift / W | throttle up (gradual) |
-| Ctrl / S | throttle down — hold past zero to brake |
-| Caps Lock | cruise drive ("hypervelocity") · X cut throttle |
-| A D R F | strafe · Q E roll · mouse pitch/yaw · Z flight assist |
-| LMB / RMB | cannon / missile (when locked) |
-| Tab / T | cycle hostiles / target reticle |
-| G | mining drill · Space dock/undock · H rescue tow |
-| M B C J K L | map · cargo · ship · journal · market · contacts |
-| N / V / Enter / F1 | set destination · camera · chat · help |
+| `W` / `Shift` | Throttle up |
+| `S` / `Ctrl` | Throttle down (hold past zero to brake) |
+| `Caps Lock` / `X` | Cruise drive / cut throttle |
+| `A` `D` `R` `F` | Strafe |
+| `Q` `E` / mouse | Roll / pitch and yaw |
+| `Z` | Flight assist |
+| Left / right mouse | Cannon / missile (when locked) |
+| `Tab` / `T` | Cycle hostiles / target reticle |
+| `G` / `Space` / `H` | Mining drill / dock and undock / rescue tow |
+| `M` `B` `C` `J` `K` `L` | Chart, cargo, ship, journal, market, contacts |
+| `N` / `V` / `Enter` / `F1` | Set destination / camera / chat / help |
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph Browser
+        UI[src/ui<br/>HUD, windows, chart] --> API[IWorld<br/>src/world_api.ts]
+        R[src/render<br/>procedural three.js] --> API
+        API --> OFF[OfflineWorld<br/>local Sim + localStorage]
+        API --> CW[ClientWorld<br/>prediction + reconciliation]
+    end
+    CW <-->|WebSocket /ws| SRV[server/<br/>authoritative Sim, 20 Hz]
+    SRV --> PG[(Postgres JSONB)]
+    OFF -. same code .- SIM[src/sim<br/>deterministic core]
+    SRV -. same code .- SIM
+```
+
+- `src/sim/` is the deterministic core (flight, economy, combat, mining, AI, loot) with no DOM access. The same code runs in the browser for solo play and on the server for multiplayer.
+- Rendering and UI only talk to `IWorld`, so they don't know whether they're offline or online.
+- The world seed is fixed (`WORLD_SEED` in `src/sim/system.ts`), so every client generates the same Vesper system and only dynamic state crosses the wire. Asteroid fields sync as damage deltas on top of local generation.
+
+| Path | Contents |
+|---|---|
+| `src/sim/` | Simulation core |
+| `src/render/` | three.js scene: bodies, ships, asteroids, effects, post-processing |
+| `src/game/` | Input, cameras, WebAudio synth, gamepad, app orchestrator |
+| `src/ui/` | Canvas HUD and radar, system chart, station windows, chat, menu |
+| `src/net/` | Network protocol and `ClientWorld` |
+| `server/` | HTTP auth, WebSocket world, Postgres persistence (in-memory fallback) |
+| `tests/`, `scripts/` | Vitest specs; smoke bots and headless-browser tours |
+
+Balance numbers and the reasoning behind them are in [docs/design/BALANCE.md](docs/design/BALANCE.md). The original design document (Spanish) is [DESIGN.md](DESIGN.md).
 
 ## Development
 
 ```bash
-npm test             # 51 vitest specs: physics, economy, combat, mining,
-                     # contracts, auth/WS/persistence/anti-dupe
+npm test             # vitest: physics, economy, combat, mining, contracts, server auth/WS/persistence
 npm run typecheck
-npm run smoke        # trade / mine / combat bot runs against the real sim
-npm run tour         # headless-browser screenshot tour (needs Chromium)
-npm run tour:online  # 2 real browser clients vs the real server
+npm run smoke        # trade, mining and combat bots against the real sim
+npm run tour         # headless-browser screenshot tour (needs Chromium, or set CHROME_BIN)
+npm run tour:online  # two browser clients against the real server
 ```
 
-Architecture (mirrors the `world-of-claudecraft` stack):
+Tech stack: TypeScript, three.js, Vite, Node (`ws`), PostgreSQL 16, Vitest, Docker.
 
-```
-src/sim/      deterministic core — flight, economy, combat, mining, AI, loot.
-              No DOM. Same code runs offline (browser) and in the server.
-src/render/   three.js, all procedural: bodies, ships, asteroids, fx, post
-src/game/     input, cameras, WebAudio synth, orchestrator
-src/ui/       canvas HUD + radar, system chart, station windows, chat, menu
-src/net/      protocol + ClientWorld (prediction/reconciliation mirror)
-src/world_api.ts  IWorld — render/UI never know if they're offline or online
-server/       HTTP auth + WS world + Postgres JSONB (in-memory fallback)
-tests/        vitest; scripts/ smoke bots + browser tours
-docs/design/  balance numbers & design decisions
-```
+## Status
 
-World seed is fixed (`WORLD_SEED` in `src/sim/system.ts`): the Vesper system
-is the same place for every client, so only dynamic state crosses the wire —
-asteroid fields sync as damage deltas over deterministic local generation.
+Early version (0.1.0). Playable solo and online.
 
 ## License
 
-MIT — see [DESIGN.md](DESIGN.md) for the original design document.
+[MIT](LICENSE)
