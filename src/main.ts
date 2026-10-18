@@ -31,8 +31,11 @@ const menu = new Menu({
     startGame(w);
   },
   async startOnline(username: string, password: string, register: boolean) {
+    // offline-only builds (itch.io): Vite inlines the flag, so the online
+    // client chunk is dropped from the bundle entirely
+    if (import.meta.env.VITE_OFFLINE_ONLY === 'true') throw new Error('multiplayer is not available in this build');
     if (app) {
-      menu.setStatus('Ya hay una partida en curso — recarga la página (F5) para cambiar de modo.');
+      menu.setStatus('A session is already running — reload the page (F5) to switch modes.');
       throw new Error('refresh the page (F5) to switch modes');
     }
     const { connectOnline } = await import('./net/client_world');
